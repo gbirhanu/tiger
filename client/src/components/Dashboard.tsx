@@ -1,38 +1,94 @@
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import { Separator } from "@/components/ui/separator";
 import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays } from "lucide-react";
+import React from "react";
+
+interface NavItem {
+  title: string;
+  icon: React.ReactNode;
+  component: React.ReactNode;
+}
+
+const navItems: NavItem[] = [
+  {
+    title: "Dashboard",
+    icon: <LayoutGrid className="h-4 w-4" />,
+    component: <TaskManager />,
+  },
+  {
+    title: "Tasks",
+    icon: <CheckSquare className="h-4 w-4" />,
+    component: <TaskManager />,
+  },
+  {
+    title: "Notes",
+    icon: <StickyNote className="h-4 w-4" />,
+    component: <NotesBoard />,
+  },
+  {
+    title: "Pomodoro",
+    icon: <Timer className="h-4 w-4" />,
+    component: <PomodoroTimer />,
+  },
+  {
+    title: "Calendar",
+    icon: <CalendarDays className="h-4 w-4" />,
+    component: <Calendar />,
+  },
+];
 
 export default function Dashboard() {
+  const [selectedNav, setSelectedNav] = React.useState<string>("Dashboard");
+
   return (
-    <div className="container mx-auto p-4">
-      <h1 className="text-4xl font-bold mb-8 text-primary">Productivity Suite</h1>
-      
-      <Tabs defaultValue="tasks" className="space-y-4">
-        <TabsList className="grid w-full grid-cols-4">
-          <TabsTrigger value="tasks">Tasks</TabsTrigger>
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="pomodoro">Pomodoro</TabsTrigger>
-          <TabsTrigger value="calendar">Calendar</TabsTrigger>
-        </TabsList>
-
-        <TabsContent value="tasks" className="space-y-4">
-          <TaskManager />
-        </TabsContent>
-
-        <TabsContent value="notes" className="space-y-4">
-          <NotesBoard />
-        </TabsContent>
-
-        <TabsContent value="pomodoro" className="space-y-4">
-          <PomodoroTimer />
-        </TabsContent>
-
-        <TabsContent value="calendar" className="space-y-4">
-          <Calendar />
-        </TabsContent>
-      </Tabs>
-    </div>
+    <ResizablePanelGroup className="h-screen">
+      <ResizablePanel defaultSize={20} minSize={15} maxSize={25}>
+        <div className="flex h-full flex-col">
+          <div className="px-3 py-2">
+            <h2 className="mb-2 px-4 text-lg font-semibold tracking-tight">
+              Productivity Suite
+            </h2>
+          </div>
+          <Separator />
+          <ScrollArea className="flex-1">
+            <div className="space-y-1 p-2">
+              {navItems.map((item) => (
+                <Button
+                  key={item.title}
+                  variant={selectedNav === item.title ? "secondary" : "ghost"}
+                  size="sm"
+                  className={cn("w-full justify-start gap-2", {
+                    "bg-secondary": selectedNav === item.title,
+                  })}
+                  onClick={() => setSelectedNav(item.title)}
+                >
+                  {item.icon}
+                  {item.title}
+                </Button>
+              ))}
+            </div>
+          </ScrollArea>
+        </div>
+      </ResizablePanel>
+      <ResizableHandle />
+      <ResizablePanel defaultSize={80}>
+        <ScrollArea className="h-full">
+          <div className="p-8">
+            {navItems.find((item) => item.title === selectedNav)?.component}
+          </div>
+        </ScrollArea>
+      </ResizablePanel>
+    </ResizablePanelGroup>
   );
 }

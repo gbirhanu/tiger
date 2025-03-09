@@ -46,8 +46,14 @@ export default function Calendar() {
   });
 
   const createAppointment = useMutation({
-    mutationFn: async (data: Appointment) => {
-      const res = await apiRequest("POST", "/api/appointments", data);
+    mutationFn: async (data: any) => {
+      // Convert string dates to Date objects
+      const appointment = {
+        ...data,
+        startTime: new Date(data.startTime),
+        endTime: new Date(data.endTime)
+      };
+      const res = await apiRequest("POST", "/api/appointments", appointment);
       return res.json();
     },
     onSuccess: () => {

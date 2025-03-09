@@ -4,15 +4,31 @@ import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { type Note } from "@shared/schema";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
-import { Plus, X } from "lucide-react";
+import { Plus, X, GripVertical } from "lucide-react";
+
+const COLORS = [
+  "#FFD700", // Yellow
+  "#FF9999", // Pink
+  "#98FB98", // Green
+  "#87CEEB", // Blue
+  "#DDA0DD", // Purple
+];
 
 export default function NotesBoard() {
   const { toast } = useToast();
   const [newNoteContent, setNewNoteContent] = useState("");
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const { data: notes, isLoading } = useQuery<Note[]>({
     queryKey: ["/api/notes"],
@@ -22,7 +38,7 @@ export default function NotesBoard() {
     mutationFn: async (content: string) => {
       const note = {
         content,
-        color: "#" + Math.floor(Math.random()*16777215).toString(16),
+        color: COLORS[Math.floor(Math.random() * COLORS.length)],
         position: (notes?.length || 0) + 1,
       };
       const res = await apiRequest("POST", "/api/notes", note);
@@ -31,6 +47,7 @@ export default function NotesBoard() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
       setNewNoteContent("");
+      setDialogOpen(false);
       toast({
         title: "Note created",
         description: "Your note has been created successfully.",
@@ -80,19 +97,36 @@ export default function NotesBoard() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input
-          value={newNoteContent}
-          onChange={(e) => setNewNoteContent(e.target.value)}
-          placeholder="Enter note content"
-        />
-        <Button
-          onClick={() => createNote.mutate(newNoteContent)}
-          disabled={!newNoteContent || createNote.isPending}
-        >
-          <Plus className="h-4 w-4 mr-2" />
-          Add Note
-        </Button>
+      <div className="flex justify-between items-center">
+        <h2 className="text-2xl font-bold">Sticky Notes</h2>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+          <DialogTrigger asChild>
+            <Button>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Note
+            </Button>
+          </DialogTrigger>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Create New Note</DialogTitle>
+            </DialogHeader>
+            <div className="space-y-4 pt-4">
+              <Textarea
+                value={newNoteContent}
+                onChange={(e) => setNewNoteContent(e.target.value)}
+                placeholder="Write your note here..."
+                className="min-h-[150px]"
+              />
+              <Button
+                className="w-full"
+                onClick={() => createNote.mutate(newNoteContent)}
+                disabled={!newNoteContent || createNote.isPending}
+              >
+                Save Note
+              </Button>
+            </div>
+          </DialogContent>
+        </Dialog>
       </div>
 
       <DragDropContext onDragEnd={handleDragEnd}>
@@ -101,7 +135,7 @@ export default function NotesBoard() {
             <div
               {...provided.droppableProps}
               ref={provided.innerRef}
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4"
+              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
             >
               {notes?.map((note, index) => (
                 <Draggable
@@ -113,19 +147,28 @@ export default function NotesBoard() {
                     <div
                       ref={provided.innerRef}
                       {...provided.draggableProps}
-                      {...provided.dragHandleProps}
+                      className="group relative"
                     >
-                      <Card style={{ backgroundColor: note.color }}>
-                        <CardContent className="p-4 relative">
+                      <Card
+                        style={{ backgroundColor: note.color }}
+                        className="transform transition-transform hover:-translate-y-1"
+                      >
+                        <CardContent className="p-4">
+                          <div
+                            {...provided.dragHandleProps}
+                            className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                          >
+                            <GripVertical className="h-4 w-4 text-gray-500" />
+                          </div>
                           <Button
                             variant="ghost"
                             size="icon"
-                            className="absolute top-2 right-2"
+                            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
                             onClick={() => deleteNote.mutate(note.id)}
                           >
                             <X className="h-4 w-4" />
                           </Button>
-                          <p className="whitespace-pre-wrap">{note.content}</p>
+                          <p className="whitespace-pre-wrap pt-6">{note.content}</p>
                         </CardContent>
                       </Card>
                     </div>
