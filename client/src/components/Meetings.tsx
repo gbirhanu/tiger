@@ -12,6 +12,7 @@ import {
   FormField,
   FormItem,
   FormLabel,
+  FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
@@ -36,8 +37,8 @@ export default function Meetings() {
       title: "",
       description: "",
       meetingLink: "",
-      startTime: new Date().toISOString().slice(0, 16),
-      endTime: new Date().toISOString().slice(0, 16),
+      startTime: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
+      endTime: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
     },
   });
 
@@ -112,6 +113,7 @@ export default function Meetings() {
                       <FormControl>
                         <Input placeholder="Enter meeting title" {...field} />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -124,6 +126,7 @@ export default function Meetings() {
                       <FormControl>
                         <Input placeholder="Enter meeting description" {...field} />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -136,6 +139,7 @@ export default function Meetings() {
                       <FormControl>
                         <Input placeholder="Enter video call link (Zoom, Meet, etc.)" {...field} />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -146,8 +150,9 @@ export default function Meetings() {
                     <FormItem>
                       <FormLabel>Start Time</FormLabel>
                       <FormControl>
-                        <Input type="datetime-local" {...field} />
+                        <Input type="datetime-local" {...field} className="w-full" />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -158,8 +163,9 @@ export default function Meetings() {
                     <FormItem>
                       <FormLabel>End Time</FormLabel>
                       <FormControl>
-                        <Input type="datetime-local" {...field} />
+                        <Input type="datetime-local" {...field} className="w-full" />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -183,8 +189,8 @@ export default function Meetings() {
                     {meeting.description}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {format(new Date(meeting.startTime), "PPP p")} -{" "}
-                    {format(new Date(meeting.endTime), "p")}
+                    {format(new Date(meeting.startTime), "PPP h:mm a")} -{" "}
+                    {format(new Date(meeting.endTime), "h:mm a")}
                   </p>
                   <a
                     href={meeting.meetingLink}

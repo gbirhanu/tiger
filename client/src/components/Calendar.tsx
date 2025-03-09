@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { format, isSameDay } from "date-fns";
+import { format, isSameDay, parseISO } from "date-fns";
 import { type Appointment, insertAppointmentSchema } from "@shared/schema";
 import { Calendar as CalendarPrimitive } from "@/components/ui/calendar";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,7 @@ import {
   FormField,
   FormItem,
   FormLabel,
+  FormMessage,
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import {
@@ -37,8 +38,8 @@ export default function Calendar() {
     defaultValues: {
       title: "",
       description: "",
-      startTime: new Date().toISOString(),
-      endTime: new Date().toISOString(),
+      startTime: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
+      endTime: format(new Date(), "yyyy-MM-dd'T'HH:mm"),
     },
   });
 
@@ -88,8 +89,8 @@ export default function Calendar() {
       const end = new Date(selectedDate);
       end.setHours(10, 0, 0, 0); // Set default end time to 10 AM
 
-      form.setValue("startTime", now.toISOString().slice(0, 16));
-      form.setValue("endTime", end.toISOString().slice(0, 16));
+      form.setValue("startTime", format(now, "yyyy-MM-dd'T'HH:mm"));
+      form.setValue("endTime", format(end, "yyyy-MM-dd'T'HH:mm"));
       setDialogOpen(true);
     }
   };
@@ -127,6 +128,7 @@ export default function Calendar() {
                       <FormControl>
                         <Input placeholder="Enter appointment title" {...field} />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -139,6 +141,7 @@ export default function Calendar() {
                       <FormControl>
                         <Input placeholder="Enter appointment description" {...field} />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -149,8 +152,9 @@ export default function Calendar() {
                     <FormItem>
                       <FormLabel>Start Time</FormLabel>
                       <FormControl>
-                        <Input type="datetime-local" {...field} />
+                        <Input type="datetime-local" {...field} className="w-full" />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -161,8 +165,9 @@ export default function Calendar() {
                     <FormItem>
                       <FormLabel>End Time</FormLabel>
                       <FormControl>
-                        <Input type="datetime-local" {...field} />
+                        <Input type="datetime-local" {...field} className="w-full" />
                       </FormControl>
+                      <FormMessage />
                     </FormItem>
                   )}
                 />
@@ -207,9 +212,14 @@ export default function Calendar() {
                       .map((appointment) => (
                         <div
                           key={appointment.id}
-                          className="text-xs bg-primary/10 rounded p-1 truncate flex justify-between items-center"
+                          className="text-xs bg-primary/10 rounded p-1 truncate flex justify-between items-center group"
                         >
-                          <span>{appointment.title}</span>
+                          <div className="overflow-hidden">
+                            <span className="block truncate">{appointment.title}</span>
+                            <span className="text-[10px] text-muted-foreground">
+                              {format(new Date(appointment.startTime), "h:mm a")}
+                            </span>
+                          </div>
                           <Button
                             variant="ghost"
                             size="icon"
