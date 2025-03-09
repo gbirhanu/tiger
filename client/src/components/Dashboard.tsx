@@ -52,7 +52,10 @@ export default function Dashboard() {
   const [selectedNav, setSelectedNav] = React.useState<string>("Dashboard");
 
   return (
-    <ResizablePanelGroup className="h-screen">
+    <ResizablePanelGroup
+      direction="horizontal"
+      className="h-screen items-stretch"
+    >
       <ResizablePanel defaultSize={20} minSize={15} maxSize={25}>
         <div className="flex h-full flex-col">
           <div className="px-3 py-2">
@@ -81,7 +84,7 @@ export default function Dashboard() {
           </ScrollArea>
         </div>
       </ResizablePanel>
-      <ResizableHandle />
+      <ResizableHandle withHandle />
       <ResizablePanel defaultSize={80}>
         <ScrollArea className="h-full">
           <div className="p-8">
