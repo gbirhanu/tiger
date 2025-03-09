@@ -50,8 +50,8 @@ export default function Meetings() {
     mutationFn: async (data: any) => {
       const meeting = {
         ...data,
-        startTime: new Date(data.startTime),
-        endTime: new Date(data.endTime),
+        startTime: new Date(data.startTime).toISOString(),
+        endTime: new Date(data.endTime).toISOString(),
       };
       const res = await apiRequest("POST", "/api/meetings", meeting);
       return res.json();

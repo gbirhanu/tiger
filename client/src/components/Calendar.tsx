@@ -51,8 +51,8 @@ export default function Calendar() {
     mutationFn: async (data: any) => {
       const appointment = {
         ...data,
-        startTime: new Date(data.startTime),
-        endTime: new Date(data.endTime)
+        startTime: new Date(data.startTime).toISOString(),
+        endTime: new Date(data.endTime).toISOString()
       };
       const res = await apiRequest("POST", "/api/appointments", appointment);
       return res.json();
