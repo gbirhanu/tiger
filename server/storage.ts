@@ -5,6 +5,8 @@ import {
   type InsertNote,
   type Appointment,
   type InsertAppointment,
+  type Meeting,
+  type InsertMeeting,
   type PomodoroSettings,
   type InsertPomodoroSettings,
 } from "@shared/schema";
@@ -29,6 +31,12 @@ export interface IStorage {
   updateAppointment(id: number, appointment: Partial<InsertAppointment>): Promise<Appointment>;
   deleteAppointment(id: number): Promise<void>;
 
+  // Meetings
+  getMeetings(): Promise<Meeting[]>;
+  createMeeting(meeting: InsertMeeting): Promise<Meeting>;
+  updateMeeting(id: number, meeting: Partial<InsertMeeting>): Promise<Meeting>;
+  deleteMeeting(id: number): Promise<void>;
+
   // Pomodoro Settings
   getPomodoroSettings(): Promise<PomodoroSettings>;
   updatePomodoroSettings(settings: InsertPomodoroSettings): Promise<PomodoroSettings>;
@@ -38,6 +46,7 @@ export class MemStorage implements IStorage {
   private tasks: Map<number, Task>;
   private notes: Map<number, Note>;
   private appointments: Map<number, Appointment>;
+  private meetings: Map<number, Meeting>;
   private pomodoroSettings: PomodoroSettings;
   private currentId: { [key: string]: number };
 
@@ -45,7 +54,8 @@ export class MemStorage implements IStorage {
     this.tasks = new Map();
     this.notes = new Map();
     this.appointments = new Map();
-    this.currentId = { tasks: 1, notes: 1, appointments: 1 };
+    this.meetings = new Map();
+    this.currentId = { tasks: 1, notes: 1, appointments: 1, meetings: 1 };
     this.pomodoroSettings = {
       id: 1,
       workDuration: 25,
@@ -132,6 +142,33 @@ export class MemStorage implements IStorage {
 
   async deleteAppointment(id: number): Promise<void> {
     this.appointments.delete(id);
+  }
+
+  // Meetings
+  async getMeetings(): Promise<Meeting[]> {
+    return Array.from(this.meetings.values());
+  }
+
+  async createMeeting(meeting: InsertMeeting): Promise<Meeting> {
+    const id = this.currentId.meetings++;
+    const newMeeting = { ...meeting, id };
+    this.meetings.set(id, newMeeting);
+    return newMeeting;
+  }
+
+  async updateMeeting(
+    id: number,
+    meeting: Partial<InsertMeeting>,
+  ): Promise<Meeting> {
+    const existingMeeting = this.meetings.get(id);
+    if (!existingMeeting) throw new Error("Meeting not found");
+    const updatedMeeting = { ...existingMeeting, ...meeting };
+    this.meetings.set(id, updatedMeeting);
+    return updatedMeeting;
+  }
+
+  async deleteMeeting(id: number): Promise<void> {
+    this.meetings.delete(id);
   }
 
   // Pomodoro Settings

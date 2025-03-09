@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer } from "http";
 import { storage } from "./storage";
-import { insertTaskSchema, insertNoteSchema, insertAppointmentSchema, insertPomodoroSettingsSchema } from "@shared/schema";
+import { insertTaskSchema, insertNoteSchema, insertAppointmentSchema, insertMeetingSchema, insertPomodoroSettingsSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express) {
   const httpServer = createServer(app);
@@ -78,6 +78,31 @@ export async function registerRoutes(app: Express) {
   app.delete("/api/appointments/:id", async (req, res) => {
     const id = parseInt(req.params.id);
     await storage.deleteAppointment(id);
+    res.status(204).end();
+  });
+
+  // Meetings
+  app.get("/api/meetings", async (_req, res) => {
+    const meetings = await storage.getMeetings();
+    res.json(meetings);
+  });
+
+  app.post("/api/meetings", async (req, res) => {
+    const meeting = insertMeetingSchema.parse(req.body);
+    const newMeeting = await storage.createMeeting(meeting);
+    res.json(newMeeting);
+  });
+
+  app.patch("/api/meetings/:id", async (req, res) => {
+    const id = parseInt(req.params.id);
+    const meeting = insertMeetingSchema.partial().parse(req.body);
+    const updatedMeeting = await storage.updateMeeting(id, meeting);
+    res.json(updatedMeeting);
+  });
+
+  app.delete("/api/meetings/:id", async (req, res) => {
+    const id = parseInt(req.params.id);
+    await storage.deleteMeeting(id);
     res.status(204).end();
   });
 
