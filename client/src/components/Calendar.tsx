@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { format } from "date-fns";
+import { format, isSameDay } from "date-fns";
 import { type Appointment, insertAppointmentSchema } from "@shared/schema";
 import { Calendar as CalendarPrimitive } from "@/components/ui/calendar";
 import { Button } from "@/components/ui/button";
@@ -80,12 +80,6 @@ export default function Calendar() {
     },
   });
 
-  const appointmentsForDate = appointments?.filter(
-    (appointment) =>
-      format(new Date(appointment.startTime), "yyyy-MM-dd") ===
-      format(date, "yyyy-MM-dd"),
-  );
-
   const handleDateSelect = (selectedDate: Date | undefined) => {
     if (selectedDate) {
       setDate(selectedDate);
@@ -105,19 +99,9 @@ export default function Calendar() {
   }
 
   return (
-    <div className="grid md:grid-cols-2 gap-4">
-      <Card className="cursor-pointer">
-        <CardContent className="pt-6">
-          <CalendarPrimitive
-            mode="single"
-            selected={date}
-            onSelect={handleDateSelect}
-            className="rounded-md border w-full" // Added w-full for wider date selection
-          />
-        </CardContent>
-      </Card>
-
-      <div className="space-y-4">
+    <div className="space-y-4">
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold">Calendar</h2>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button>
@@ -189,33 +173,63 @@ export default function Calendar() {
             </Form>
           </DialogContent>
         </Dialog>
-
-        <div className="space-y-2">
-          {appointmentsForDate?.map((appointment) => (
-            <Card key={appointment.id}>
-              <CardContent className="pt-6 flex items-center justify-between">
-                <div>
-                  <h3 className="font-medium">{appointment.title}</h3>
-                  <p className="text-sm text-muted-foreground">
-                    {appointment.description}
-                  </p>
-                  <p className="text-sm text-muted-foreground">
-                    {format(new Date(appointment.startTime), "h:mm a")} -{" "}
-                    {format(new Date(appointment.endTime), "h:mm a")}
-                  </p>
-                </div>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => deleteAppointment.mutate(appointment.id)}
-                >
-                  <Trash2 className="h-4 w-4" />
-                </Button>
-              </CardContent>
-            </Card>
-          ))}
-        </div>
       </div>
+
+      <Card className="cursor-pointer">
+        <CardContent className="pt-6">
+          <CalendarPrimitive
+            mode="single"
+            selected={date}
+            onSelect={handleDateSelect}
+            className="rounded-md border w-full"
+            modifiers={{
+              hasEvents: (date) =>
+                appointments?.some((appointment) =>
+                  isSameDay(new Date(appointment.startTime), date)
+                ) || false,
+            }}
+            modifiersStyles={{
+              hasEvents: {
+                fontWeight: "bold",
+                color: "var(--primary)",
+                backgroundColor: "var(--primary-foreground)",
+              },
+            }}
+            components={{
+              DayContent: ({ date: dayDate }) => (
+                <div className="h-24 p-1">
+                  <div className="text-sm mb-1">{dayDate.getDate()}</div>
+                  <div className="space-y-1">
+                    {appointments
+                      ?.filter((appointment) =>
+                        isSameDay(new Date(appointment.startTime), dayDate)
+                      )
+                      .map((appointment) => (
+                        <div
+                          key={appointment.id}
+                          className="text-xs bg-primary/10 rounded p-1 truncate flex justify-between items-center"
+                        >
+                          <span>{appointment.title}</span>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            className="h-4 w-4 opacity-0 group-hover:opacity-100"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteAppointment.mutate(appointment.id);
+                            }}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              ),
+            }}
+          />
+        </CardContent>
+      </Card>
     </div>
   );
 }
