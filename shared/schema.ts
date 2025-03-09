@@ -43,11 +43,22 @@ export const pomodoroSettings = pgTable("pomodoro_settings", {
   sessionsBeforeLongBreak: integer("sessions_before_long_break").notNull().default(4),
 });
 
+export const userSettings = pgTable("user_settings", {
+  id: serial("id").primaryKey(),
+  timezone: text("timezone").notNull().default("UTC"),
+  workStartHour: integer("work_start_hour").notNull().default(9),
+  workEndHour: integer("work_end_hour").notNull().default(17),
+  theme: text("theme").notNull().default("system"),
+  defaultCalendarView: text("default_calendar_view").notNull().default("month"),
+  showNotifications: boolean("show_notifications").notNull().default(true),
+});
+
 export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true });
 export const insertNoteSchema = createInsertSchema(notes).omit({ id: true });
 export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true });
 export const insertMeetingSchema = createInsertSchema(meetings).omit({ id: true });
 export const insertPomodoroSettingsSchema = createInsertSchema(pomodoroSettings).omit({ id: true });
+export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({ id: true });
 
 export type Task = typeof tasks.$inferSelect;
 export type InsertTask = z.infer<typeof insertTaskSchema>;
@@ -59,3 +70,5 @@ export type Meeting = typeof meetings.$inferSelect;
 export type InsertMeeting = z.infer<typeof insertMeetingSchema>;
 export type PomodoroSettings = typeof pomodoroSettings.$inferSelect;
 export type InsertPomodoroSettings = z.infer<typeof insertPomodoroSettingsSchema>;
+export type UserSettings = typeof userSettings.$inferSelect;
+export type InsertUserSettings = z.infer<typeof insertUserSettingsSchema>;

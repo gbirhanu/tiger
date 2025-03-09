@@ -12,7 +12,7 @@ import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
-import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video } from "lucide-react";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon } from "lucide-react";
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -31,6 +31,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import Meetings from "./Meetings";
+import Settings from "./Settings";
 
 interface NavItem {
   title: string;
@@ -191,6 +192,11 @@ const navItems: NavItem[] = [
     title: "Meetings",
     icon: <Video className="h-4 w-4" />,
     component: <Meetings />,
+  },
+  {
+    title: "Settings",
+    icon: <SettingsIcon className="h-4 w-4" />,
+    component: <Settings />,
   },
 ];
 

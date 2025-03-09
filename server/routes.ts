@@ -1,7 +1,7 @@
 import type { Express } from "express";
 import { createServer } from "http";
 import { storage } from "./storage";
-import { insertTaskSchema, insertNoteSchema, insertAppointmentSchema, insertMeetingSchema, insertPomodoroSettingsSchema } from "@shared/schema";
+import { insertTaskSchema, insertNoteSchema, insertAppointmentSchema, insertMeetingSchema, insertPomodoroSettingsSchema, insertUserSettingsSchema } from "@shared/schema";
 
 export async function registerRoutes(app: Express) {
   const httpServer = createServer(app);
@@ -115,6 +115,18 @@ export async function registerRoutes(app: Express) {
   app.patch("/api/pomodoro-settings", async (req, res) => {
     const settings = insertPomodoroSettingsSchema.parse(req.body);
     const updatedSettings = await storage.updatePomodoroSettings(settings);
+    res.json(updatedSettings);
+  });
+
+  // User Settings
+  app.get("/api/user-settings", async (_req, res) => {
+    const settings = await storage.getUserSettings();
+    res.json(settings);
+  });
+
+  app.patch("/api/user-settings", async (req, res) => {
+    const settings = insertUserSettingsSchema.partial().parse(req.body);
+    const updatedSettings = await storage.updateUserSettings(settings);
     res.json(updatedSettings);
   });
 

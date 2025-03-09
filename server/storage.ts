@@ -9,6 +9,8 @@ import {
   type InsertMeeting,
   type PomodoroSettings,
   type InsertPomodoroSettings,
+  type UserSettings,
+  type InsertUserSettings,
 } from "@shared/schema";
 
 export interface IStorage {
@@ -40,6 +42,10 @@ export interface IStorage {
   // Pomodoro Settings
   getPomodoroSettings(): Promise<PomodoroSettings>;
   updatePomodoroSettings(settings: InsertPomodoroSettings): Promise<PomodoroSettings>;
+
+  // User Settings
+  getUserSettings(): Promise<UserSettings>;
+  updateUserSettings(settings: InsertUserSettings): Promise<UserSettings>;
 }
 
 export class MemStorage implements IStorage {
@@ -49,6 +55,7 @@ export class MemStorage implements IStorage {
   private meetings: Map<number, Meeting>;
   private pomodoroSettings: PomodoroSettings;
   private currentId: { [key: string]: number };
+  private userSettings: UserSettings;
 
   constructor() {
     this.tasks = new Map();
@@ -62,6 +69,15 @@ export class MemStorage implements IStorage {
       breakDuration: 5,
       longBreakDuration: 15,
       sessionsBeforeLongBreak: 4,
+    };
+    this.userSettings = {
+      id: 1,
+      timezone: "UTC",
+      workStartHour: 9,
+      workEndHour: 17,
+      theme: "system",
+      defaultCalendarView: "month",
+      showNotifications: true,
     };
   }
 
@@ -179,6 +195,16 @@ export class MemStorage implements IStorage {
   async updatePomodoroSettings(settings: InsertPomodoroSettings): Promise<PomodoroSettings> {
     this.pomodoroSettings = { ...this.pomodoroSettings, ...settings };
     return this.pomodoroSettings;
+  }
+
+  // User Settings
+  async getUserSettings(): Promise<UserSettings> {
+    return this.userSettings;
+  }
+
+  async updateUserSettings(settings: InsertUserSettings): Promise<UserSettings> {
+    this.userSettings = { ...this.userSettings, ...settings };
+    return this.userSettings;
   }
 }
 
