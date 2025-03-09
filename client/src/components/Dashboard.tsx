@@ -7,6 +7,7 @@ import {
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
+import { Card, CardContent } from "@/components/ui/card";
 import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
@@ -20,11 +21,36 @@ interface NavItem {
   component: React.ReactNode;
 }
 
+const DashboardOverview = () => {
+  return (
+    <div className="space-y-4">
+      <h2 className="text-2xl font-bold">Welcome to Your Productivity Suite</h2>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <Card>
+          <CardContent className="pt-6">
+            <TaskManager />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <NotesBoard />
+          </CardContent>
+        </Card>
+        <Card>
+          <CardContent className="pt-6">
+            <PomodoroTimer />
+          </CardContent>
+        </Card>
+      </div>
+    </div>
+  );
+};
+
 const navItems: NavItem[] = [
   {
     title: "Dashboard",
     icon: <LayoutGrid className="h-4 w-4" />,
-    component: <TaskManager />,
+    component: <DashboardOverview />,
   },
   {
     title: "Tasks",

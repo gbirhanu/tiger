@@ -30,6 +30,7 @@ import { Plus, Trash2 } from "lucide-react";
 export default function Calendar() {
   const { toast } = useToast();
   const [date, setDate] = useState<Date>(new Date());
+  const [dialogOpen, setDialogOpen] = useState(false);
 
   const form = useForm({
     resolver: zodResolver(insertAppointmentSchema),
@@ -47,7 +48,6 @@ export default function Calendar() {
 
   const createAppointment = useMutation({
     mutationFn: async (data: any) => {
-      // Convert string dates to Date objects
       const appointment = {
         ...data,
         startTime: new Date(data.startTime),
@@ -59,6 +59,7 @@ export default function Calendar() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/appointments"] });
       form.reset();
+      setDialogOpen(false);
       toast({
         title: "Appointment created",
         description: "Your appointment has been created successfully.",
@@ -85,25 +86,39 @@ export default function Calendar() {
       format(date, "yyyy-MM-dd"),
   );
 
+  const handleDateSelect = (selectedDate: Date | undefined) => {
+    if (selectedDate) {
+      setDate(selectedDate);
+      const now = new Date(selectedDate);
+      now.setHours(9, 0, 0, 0); // Set default time to 9 AM
+      const end = new Date(selectedDate);
+      end.setHours(10, 0, 0, 0); // Set default end time to 10 AM
+
+      form.setValue("startTime", now.toISOString().slice(0, 16));
+      form.setValue("endTime", end.toISOString().slice(0, 16));
+      setDialogOpen(true);
+    }
+  };
+
   if (isLoading) {
     return <div>Loading calendar...</div>;
   }
 
   return (
     <div className="grid md:grid-cols-2 gap-4">
-      <Card>
+      <Card className="cursor-pointer">
         <CardContent className="pt-6">
           <CalendarPrimitive
             mode="single"
             selected={date}
-            onSelect={(date) => date && setDate(date)}
-            className="rounded-md border"
+            onSelect={handleDateSelect}
+            className="rounded-md border w-full" // Added w-full for wider date selection
           />
         </CardContent>
       </Card>
 
       <div className="space-y-4">
-        <Dialog>
+        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="h-4 w-4 mr-2" />
@@ -112,7 +127,7 @@ export default function Calendar() {
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Add Appointment</DialogTitle>
+              <DialogTitle>Add Appointment for {format(date, "PPP")}</DialogTitle>
             </DialogHeader>
             <Form {...form}>
               <form
