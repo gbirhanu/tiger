@@ -14,6 +14,22 @@ import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
 import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays } from "lucide-react";
 import React from "react";
+import { useQuery } from "@tanstack/react-query";
+import { format } from "date-fns";
+import {
+  BarChart,
+  Bar,
+  PieChart,
+  Pie,
+  LineChart,
+  Line,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  Cell,
+  ResponsiveContainer,
+} from "recharts";
 
 interface NavItem {
   title: string;
@@ -21,24 +37,122 @@ interface NavItem {
   component: React.ReactNode;
 }
 
+// Sample data for charts
+const taskData = [
+  { name: "Completed", value: 15 },
+  { name: "In Progress", value: 8 },
+  { name: "Not Started", value: 5 },
+];
+
+const pomodoroData = [
+  { name: "Mon", sessions: 4 },
+  { name: "Tue", sessions: 6 },
+  { name: "Wed", sessions: 3 },
+  { name: "Thu", sessions: 7 },
+  { name: "Fri", sessions: 5 },
+];
+
+const noteData = [
+  { date: "Mar 1", count: 3 },
+  { date: "Mar 2", count: 5 },
+  { date: "Mar 3", count: 4 },
+  { date: "Mar 4", count: 7 },
+  { date: "Mar 5", count: 6 },
+];
+
+const COLORS = ["#0088FE", "#00C49F", "#FFBB28"];
+
 const DashboardOverview = () => {
+  const { data: tasks } = useQuery({ queryKey: ["/api/tasks"] });
+  const { data: appointments } = useQuery({ queryKey: ["/api/appointments"] });
+
   return (
-    <div className="space-y-4">
-      <h2 className="text-2xl font-bold">Welcome to Your Productivity Suite</h2>
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-4">
+    <div className="space-y-6">
+      <h2 className="text-2xl font-bold">Dashboard Overview</h2>
+
+      <div className="grid md:grid-cols-2 gap-6">
+        {/* Task Status Chart */}
         <Card>
           <CardContent className="pt-6">
-            <TaskManager />
+            <h3 className="text-lg font-semibold mb-4">Task Status</h3>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={taskData}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    outerRadius={80}
+                    label
+                  >
+                    {taskData.map((entry, index) => (
+                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
+
+        {/* Pomodoro Sessions Chart */}
         <Card>
           <CardContent className="pt-6">
-            <NotesBoard />
+            <h3 className="text-lg font-semibold mb-4">Weekly Pomodoro Sessions</h3>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={pomodoroData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="name" />
+                  <YAxis />
+                  <Tooltip />
+                  <Bar dataKey="sessions" fill="#8884d8" />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
           </CardContent>
         </Card>
+
+        {/* Note Activity Chart */}
         <Card>
           <CardContent className="pt-6">
-            <PomodoroTimer />
+            <h3 className="text-lg font-semibold mb-4">Note Activity</h3>
+            <div className="h-[300px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={noteData}>
+                  <CartesianGrid strokeDasharray="3 3" />
+                  <XAxis dataKey="date" />
+                  <YAxis />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="count" stroke="#82ca9d" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Upcoming Appointments */}
+        <Card>
+          <CardContent className="pt-6">
+            <h3 className="text-lg font-semibold mb-4">Upcoming Appointments</h3>
+            <div className="space-y-4">
+              {appointments?.slice(0, 3).map((appointment: any) => (
+                <div key={appointment.id} className="flex justify-between items-center">
+                  <div>
+                    <p className="font-medium">{appointment.title}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {format(new Date(appointment.startTime), "PPP p")}
+                    </p>
+                  </div>
+                </div>
+              ))}
+              {(!appointments || appointments.length === 0) && (
+                <p className="text-muted-foreground">No upcoming appointments</p>
+              )}
+            </div>
           </CardContent>
         </Card>
       </div>
