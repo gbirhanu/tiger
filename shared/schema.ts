@@ -1,74 +1,245 @@
-import { pgTable, text, serial, integer, timestamp, boolean } from "drizzle-orm/pg-core";
-import { createInsertSchema } from "drizzle-zod";
+import { sql } from "drizzle-orm";
+import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 import { z } from "zod";
 
-export const tasks = pgTable("tasks", {
-  id: serial("id").primaryKey(),
-  title: text("title").notNull(),
-  description: text("description"),
-  completed: boolean("completed").default(false).notNull(),
-  dueDate: timestamp("due_date"),
-  priority: text("priority").notNull().default("medium"),
+// Auth Tables
+export const users = sqliteTable("users", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  email: text("email").notNull().unique(),
+  password: text("password").notNull(),
+  name: text("name"),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const notes = pgTable("notes", {
-  id: serial("id").primaryKey(),
-  content: text("content").notNull(),
+export const sessions = sqliteTable("sessions", {
+  id: text("id").primaryKey(),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  expires_at: integer("expires_at").notNull()
+});
+
+// Task Tables
+export const tasks = sqliteTable("tasks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  due_date: integer("due_date"),
+  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  all_day: integer("all_day", { mode: "boolean" }).notNull().default(false),
+  priority: text("priority").notNull().default("medium"),
+  parent_task_id: integer("parent_task_id").references(() => tasks.id, { onDelete: "cascade" }),
+  is_recurring: integer("is_recurring", { mode: "boolean" }).notNull().default(false),
+  recurrence_pattern: text("recurrence_pattern"),
+  recurrence_interval: integer("recurrence_interval"),
+  recurrence_end_date: integer("recurrence_end_date"),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+});
+
+export const subtasks = sqliteTable("subtasks", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  task_id: integer("task_id")
+    .notNull()
+    .references(() => tasks.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  position: integer("position").notNull(),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+});
+
+// Other Tables
+export const notes = sqliteTable("notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  content: text("content"),
   color: text("color").notNull().default("#ffffff"),
   position: integer("position").notNull(),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const appointments = pgTable("appointments", {
-  id: serial("id").primaryKey(),
+export const appointments = sqliteTable("appointments", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
-  startTime: timestamp("start_time").notNull(),
-  endTime: timestamp("end_time").notNull(),
+  start_time: integer("start_time").notNull(),
+  end_time: integer("end_time").notNull(),
+  all_day: integer("all_day", { mode: "boolean" }).notNull().default(false),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const meetings = pgTable("meetings", {
-  id: serial("id").primaryKey(),
+export const meetings = sqliteTable("meetings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
   title: text("title").notNull(),
   description: text("description"),
-  meetingLink: text("meeting_link").notNull(),
-  startTime: timestamp("start_time").notNull(),
-  endTime: timestamp("end_time").notNull(),
+  start_time: integer("start_time").notNull(),
+  end_time: integer("end_time").notNull(),
+  location: text("location"),
+  attendees: text("attendees"),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const pomodoroSettings = pgTable("pomodoro_settings", {
-  id: serial("id").primaryKey(),
-  workDuration: integer("work_duration").notNull().default(25),
-  breakDuration: integer("break_duration").notNull().default(5),
-  longBreakDuration: integer("long_break_duration").notNull().default(15),
-  sessionsBeforeLongBreak: integer("sessions_before_long_break").notNull().default(4),
+export const pomodoroSettings = sqliteTable("pomodoro_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
+  work_duration: integer("work_duration").notNull().default(25),
+  break_duration: integer("break_duration").notNull().default(5),
+  long_break_duration: integer("long_break_duration").notNull().default(15),
+  sessions_before_long_break: integer("sessions_before_long_break").notNull().default(4),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const userSettings = pgTable("user_settings", {
-  id: serial("id").primaryKey(),
+export const userSettings = sqliteTable("user_settings", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .unique()
+    .references(() => users.id, { onDelete: "cascade" }),
   timezone: text("timezone").notNull().default("UTC"),
-  workStartHour: integer("work_start_hour").notNull().default(9),
-  workEndHour: integer("work_end_hour").notNull().default(17),
-  theme: text("theme").notNull().default("system"),
-  defaultCalendarView: text("default_calendar_view").notNull().default("month"),
-  showNotifications: boolean("show_notifications").notNull().default(true),
+  work_start_hour: integer("work_start_hour").notNull().default(9),
+  work_end_hour: integer("work_end_hour").notNull().default(17),
+  theme: text("theme").notNull().default("light"),
+  default_calendar_view: text("default_calendar_view").notNull().default("month"),
+  show_notifications: integer("show_notifications", { mode: "boolean" }).notNull().default(true),
+  notifications_enabled: integer("notifications_enabled", { mode: "boolean" }).notNull().default(true),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 
-export const insertTaskSchema = createInsertSchema(tasks).omit({ id: true });
-export const insertNoteSchema = createInsertSchema(notes).omit({ id: true });
-export const insertAppointmentSchema = createInsertSchema(appointments).omit({ id: true });
-export const insertMeetingSchema = createInsertSchema(meetings).omit({ id: true });
-export const insertPomodoroSettingsSchema = createInsertSchema(pomodoroSettings).omit({ id: true });
-export const insertUserSettingsSchema = createInsertSchema(userSettings).omit({ id: true });
+// Zod Schemas
+export const insertUserSchema = createInsertSchema(users, {
+  email: z.string().email(),
+  password: z.string().min(8),
+  name: z.string().min(1).nullable(),
+});
+
+export const insertTaskSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().nullable(),
+  priority: z.enum(["low", "medium", "high"]).default("medium"),
+  completed: z.boolean().default(false),
+  due_date: z.number().nullable(),
+  all_day: z.boolean().default(false),
+  parent_task_id: z.number().nullable(),
+  is_recurring: z.boolean().default(false),
+  recurrence_pattern: z.enum(["daily", "weekly", "monthly", "yearly"]).nullable(),
+  recurrence_interval: z.number().nullable(),
+  recurrence_end_date: z.number().nullable(),
+});
+
+export const insertSubtaskSchema = z.object({
+  task_id: z.number(),
+  title: z.string().min(1),
+  completed: z.boolean().default(false),
+  position: z.number(),
+});
+
+export const insertNoteSchema = z.object({
+  title: z.string().min(1),
+  content: z.string().nullable(),
+  color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#ffffff"),
+  position: z.number(),
+});
+
+export const insertAppointmentSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().nullable(),
+  start_time: z.number(),
+  end_time: z.number().refine((val, ctx) => {
+    if (ctx.parent.start_time && val < ctx.parent.start_time) {
+      return false;
+    }
+    return true;
+  }, "End time must be after start time"),
+  all_day: z.boolean().default(false),
+});
+
+export const insertMeetingSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().nullable(),
+  start_time: z.number(),
+  end_time: z.number().refine((val, ctx) => {
+    if (ctx.parent.start_time && val < ctx.parent.start_time) {
+      return false;
+    }
+    return true;
+  }, "End time must be after start time"),
+  location: z.string().nullable(),
+  attendees: z.string().nullable(),
+});
+
+export const insertPomodoroSettingsSchema = z.object({
+  work_duration: z.number().min(1).default(25),
+  break_duration: z.number().min(1).default(5),
+  long_break_duration: z.number().min(1).default(15),
+  sessions_before_long_break: z.number().min(1).default(4),
+});
+
+export const insertUserSettingsSchema = z.object({
+  timezone: z.string().default("UTC"),
+  work_start_hour: z.number().min(0).max(23).default(9),
+  work_end_hour: z.number().min(0).max(23).default(17),
+  theme: z.enum(["light", "dark", "system"]).default("light"),
+  default_calendar_view: z.enum(["day", "week", "month"]).default("month"),
+  show_notifications: z.boolean().default(true),
+  notifications_enabled: z.boolean().default(true),
+});
+
+// Types
+export type User = typeof users.$inferSelect;
+export type NewUser = typeof users.$inferInsert;
+
+export type Session = typeof sessions.$inferSelect;
+export type NewSession = typeof sessions.$inferInsert;
 
 export type Task = typeof tasks.$inferSelect;
-export type InsertTask = z.infer<typeof insertTaskSchema>;
+export type NewTask = typeof tasks.$inferInsert;
+
+export type Subtask = typeof subtasks.$inferSelect;
+export type NewSubtask = typeof subtasks.$inferInsert;
+
 export type Note = typeof notes.$inferSelect;
-export type InsertNote = z.infer<typeof insertNoteSchema>;
+export type NewNote = typeof notes.$inferInsert;
+
 export type Appointment = typeof appointments.$inferSelect;
-export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
+export type NewAppointment = typeof appointments.$inferInsert;
+
 export type Meeting = typeof meetings.$inferSelect;
-export type InsertMeeting = z.infer<typeof insertMeetingSchema>;
+export type NewMeeting = typeof meetings.$inferInsert;
+
 export type PomodoroSettings = typeof pomodoroSettings.$inferSelect;
-export type InsertPomodoroSettings = z.infer<typeof insertPomodoroSettingsSchema>;
+export type NewPomodoroSettings = typeof pomodoroSettings.$inferInsert;
+
 export type UserSettings = typeof userSettings.$inferSelect;
-export type InsertUserSettings = z.infer<typeof insertUserSettingsSchema>;
+export type NewUserSettings = typeof userSettings.$inferInsert;
+
+export type TaskWithSubtasks = Task & {
+  has_subtasks?: boolean;
+  completed_subtasks?: number;
+  total_subtasks?: number;
+};

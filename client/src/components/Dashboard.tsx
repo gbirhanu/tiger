@@ -12,7 +12,7 @@ import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
-import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon } from "lucide-react";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut } from "lucide-react";
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -32,6 +32,8 @@ import {
 } from "recharts";
 import Meetings from "./Meetings";
 import Settings from "./Settings";
+import { useAuth } from "@/contexts/AuthContext";
+import { getAppointments, getNotes, getPomodoroSettings, getTasks } from "@/lib/api";
 
 interface NavItem {
   title: string;
@@ -65,8 +67,89 @@ const noteData = [
 const COLORS = ["#0088FE", "#00C49F", "#FFBB28"];
 
 const DashboardOverview = () => {
-  const { data: tasks } = useQuery({ queryKey: ["/api/tasks"] });
-  const { data: appointments } = useQuery({ queryKey: ["/api/appointments"] });
+  // Fetch data using React Query with error handling
+  const { data: tasks = [], error: tasksError, isLoading: tasksLoading } = useQuery({
+    queryKey: ["tasks"],
+    queryFn: async () => {
+      const response = await getTasks();
+      console.log("tasks", response);
+      
+      return response;
+    },
+  });
+
+  const { data: notes = [], error: notesError, isLoading: notesLoading } = useQuery({
+    queryKey: ["notes"],
+    queryFn: async () => {
+      const response = await getNotes();
+      return response;
+    },
+  });
+
+  const { data: appointments = [], error: appointmentsError, isLoading: appointmentsLoading } = useQuery({
+    queryKey: ["appointments"],
+    queryFn: async () => {
+      const response = await getAppointments();
+      return response;
+    },
+  });
+
+  const { data: pomodoroSettings } = useQuery({
+    queryKey: ["pomodoro-settings"],
+    queryFn: async () => {
+      const response = await getPomodoroSettings();
+      return response;
+    },
+  });
+
+  // Calculate task statistics safely
+  const taskStats = {
+    completed: Array.isArray(tasks) ? tasks.filter((task: any) => task.completed).length : 0,
+    inProgress: Array.isArray(tasks) ? tasks.filter((task: any) => !task.completed && task.due_date).length : 0,
+    notStarted: Array.isArray(tasks) ? tasks.filter((task: any) => !task.completed && !task.due_date).length : 0,
+  };
+
+  const taskChartData = [
+    { name: "Completed", value: taskStats.completed },
+    { name: "In Progress", value: taskStats.inProgress },
+    { name: "Not Started", value: taskStats.notStarted },
+  ];
+
+  // Calculate notes by date safely
+  const last5Days = Array.from({ length: 5 }, (_, i) => {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    return format(date, "MMM d");
+  }).reverse();
+
+  const notesByDate = last5Days.map(date => ({
+    date,
+    count: Array.isArray(notes) ? notes.filter((note: any) => 
+      note.createdAt && format(new Date(note.createdAt), "MMM d") === date
+    ).length : 0
+  }));
+
+  // Get upcoming appointments safely
+  const upcomingAppointments = Array.isArray(appointments) ? appointments
+    .filter((apt: any) => apt.startTime && new Date(apt.startTime) > new Date())
+    .sort((a: any, b: any) => new Date(a.startTime).getTime() - new Date(b.startTime).getTime())
+    .slice(0, 3) : [];
+
+  if (tasksError || notesError || appointmentsError) {
+    return (
+      <div className="p-4 text-red-500">
+        Error loading dashboard data. Please try again later.
+      </div>
+    );
+  }
+
+  if (tasksLoading || notesLoading || appointmentsLoading) {
+    return (
+      <div className="p-4">
+        Loading dashboard data...
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
@@ -78,10 +161,15 @@ const DashboardOverview = () => {
           <CardContent className="pt-6">
             <h3 className="text-lg font-semibold mb-4">Task Status</h3>
             <div className="h-[300px]">
+              {taskChartData.every(item => item.value === 0) ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  No tasks available
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
                 <PieChart>
                   <Pie
-                    data={taskData}
+                      data={taskChartData}
                     dataKey="value"
                     nameKey="name"
                     cx="50%"
@@ -89,31 +177,14 @@ const DashboardOverview = () => {
                     outerRadius={80}
                     label
                   >
-                    {taskData.map((entry, index) => (
+                      {taskChartData.map((entry, index) => (
                       <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
                     ))}
                   </Pie>
                   <Tooltip />
                 </PieChart>
               </ResponsiveContainer>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Pomodoro Sessions Chart */}
-        <Card>
-          <CardContent className="pt-6">
-            <h3 className="text-lg font-semibold mb-4">Weekly Pomodoro Sessions</h3>
-            <div className="h-[300px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={pomodoroData}>
-                  <CartesianGrid strokeDasharray="3 3" />
-                  <XAxis dataKey="name" />
-                  <YAxis />
-                  <Tooltip />
-                  <Bar dataKey="sessions" fill="#8884d8" />
-                </BarChart>
-              </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -121,10 +192,15 @@ const DashboardOverview = () => {
         {/* Note Activity Chart */}
         <Card>
           <CardContent className="pt-6">
-            <h3 className="text-lg font-semibold mb-4">Note Activity</h3>
+            <h3 className="text-lg font-semibold mb-4">Note Activity (Last 5 Days)</h3>
             <div className="h-[300px]">
+              {notesByDate.every(item => item.count === 0) ? (
+                <div className="h-full flex items-center justify-center text-muted-foreground">
+                  No notes created in the last 5 days
+                </div>
+              ) : (
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={noteData}>
+                  <LineChart data={notesByDate}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="date" />
                   <YAxis />
@@ -132,6 +208,7 @@ const DashboardOverview = () => {
                   <Line type="monotone" dataKey="count" stroke="#82ca9d" />
                 </LineChart>
               </ResponsiveContainer>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -141,7 +218,8 @@ const DashboardOverview = () => {
           <CardContent className="pt-6">
             <h3 className="text-lg font-semibold mb-4">Upcoming Appointments</h3>
             <div className="space-y-4">
-              {appointments?.slice(0, 3).map((appointment: any) => (
+              {upcomingAppointments.length > 0 ? (
+                upcomingAppointments.map((appointment: any) => (
                 <div key={appointment.id} className="flex justify-between items-center">
                   <div>
                     <p className="font-medium">{appointment.title}</p>
@@ -150,11 +228,40 @@ const DashboardOverview = () => {
                     </p>
                   </div>
                 </div>
-              ))}
-              {(!appointments || appointments.length === 0) && (
+                ))
+              ) : (
                 <p className="text-muted-foreground">No upcoming appointments</p>
               )}
             </div>
+          </CardContent>
+        </Card>
+
+        {/* Task Summary */}
+        <Card>
+          <CardContent className="pt-6">
+            <h3 className="text-lg font-semibold mb-4">Task Summary</h3>
+            {Array.isArray(tasks) && tasks.length > 0 ? (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center">
+                  <span>Total Tasks</span>
+                  <span className="font-medium">{tasks.length}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span>Completed</span>
+                  <span className="text-green-600 font-medium">{taskStats.completed}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span>In Progress</span>
+                  <span className="text-yellow-600 font-medium">{taskStats.inProgress}</span>
+                </div>
+                <div className="flex justify-between items-center">
+                  <span>Not Started</span>
+                  <span className="text-red-600 font-medium">{taskStats.notStarted}</span>
+                </div>
+              </div>
+            ) : (
+              <p className="text-muted-foreground">No tasks available</p>
+            )}
           </CardContent>
         </Card>
       </div>
@@ -202,6 +309,7 @@ const navItems: NavItem[] = [
 
 export default function Dashboard() {
   const [selectedNav, setSelectedNav] = React.useState<string>("Dashboard");
+  const { logout } = useAuth();
 
   return (
     <ResizablePanelGroup
@@ -210,10 +318,11 @@ export default function Dashboard() {
     >
       <ResizablePanel defaultSize={20} minSize={15} maxSize={25}>
         <div className="flex h-full flex-col">
-          <div className="px-3 py-2">
-            <h2 className="mb-2 px-4 text-lg font-semibold tracking-tight">
-              Productivity Suite
-            </h2>
+          <div className="px-2 py-2">
+            <div className="flex items-center gap-2 px-2">
+              <Flame className="h-5 w-5 text-yellow-500" />
+              <h2 className="text-lg font-semibold">Tiger</h2>
+            </div>
           </div>
           <Separator />
           <ScrollArea className="flex-1">
@@ -234,6 +343,17 @@ export default function Dashboard() {
               ))}
             </div>
           </ScrollArea>
+          <div className="p-2 mt-auto">
+            <Button
+              variant="ghost"
+              size="sm"
+              className="w-full justify-start gap-2 text-red-500 hover:text-red-500 hover:bg-red-500/10"
+              onClick={() => logout()}
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </Button>
+          </div>
         </div>
       </ResizablePanel>
       <ResizableHandle withHandle />

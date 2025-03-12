@@ -1,0 +1,6 @@
+[
+  {
+    "type": "sqlite",
+    "path": "d:\\ProjectJS\\tiger\\sqlite.db"
+  }
+]

@@ -5,6 +5,7 @@ import { zodResolver } from "@hookform/resolvers/zod";
 import { type PomodoroSettings, insertPomodoroSettingsSchema } from "@shared/schema";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import {
   Form,
   FormControl,
@@ -17,7 +18,7 @@ import { Progress } from "@/components/ui/progress";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest } from "@/lib/queryClient";
 import { queryClient } from "@/lib/queryClient";
-import { Play, Pause, RotateCcw, Settings } from "lucide-react";
+import { Play, Pause, RotateCcw, Settings, AlertCircle, Loader2 } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -28,39 +29,83 @@ import {
 
 type TimerState = "work" | "break" | "longBreak";
 
+const DEFAULT_SETTINGS: PomodoroSettings = {
+  workDuration: 25,
+  breakDuration: 5,
+  longBreakDuration: 15,
+  sessionsBeforeLongBreak: 4,
+};
+
 export default function PomodoroTimer() {
   const { toast } = useToast();
   const [isRunning, setIsRunning] = useState(false);
-  const [timeLeft, setTimeLeft] = useState(25 * 60);
+  const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.workDuration * 60);
   const [timerState, setTimerState] = useState<TimerState>("work");
   const [sessionsCompleted, setSessionsCompleted] = useState(0);
+  const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
 
-  const { data: settings } = useQuery<PomodoroSettings>({
-    queryKey: ["/api/pomodoro-settings"],
+  const { 
+    data: settings, 
+    isLoading: isLoadingSettings,
+    error: settingsError
+  } = useQuery<PomodoroSettings>({
+    queryKey: ["/api/settings/pomodoro"],
+    retry: 2,
+    refetchOnWindowFocus: false,
+    onError: (error) => {
+      console.error("Failed to fetch pomodoro settings:", error);
+      toast({
+        title: "Error fetching settings",
+        description: "Could not load your settings. Using defaults instead.",
+        variant: "destructive",
+      });
+    }
   });
 
+  // Initialize form with settings or defaults
   const form = useForm({
     resolver: zodResolver(insertPomodoroSettingsSchema),
-    defaultValues: settings || {
-      workDuration: 25,
-      breakDuration: 5,
-      longBreakDuration: 15,
-      sessionsBeforeLongBreak: 4,
-    },
+    defaultValues: settings || DEFAULT_SETTINGS,
   });
+
+  // Update form values when settings are loaded
+  useEffect(() => {
+    if (settings) {
+      form.reset(settings);
+    }
+  }, [settings, form]);
 
   const updateSettings = useMutation({
     mutationFn: async (data: PomodoroSettings) => {
-      const res = await apiRequest("PATCH", "/api/pomodoro-settings", data);
-      return res.json();
+      try {
+        const res = await apiRequest("PATCH", "/api/settings/pomodoro", data);
+        
+        if (!res.ok) {
+          const errorData = await res.json().catch(() => null);
+          throw new Error(errorData?.message || `Error: ${res.status} ${res.statusText}`);
+        }
+        
+        return await res.json();
+      } catch (error) {
+        console.error("Failed to update settings:", error);
+        throw error;
+      }
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/pomodoro-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/settings/pomodoro"] });
       toast({
         title: "Settings updated",
         description: "Your pomodoro settings have been updated successfully.",
       });
+      setIsSettingsDialogOpen(false);
     },
+    onError: (error: Error) => {
+      toast({
+        title: "Failed to update settings",
+        description: error.message || "Please try again later.",
+        variant: "destructive",
+      });
+    }
   });
 
   useEffect(() => {
@@ -106,21 +151,42 @@ export default function PomodoroTimer() {
   };
 
   const getMaxTime = () => {
-    if (!settings) return 25 * 60;
+    const currentSettings = settings || DEFAULT_SETTINGS;
     switch (timerState) {
       case "work":
-        return settings.workDuration * 60;
+        return currentSettings.workDuration * 60;
       case "break":
-        return settings.breakDuration * 60;
+        return currentSettings.breakDuration * 60;
       case "longBreak":
-        return settings.longBreakDuration * 60;
+        return currentSettings.longBreakDuration * 60;
     }
   };
 
   const progress = (timeLeft / getMaxTime()) * 100;
 
+  // Show loading state
+  if (isLoadingSettings) {
+    return (
+      <Card>
+        <CardContent className="py-8 flex flex-col items-center">
+          <Loader2 className="h-8 w-8 animate-spin mb-4" />
+          <p>Loading timer settings...</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
   return (
     <div className="space-y-4">
+      {settingsError && (
+        <Alert variant="destructive" className="mb-4">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Error</AlertTitle>
+          <AlertDescription>
+            Failed to load your timer settings. Using default values.
+          </AlertDescription>
+        </Alert>
+      )}
       <Card>
         <CardContent className="pt-6 flex flex-col items-center">
           <div className="text-4xl font-bold mb-4">{formatTime(timeLeft)}</div>
@@ -148,7 +214,7 @@ export default function PomodoroTimer() {
             >
               <RotateCcw className="h-4 w-4" />
             </Button>
-            <Dialog>
+            <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
               <DialogTrigger asChild>
                 <Button size="icon" variant="outline">
                   <Settings className="h-4 w-4" />
@@ -211,9 +277,29 @@ export default function PomodoroTimer() {
                         </FormItem>
                       )}
                     />
-                    <Button type="submit" disabled={updateSettings.isPending}>
-                      Save Settings
-                    </Button>
+                    <div className="flex justify-between">
+                      <Button 
+                        type="button" 
+                        variant="outline" 
+                        onClick={() => setIsSettingsDialogOpen(false)}
+                        disabled={updateSettings.isPending}
+                      >
+                        Cancel
+                      </Button>
+                      <Button 
+                        type="submit" 
+                        disabled={updateSettings.isPending}
+                      >
+                        {updateSettings.isPending ? (
+                          <>
+                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          "Save Settings"
+                        )}
+                      </Button>
+                    </div>
                   </form>
                 </Form>
               </DialogContent>

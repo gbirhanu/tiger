@@ -1,0 +1,60 @@
+{
+  "version": "5",
+  "dialect": "sqlite",
+  "entries": [
+    {
+      "idx": 0,
+      "when": "1710237600000",
+      "tag": "0100_create_users",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "when": "1710237601000",
+      "tag": "0101_create_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "when": "1710237602000",
+      "tag": "0102_create_tasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "when": "1710237603000",
+      "tag": "0103_create_subtasks",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "when": "1710237604000",
+      "tag": "0104_create_notes",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "when": "1710237605000",
+      "tag": "0105_create_appointments",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "when": "1710237606000",
+      "tag": "0106_create_meetings",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "when": "1710237607000",
+      "tag": "0107_create_pomodoro_settings",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "when": "1710237608000",
+      "tag": "0108_create_user_settings",
+      "breakpoints": true
+    }
+  ]
+} 

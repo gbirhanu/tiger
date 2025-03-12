@@ -23,20 +23,23 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { getUserSettings, updateUserSettings } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
+import React from "react";
+import { Loader2 } from "lucide-react";
 
 const TIMEZONES = Intl.supportedValuesOf('timeZone');
 
 export default function Settings() {
   const { toast } = useToast();
   const { data: settings, isLoading } = useQuery<UserSettings>({
-    queryKey: ["/api/user-settings"],
+    queryKey: ["user-settings"],
+    queryFn: getUserSettings,
   });
 
-  const form = useForm({
+  const form = useForm<UserSettings>({
     resolver: zodResolver(insertUserSettingsSchema),
-    defaultValues: settings || {
+    defaultValues: {
       timezone: "UTC",
       workStartHour: 9,
       workEndHour: 17,
@@ -46,22 +49,37 @@ export default function Settings() {
     },
   });
 
+  // Update form values when settings are loaded
+  React.useEffect(() => {
+    if (settings) {
+      form.reset(settings);
+    }
+  }, [settings, form]);
+
   const updateSettings = useMutation({
-    mutationFn: async (data: Partial<UserSettings>) => {
-      const res = await apiRequest("PATCH", "/api/user-settings", data);
-      return res.json();
-    },
+    mutationFn: updateUserSettings,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/user-settings"] });
+      queryClient.invalidateQueries({ queryKey: ["user-settings"] });
       toast({
         title: "Settings updated",
         description: "Your preferences have been saved successfully.",
       });
     },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to update settings",
+        description: error.message || "An error occurred while saving your settings.",
+      });
+    },
   });
 
   if (isLoading) {
-    return <div>Loading settings...</div>;
+    return (
+      <div className="flex items-center justify-center h-[60vh]">
+        <Loader2 className="h-8 w-8 animate-spin text-primary" />
+      </div>
+    );
   }
 
   return (
@@ -71,7 +89,10 @@ export default function Settings() {
         <CardContent className="pt-6">
           <Form {...form}>
             <form
-              onSubmit={form.handleSubmit((data) => updateSettings.mutate(data))}
+              onSubmit={form.handleSubmit((data) => {
+                console.log('Submitting settings:', data);
+                updateSettings.mutate(data);
+              })}
               className="space-y-6"
             >
               <FormField
@@ -82,7 +103,7 @@ export default function Settings() {
                     <FormLabel>Theme</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      defaultValue={field.value}
+                      value={field.value}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -110,7 +131,7 @@ export default function Settings() {
                     <FormLabel>Timezone</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      defaultValue={field.value}
+                      value={field.value}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -190,7 +211,7 @@ export default function Settings() {
                     <FormLabel>Default Calendar View</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      defaultValue={field.value}
+                      value={field.value}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -233,8 +254,18 @@ export default function Settings() {
                 )}
               />
 
-              <Button type="submit" disabled={updateSettings.isPending}>
-                Save Settings
+              <Button 
+                type="submit" 
+                disabled={updateSettings.isPending}
+              >
+                {updateSettings.isPending ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  "Save Settings"
+                )}
               </Button>
             </form>
           </Form>
