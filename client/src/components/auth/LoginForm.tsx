@@ -67,25 +67,14 @@ export function LoginForm() {
         const result = await loginWithGoogle(response.credential);
         
         console.debug('Login response:', result);
-        console.debug('Login response:', result);
-        if (result) {
-          console.debug('Session token received:', result.session?.id);
-          setLoginStatus('success');
-          toast({
-            title: "Success",
-            description: "Google login successful. Redirecting...",
-            variant: "default"
-          });
-        } else {
-          console.error('No user data or session token in response');
-          setLoginStatus('error');
-          setLocalError('Invalid login response - no user data');
-          toast({
-            title: "Login Failed",
-            description: "Invalid login response - no user data",
-            variant: "destructive"
-          });
-        }
+        console.debug('Google login successful');
+        setLoginStatus('success');
+        toast({
+          title: "Success",
+          description: "Google login successful. Redirecting...",
+          variant: "default"
+        });
+      } catch (err) {
         console.error('Google login error:', err);
         setLoginStatus('error');
         setLocalError(err instanceof Error ? err.message : 'Unknown error during Google login');
@@ -93,7 +82,7 @@ export function LoginForm() {
     }
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     setIsLoading(true);
     setLoginStatus('loading');
@@ -215,4 +204,4 @@ export function LoginForm() {
       </CardContent>
     </Card>
   );
-} 
+}
