@@ -1,5 +1,6 @@
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
+import { ThemeProvider } from './contexts/ThemeContext';
 import AuthPage from './pages/auth';
 import Dashboard from './components/Dashboard';
 import { Toaster } from './components/ui/toaster';
@@ -32,12 +33,7 @@ function LoadingSpinner() {
 }
 
 function PrivateRoute({ children }: { children: React.ReactNode }) {
-  const { isAuthenticated, loading, theme } = useAuth();
-
-  useEffect(() => {
-    // Apply theme class to root element
-    document.documentElement.className = theme;
-  }, [theme]);
+  const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
     return <LoadingSpinner />;
@@ -63,12 +59,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
 }
 
 function AppContent() {
-  const { theme, isAuthenticated, loading, error, clearErrors } = useAuth();
-
-  useEffect(() => {
-    // Apply theme class to root element
-    document.documentElement.className = theme;
-  }, [theme]);
+  const { isAuthenticated, loading, error, clearErrors } = useAuth();
 
   // Clear any auth errors when component mounts
   useEffect(() => {
@@ -115,10 +106,12 @@ function App() {
     >
       <Router>
         <AuthProvider>
-          <Suspense fallback={<LoadingSpinner />}>
-            <AppContent />
-            <Toaster />
-          </Suspense>
+          <ThemeProvider>
+            <Suspense fallback={<LoadingSpinner />}>
+              <AppContent />
+              <Toaster />
+            </Suspense>
+          </ThemeProvider>
         </AuthProvider>
       </Router>
     </ErrorBoundary>

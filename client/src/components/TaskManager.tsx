@@ -3,12 +3,12 @@ import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { 
-  Task, TaskWithSubtasks, 
-  insertTaskSchema,
+  Task, TaskWithSubtasks, Subtask, NewSubtask,
+  insertTaskSchema, insertSubtaskSchema,
   type NewTask
 } from "@shared/schema";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardFooter, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
   Form,
@@ -63,6 +63,7 @@ import {
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/contexts/ThemeContext";
 
 type FormData = {
   title: string;
@@ -180,6 +181,54 @@ const TaskProgress = ({ completed, total }: { completed: number; total: number }
         </TooltipContent>
       </Tooltip>
     </TooltipProvider>
+  );
+};
+
+// Helper function to get priority styling
+const getPriorityClass = (priority: "low" | "medium" | "high") => {
+  switch (priority) {
+    case "low":
+      return {
+        bg: "bg-[hsl(var(--task-low)/0.2)]",
+        text: "text-[hsl(var(--task-low))]",
+        border: "border-[hsl(var(--task-low)/0.3)]",
+      };
+    case "medium":
+      return {
+        bg: "bg-[hsl(var(--task-medium)/0.2)]",
+        text: "text-[hsl(var(--task-medium))]",
+        border: "border-[hsl(var(--task-medium)/0.3)]",
+      };
+    case "high":
+      return {
+        bg: "bg-[hsl(var(--task-high)/0.2)]",
+        text: "text-[hsl(var(--task-high))]",
+        border: "border-[hsl(var(--task-high)/0.3)]",
+      };
+    default:
+      return {
+        bg: "bg-[hsl(var(--task-medium)/0.2)]",
+        text: "text-[hsl(var(--task-medium))]",
+        border: "border-[hsl(var(--task-medium)/0.3)]",
+      };
+  }
+};
+
+// Task Priority Badge
+const PriorityBadge = ({ priority }: { priority: "low" | "medium" | "high" }) => {
+  const priorityClass = getPriorityClass(priority);
+  
+  return (
+    <div className={cn(
+      "inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium",
+      priorityClass.bg,
+      priorityClass.text
+    )}>
+      {priority === "high" && <AlertCircle className="h-3 w-3" />}
+      {priority === "medium" && <Clock className="h-3 w-3" />}
+      {priority === "low" && <CheckCircle2 className="h-3 w-3" />}
+      <span className="capitalize">{priority}</span>
+    </div>
   );
 };
 
@@ -307,40 +356,49 @@ export default function TaskManager() {
     try {
       console.log('Form submitted with data:', data);
       
-      // Prepare the task data with proper formatting of fields
+      // Create task with all required fields
       const taskData = {
         title: data.title || "",
-        parent_task_id: null,
-        user_id: user?.id || 8,
         description: data.description || null,
         priority: data.priority || "medium",
         completed: false,
-        due_date: data.due_date ? Math.floor(data.due_date.getTime() / 1000) : null,
+        due_date: (() => {
+          if (!data.due_date) return null;
+          if (!(data.due_date instanceof Date) || isNaN(data.due_date.getTime())) {
+            console.warn("Invalid due_date in form submission:", data.due_date);
+            return null;
+          }
+          const timestamp = Math.floor(data.due_date.getTime() / 1000);
+          console.log("Converted due_date to timestamp for new task:", timestamp, "from", data.due_date);
+          return timestamp;
+        })(),
         all_day: true,
+        parent_task_id: null,
+        user_id: user?.id || 8,
         is_recurring: Boolean(data.is_recurring),
         recurrence_pattern: data.is_recurring ? String(data.recurrence_pattern || "weekly") : null,
         recurrence_interval: data.is_recurring ? 1 : null,
-        recurrence_end_date: data.recurrence_end_date ? Math.floor(data.recurrence_end_date.getTime() / 1000) : null
+        recurrence_end_date: (() => {
+          if (!data.recurrence_end_date) return null;
+          if (!(data.recurrence_end_date instanceof Date) || isNaN(data.recurrence_end_date.getTime())) {
+            console.warn("Invalid recurrence_end_date in form submission:", data.recurrence_end_date);
+            return null;
+          }
+          const timestamp = Math.floor(data.recurrence_end_date.getTime() / 1000);
+          console.log("Converted recurrence_end_date to timestamp for new task:", timestamp, "from", data.recurrence_end_date);
+          return timestamp;
+        })(),
+        // Remove created_at and updated_at, let the server handle these
       };
 
-      // Log the data for debugging
-      console.log("Calling API with task data:", taskData);
+      // Log what's being sent to the API
+      console.log('Sending task data to API:', JSON.stringify(taskData));
+
+      // Use the mutation with type assertion to bypass the type error
+      await createTaskMutation.mutateAsync(taskData as any);
       
-      // Call the API directly
-      const result = await createTask(taskData);
-      console.log('Task created successfully:', result);
-      
-      // Success handling
-      toast({
-        title: "Task created",
-        description: "Your task has been created successfully.",
-      });
-      
-      // Reset the form
-      form.reset();
-      
-      // Refresh the task list
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      // Additional UI cleanup
+      setShowAddTask(false);
     } catch (error) {
       console.error('Submit error:', error);
       toast({
@@ -354,15 +412,40 @@ export default function TaskManager() {
   const startEditing = (task: TaskWithSubtasks) => {
     console.log('Starting edit for task:', task);
     setEditingTask(task.id);
+    
+    // Safely create Date objects from timestamps
+    let dueDate = null;
+    let recurrenceEndDate = null;
+    
+    try {
+      if (task.due_date) {
+        const timestamp = Number(task.due_date);
+        if (!isNaN(timestamp)) {
+          dueDate = new Date(timestamp * 1000);
+        }
+      }
+      
+      if (task.recurrence_end_date) {
+        const timestamp = Number(task.recurrence_end_date);
+        if (!isNaN(timestamp)) {
+          recurrenceEndDate = new Date(timestamp * 1000);
+        }
+      }
+    } catch (error) {
+      console.error("Error converting timestamps to dates:", error);
+    }
+    
+    console.log("Created date objects:", { dueDate, recurrenceEndDate });
+    
     setEditForm({
       title: task.title || "",
       description: task.description || "",
       priority: task.priority as "low" | "medium" | "high",
-      due_date: task.due_date ? new Date(task.due_date) : null,
+      due_date: dueDate,
       is_recurring: task.is_recurring || false,
       recurrence_pattern: task.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly" | null,
       recurrence_interval: task.recurrence_interval || 1,
-      recurrence_end_date: task.recurrence_end_date ? new Date(task.recurrence_end_date) : null,
+      recurrence_end_date: recurrenceEndDate,
     });
   };
 
@@ -381,11 +464,65 @@ export default function TaskManager() {
         title: editForm!.title,
         description: editForm!.description,
         priority: editForm!.priority,
-        due_date: editForm!.due_date ? Math.floor(editForm!.due_date.getTime() / 1000) : null,
+        due_date: (() => {
+          if (!editForm!.due_date) return null;
+          if (!(editForm!.due_date instanceof Date) || isNaN(editForm!.due_date.getTime())) {
+            console.warn("Invalid due_date:", editForm!.due_date);
+            return null;
+          }
+          
+          // Fix: Proper Unix timestamp conversion
+          const timestamp = Math.floor(editForm!.due_date.getTime() / 1000);
+          
+          // Add validation for the timestamp
+          if (timestamp < 1000000000 || timestamp > 9999999999) {
+            console.error("Generated timestamp appears invalid:", timestamp);
+            console.log("Date that produced this timestamp:", editForm!.due_date);
+            console.log("Date components:", {
+              year: editForm!.due_date.getFullYear(),
+              month: editForm!.due_date.getMonth() + 1,
+              day: editForm!.due_date.getDate(),
+              hours: editForm!.due_date.getHours(),
+              minutes: editForm!.due_date.getMinutes(),
+              time: editForm!.due_date.getTime()
+            });
+            
+            // As a fallback, create a new Date object and try again
+            const fallbackDate = new Date(
+              editForm!.due_date.getFullYear(),
+              editForm!.due_date.getMonth(),
+              editForm!.due_date.getDate(),
+              editForm!.due_date.getHours(),
+              editForm!.due_date.getMinutes()
+            );
+            
+            const fallbackTimestamp = Math.floor(fallbackDate.getTime() / 1000);
+            console.log("Fallback timestamp:", fallbackTimestamp);
+            
+            // Only use the fallback if it's valid
+            if (fallbackTimestamp > 1000000000 && fallbackTimestamp < 9999999999) {
+              return fallbackTimestamp;
+            }
+            
+            // If both are invalid, return current time as last resort
+            return Math.floor(Date.now() / 1000);
+          }
+          
+          return timestamp;
+        })(),
         is_recurring: editForm!.is_recurring,
         recurrence_pattern: editForm!.is_recurring ? editForm!.recurrence_pattern : null,
         recurrence_interval: editForm!.is_recurring && editForm!.recurrence_interval ? Number(editForm!.recurrence_interval) : null,
-        recurrence_end_date: editForm!.recurrence_end_date ? Math.floor(editForm!.recurrence_end_date.getTime() / 1000) : null,
+        recurrence_end_date: (() => {
+          if (!editForm!.recurrence_end_date) return null;
+          if (!(editForm!.recurrence_end_date instanceof Date) || isNaN(editForm!.recurrence_end_date.getTime())) {
+            console.warn("Invalid recurrence_end_date:", editForm!.recurrence_end_date);
+            return null;
+          }
+          const timestamp = Math.floor(editForm!.recurrence_end_date.getTime() / 1000);
+          console.log("Converted recurrence_end_date to timestamp:", timestamp, "from", editForm!.recurrence_end_date);
+          return timestamp;
+        })(),
       };
 
       await updateTaskMutation.mutateAsync({
@@ -435,7 +572,16 @@ export default function TaskManager() {
           Main Task: ${task.title}
           ${task.description ? `Description: ${task.description}` : ''}
           Priority: ${task.priority}
-          ${task.due_date ? `Due Date: ${format(new Date(task.due_date), "PPP")}` : ''}
+          ${task.due_date ? `Due Date: ${
+            (() => {
+              try {
+                const dueDate = Number(task.due_date);
+                return isNaN(dueDate) ? "Invalid date" : format(new Date(dueDate * 1000), "PPP");
+              } catch (error) {
+                return "Date error";
+              }
+            })()
+          }` : ''}
         `;
         
         console.log('Sending prompt to generate subtasks:', prompt);
@@ -485,8 +631,11 @@ export default function TaskManager() {
   };
 
   const saveSubtasksMutation = useMutation({
-    mutationFn: ({ taskId, subtasks }: { taskId: number, subtasks: Array<{ title: string; completed: boolean }> }) => 
-      createSubtasks(taskId, subtasks),
+    mutationFn: ({ taskId, subtasks }: { taskId: number, subtasks: Array<{ title: string; completed: boolean }> }) => {
+      // Ensure subtasks match the expected format for the API
+      // The server will handle adding task_id and other metadata internally
+      return createSubtasks(taskId, subtasks);
+    },
     onSuccess: () => {
       toast({
         title: "Subtasks saved",
@@ -499,6 +648,14 @@ export default function TaskManager() {
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
       setShowSubtasks(false);
     },
+    onError: (error) => {
+      console.error('Error saving subtasks:', error);
+      toast({
+        variant: "destructive",
+        title: "Failed to save subtasks",
+        description: error instanceof Error ? error.message : "An error occurred while saving subtasks.",
+      });
+    }
   });
 
   const saveSubtasks = async () => {
@@ -559,21 +716,19 @@ export default function TaskManager() {
                   className="w-full justify-start text-left font-normal"
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
-                  {editForm.due_date ? format(editForm.due_date, "PPP") : "Due date"}
+                  {editForm.due_date && editForm.due_date instanceof Date && !isNaN(editForm.due_date.getTime())
+                    ? format(editForm.due_date, "PPP")
+                    : "Due date"}
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0" align="start">
                 <div>
                   <Calendar
                     mode="single"
-                    selected={editForm?.due_date || undefined}
-                    onSelect={(newDate: Date | undefined) => {
-                      if (newDate) {
-                        const selectedTime = editForm?.due_date ? new Date(editForm.due_date) : new Date();
-                        setEditForm(prev => ({ ...prev, due_date: newDate }));
-                      } else {
-                        setEditForm(prev => ({ ...prev, due_date: null }));
-                      }
+                    selected={editForm.due_date || undefined}
+                    onSelect={(date) => {
+                      console.log("Selected date in edit form:", date);
+                      setEditForm(prev => ({ ...prev, due_date: date }));
                     }}
                     initialFocus
                   />
@@ -666,7 +821,7 @@ export default function TaskManager() {
                           )}
                         >
                           <CalendarIcon className="mr-2 h-4 w-4" />
-                          {editForm.recurrence_end_date
+                          {editForm.recurrence_end_date && editForm.recurrence_end_date instanceof Date && !isNaN(editForm.recurrence_end_date.getTime())
                             ? format(editForm.recurrence_end_date, "PPP")
                             : "Select end date"}
                         </Button>
@@ -674,11 +829,13 @@ export default function TaskManager() {
                       <PopoverContent className="w-auto p-0" align="start">
                         <Calendar
                           mode="single"
-                          selected={editForm?.recurrence_end_date || undefined}
-                          onSelect={(newDate) => setEditForm(prev => ({
-                            ...prev,
-                            recurrence_end_date: newDate ?? null
-                          }))}
+                          selected={editForm.recurrence_end_date || undefined}
+                          onSelect={(date) => {
+                            setEditForm((prev) => ({
+                              ...prev,
+                              recurrence_end_date: date,
+                            }));
+                          }}
                           initialFocus
                         />
                       </PopoverContent>
@@ -715,7 +872,15 @@ export default function TaskManager() {
                     ? ` every ${task.recurrence_interval} ${task.recurrence_pattern}s`
                     : ``}
                   {task.recurrence_end_date
-                    ? ` until ${format(new Date(task.recurrence_end_date), "PPP")}`
+                    ? ` until ${(() => {
+                        try {
+                          const endDate = Number(task.recurrence_end_date);
+                          return isNaN(endDate) ? "Invalid date" : format(new Date(endDate * 1000), "PPP");
+                        } catch (error) {
+                          console.error("Error formatting recurrence end date:", error);
+                          return "Date error";
+                        }
+                      })()}`
                     : ``}
                 </TooltipContent>
               </Tooltip>
@@ -749,20 +914,35 @@ export default function TaskManager() {
             className={cn(
               "px-2 py-1 rounded-full text-xs",
               isCompleted && "opacity-50",
-              task.priority === "high" && "bg-red-100 text-red-800",
-              task.priority === "medium" && "bg-yellow-100 text-yellow-800",
-              task.priority === "low" && "bg-green-100 text-green-800"
+              task.priority === "high" && "bg-[hsl(var(--task-high))]",
+              task.priority === "medium" && "bg-[hsl(var(--task-medium))]",
+              task.priority === "low" && "bg-[hsl(var(--task-low))]"
             )}
           >
             {task.priority}
           </span>
           {task.due_date && (
             <div className="text-sm text-gray-500">
-              {formatInTimeZone(
-                new Date(task.due_date),
-                userSettings?.timezone || 'UTC',
-                task.all_day ? 'PPP' : 'PPP p'
-              )}
+              {(() => {
+                try {
+                  // Ensure due_date is a valid number
+                  const dueDate = Number(task.due_date);
+                  if (isNaN(dueDate) || !isFinite(dueDate)) {
+                    console.warn('Invalid due_date value:', task.due_date);
+                    return 'Invalid date';
+                  }
+                  
+                  // Create Date object and format it with timezone
+                  return formatInTimeZone(
+                    new Date(dueDate * 1000),
+                    userSettings?.timezone || 'UTC',
+                    task.all_day ? 'PPP' : 'PPP p'
+                  );
+                } catch (error) {
+                  console.error('Error formatting date:', error, task.due_date);
+                  return 'Date error';
+                }
+              })()}
             </div>
           )}
         </div>
@@ -868,7 +1048,7 @@ export default function TaskManager() {
 
   const isOverdue = (task: TaskWithSubtasks) => {
     if (!task.due_date || task.completed) return false;
-    const dueDate = new Date(task.due_date);
+    const dueDate = new Date(task.due_date * 1000);
     const now = new Date();
     return dueDate < now;
   };
@@ -941,7 +1121,7 @@ export default function TaskManager() {
 
       filtered = filtered.filter(task => {
         if (!task.due_date) return false;
-        const dueDate = new Date(task.due_date);
+        const dueDate = new Date(task.due_date * 1000);
         dueDate.setHours(0, 0, 0, 0);
 
         switch (dueDateFilter) {
@@ -970,8 +1150,8 @@ export default function TaskManager() {
       if (!a.due_date) return sortOrder === 'asc' ? 1 : -1;
       if (!b.due_date) return sortOrder === 'asc' ? -1 : 1;
 
-      const dateA = new Date(a.due_date);
-      const dateB = new Date(b.due_date);
+      const dateA = new Date(a.due_date * 1000);
+      const dateB = new Date(b.due_date * 1000);
       return sortOrder === 'asc' 
         ? dateA.getTime() - dateB.getTime()
         : dateB.getTime() - dateA.getTime();
@@ -1207,7 +1387,7 @@ export default function TaskManager() {
                           )}
                         >
                           <CalendarIcon className="mr-2 h-4 w-4" />
-                          {dueDate ? format(new Date(dueDate), "PPP") : "Due date (optional)"}
+                          {dueDate ? format(dueDate, "PPP") : "Due date (optional)"}
                         </Button>
                       </PopoverTrigger>
                       <PopoverContent className="w-auto p-0" align="start">
@@ -1215,10 +1395,10 @@ export default function TaskManager() {
                           <Calendar
                             mode="single"
                             selected={dueDate ? new Date(dueDate) : undefined}
-                            onSelect={(newDate) => {
-                              if (newDate) {
+                            onSelect={(date) => {
+                              if (date) {
                                 const selectedTime = dueDate ? new Date(dueDate) : new Date();
-                                form.setValue("due_date", newDate);
+                                form.setValue("due_date", date);
                               } else {
                                 form.setValue("due_date", null);
                               }
@@ -1264,25 +1444,46 @@ export default function TaskManager() {
                           const formData = form.getValues();
                           console.log("Form data:", formData);
                           
-                          // Simplify to what server actually needs based on api.ts and routes/api.ts
+                          // Create task with all required fields
                           const taskData = {
                             title: formData.title || "",
                             description: formData.description || null,
                             priority: formData.priority || "medium",
                             completed: false,
-                            due_date: formData.due_date ? Math.floor(formData.due_date.getTime() / 1000) : null,
+                            due_date: (() => {
+                              if (!formData.due_date) return null;
+                              if (!(formData.due_date instanceof Date) || isNaN(formData.due_date.getTime())) {
+                                console.warn("Invalid due_date in form submission:", formData.due_date);
+                                return null;
+                              }
+                              const timestamp = Math.floor(formData.due_date.getTime() / 1000);
+                              console.log("Converted due_date to timestamp for new task:", timestamp, "from", formData.due_date);
+                              return timestamp;
+                            })(),
                             all_day: true,
+                            parent_task_id: null,
+                            user_id: user?.id || 8,
                             is_recurring: Boolean(formData.is_recurring),
                             recurrence_pattern: formData.is_recurring ? String(formData.recurrence_pattern || "weekly") : null,
                             recurrence_interval: formData.is_recurring ? 1 : null,
-                            recurrence_end_date: formData.recurrence_end_date ? Math.floor(formData.recurrence_end_date.getTime() / 1000) : null
+                            recurrence_end_date: (() => {
+                              if (!formData.recurrence_end_date) return null;
+                              if (!(formData.recurrence_end_date instanceof Date) || isNaN(formData.recurrence_end_date.getTime())) {
+                                console.warn("Invalid recurrence_end_date in form submission:", formData.recurrence_end_date);
+                                return null;
+                              }
+                              const timestamp = Math.floor(formData.recurrence_end_date.getTime() / 1000);
+                              console.log("Converted recurrence_end_date to timestamp for new task:", timestamp, "from", formData.recurrence_end_date);
+                              return timestamp;
+                            })(),
+                            // Remove created_at and updated_at, let the server handle these
                           };
 
                           // Log the data for debugging
                           console.log("Calling API with task data:", taskData);
                           
                           // Call the API directly
-                          const result = await createTask(taskData);
+                          const result = await createTask(taskData as any);
                           console.log('Task created successfully:', result);
                           
                           // Success handling
@@ -1360,14 +1561,14 @@ export default function TaskManager() {
                               >
                                 <CalendarIcon className="mr-2 h-4 w-4" />
                                 {recurrenceEndDate
-                                  ? format(new Date(recurrenceEndDate), "PPP")
+                                  ? format(recurrenceEndDate, "PPP")
                                   : "Select end date"}
                               </Button>
                             </PopoverTrigger>
                             <PopoverContent className="w-auto p-0" align="start">
                               <Calendar
                                 mode="single"
-                                selected={recurrenceEndDate ? new Date(recurrenceEndDate) : undefined}
+                                selected={recurrenceEndDate ? recurrenceEndDate : undefined}
                                 onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
                                 initialFocus
                               />
@@ -1434,19 +1635,19 @@ export default function TaskManager() {
                 <SelectItem value="all">All Priorities</SelectItem>
                 <SelectItem value="high">
                   <div className="flex items-center">
-                    <span className="h-2 w-2 rounded-full bg-red-500 mr-2" />
+                    <span className="h-2 w-2 rounded-full bg-[hsl(var(--task-high))] mr-2" />
                     High Priority
                   </div>
                 </SelectItem>
                 <SelectItem value="medium">
                   <div className="flex items-center">
-                    <span className="h-2 w-2 rounded-full bg-yellow-500 mr-2" />
+                    <span className="h-2 w-2 rounded-full bg-[hsl(var(--task-medium))] mr-2" />
                     Medium Priority
                   </div>
                 </SelectItem>
                 <SelectItem value="low">
                   <div className="flex items-center">
-                    <span className="h-2 w-2 rounded-full bg-green-500 mr-2" />
+                    <span className="h-2 w-2 rounded-full bg-[hsl(var(--task-low))] mr-2" />
                     Low Priority
                   </div>
                 </SelectItem>

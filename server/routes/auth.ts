@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { db } from '../lib/db';
 import { users } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
-import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth } from '../lib/auth';
+import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth, validateSession } from '../lib/auth';
 import { OAuth2Client } from 'google-auth-library';
 import { z } from 'zod';
 

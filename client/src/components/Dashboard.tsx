@@ -12,7 +12,7 @@ import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
-import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut } from "lucide-react";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home } from "lucide-react";
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -34,6 +34,8 @@ import Meetings from "./Meetings";
 import Settings from "./Settings";
 import { useAuth } from "@/contexts/AuthContext";
 import { getAppointments, getNotes, getPomodoroSettings, getTasks } from "@/lib/api";
+import { ThemeToggle } from "./ui/theme-toggle";
+import { ProfileDropdown } from "./ui/ProfileDropdown";
 
 interface NavItem {
   title: string;
@@ -316,49 +318,71 @@ export default function Dashboard() {
       direction="horizontal"
       className="h-screen items-stretch"
     >
-      <ResizablePanel defaultSize={20} minSize={15} maxSize={25}>
-        <div className="flex h-full flex-col">
-          <div className="px-2 py-2">
-            <div className="flex items-center gap-2 px-2">
+      {/* Resizable sidebar with slightly larger initial width */}
+      <ResizablePanel defaultSize={18} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] border-r flex flex-col h-screen">
+        {/* App branding */}
+        <div className="px-4 py-3 border-b">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
               <Flame className="h-5 w-5 text-yellow-500" />
               <h2 className="text-lg font-semibold">Tiger</h2>
             </div>
-          </div>
-          <Separator />
-          <ScrollArea className="flex-1">
-            <div className="space-y-1 p-2">
-              {navItems.map((item) => (
-                <Button
-                  key={item.title}
-                  variant={selectedNav === item.title ? "secondary" : "ghost"}
-                  size="sm"
-                  className={cn("w-full justify-start gap-2", {
-                    "bg-secondary": selectedNav === item.title,
-                  })}
-                  onClick={() => setSelectedNav(item.title)}
-                >
-                  {item.icon}
-                  {item.title}
-                </Button>
-              ))}
-            </div>
-          </ScrollArea>
-          <div className="p-2 mt-auto">
-            <Button
-              variant="ghost"
-              size="sm"
-              className="w-full justify-start gap-2 text-red-500 hover:text-red-500 hover:bg-red-500/10"
-              onClick={() => logout()}
-            >
-              <LogOut className="h-4 w-4" />
-              Logout
-            </Button>
+            <ThemeToggle />
           </div>
         </div>
+
+        {/* User Profile Section */}
+        <div className="border-b px-4 py-3">
+          <ProfileDropdown />
+        </div>
+        
+        {/* Navigation - independently scrollable */}
+        <ScrollArea className="flex-1 thin-scrollbar">
+          <div className="space-y-1 p-3">
+            {navItems.map((item) => (
+              <Button
+                key={item.title}
+                variant={selectedNav === item.title ? "default" : "ghost"}
+                size="sm"
+                className={cn("w-full justify-start gap-3 mb-1 px-3 py-4 font-medium transition-colors", {
+                  "bg-primary text-primary-foreground": selectedNav === item.title,
+                  "hover:bg-[hsl(var(--primary)/0.1)] hover:text-primary": selectedNav !== item.title,
+                })}
+                onClick={() => setSelectedNav(item.title)}
+              >
+                <div className={cn(
+                  "w-8 h-8 flex items-center justify-center rounded-md",
+                  selectedNav === item.title ? "bg-[hsl(var(--primary-foreground)/0.2)]" : "bg-[hsl(var(--muted)/0.5)]"
+                )}>
+                  {item.icon}
+                </div>
+                <span className="truncate">{item.title}</span>
+              </Button>
+            ))}
+          </div>
+        </ScrollArea>
+        
+        {/* Fixed logout button at bottom */}
+        <div className="p-3 border-t">
+          <Button
+            variant="destructive"
+            size="sm"
+            className="w-full justify-start gap-3 px-3 py-4 font-medium transition-colors hover:bg-opacity-90"
+            onClick={() => logout()}
+          >
+            <div className="w-8 h-8 flex items-center justify-center rounded-md bg-[hsl(var(--destructive-foreground)/0.2)]">
+              <LogOut className="h-4 w-4" />
+            </div>
+            Logout
+          </Button>
+        </div>
       </ResizablePanel>
-      <ResizableHandle withHandle />
-      <ResizablePanel defaultSize={80}>
-        <ScrollArea className="h-full">
+
+      <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
+
+      {/* Main content - independently scrollable */}
+      <ResizablePanel defaultSize={82}>
+        <ScrollArea className="h-screen thin-scrollbar">
           <div className="p-8">
             {navItems.find((item) => item.title === selectedNav)?.component}
           </div>
