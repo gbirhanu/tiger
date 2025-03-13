@@ -9,7 +9,7 @@ import { eq, sql, and } from "drizzle-orm";
 import { z } from "zod";
 import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth } from "../lib/auth";
 
 const router = Router();
 

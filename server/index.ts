@@ -8,6 +8,7 @@ import authRouter from "./routes/auth";
 import { setupVite, serveStatic, log } from "./vite";
 import generateSubtasksRoute from "./routes/generate-subtasks";
 import settingsRouter from "./routes/settings";
+import { requireAuth } from './lib/auth';
 
 // Load environment variables from .env file
 dotenv.config();

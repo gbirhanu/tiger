@@ -1,4 +1,4 @@
-import { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { type Note } from "@shared/schema";
@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
-import { apiRequest } from "@/lib/queryClient";
+import { getNotes, createNote as createNoteApi, updateNote as updateNoteApi, deleteNote as deleteNoteApi } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
 import { Plus, X, GripVertical } from "lucide-react";
 
@@ -30,22 +30,38 @@ export default function NotesBoard() {
   const [newNoteContent, setNewNoteContent] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
 
-  const { data: notes, isLoading } = useQuery<Note[]>({
-    queryKey: ["/api/notes"],
+  const { data: notes, isLoading, error } = useQuery({
+    queryKey: ["notes"],
+    queryFn: getNotes,
   });
 
-  const createNote = useMutation({
-    mutationFn: async (content: string) => {
+  // Log error if there is one
+  useEffect(() => {
+    if (error) {
+      console.error("Error fetching notes:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to fetch notes: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
+    }
+  }, [error, toast]);
+
+  const createNoteMutation = useMutation({
+    mutationFn: (content: string) => {
       const note = {
+        title: "Note", // Add required fields
         content,
         color: COLORS[Math.floor(Math.random() * COLORS.length)],
         position: (notes?.length || 0) + 1,
+        user_id: 0, // This will be set by the server
+        created_at: Date.now(),
+        updated_at: Date.now()
       };
-      const res = await apiRequest("POST", "/api/notes", note);
-      return res.json();
+      return createNoteApi(note);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
       setNewNoteContent("");
       setDialogOpen(false);
       toast({
@@ -53,27 +69,44 @@ export default function NotesBoard() {
         description: "Your note has been created successfully.",
       });
     },
-  });
-
-  const updateNote = useMutation({
-    mutationFn: async ({ id, ...data }: Partial<Note> & { id: number }) => {
-      const res = await apiRequest("PATCH", `/api/notes/${id}`, data);
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to create note: ${error.message}`,
+      });
     },
   });
 
-  const deleteNote = useMutation({
-    mutationFn: async (id: number) => {
-      await apiRequest("DELETE", `/api/notes/${id}`);
-    },
+  const updateNoteMutation = useMutation({
+    mutationFn: ({ id, ...data }: Partial<Note> & { id: number }) => 
+      updateNoteApi(id, data),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["/api/notes"] });
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to update note: ${error.message}`,
+      });
+    },
+  });
+
+  const deleteNoteMutation = useMutation({
+    mutationFn: deleteNoteApi,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["notes"] });
       toast({
         title: "Note deleted",
         description: "Your note has been deleted successfully.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to delete note: ${error.message}`,
       });
     },
   });
@@ -87,7 +120,7 @@ export default function NotesBoard() {
 
     // Update positions
     items.forEach((note, index) => {
-      updateNote.mutate({ id: note.id, position: index + 1 });
+      updateNoteMutation.mutate({ id: note.id, position: index + 1 });
     });
   };
 
@@ -119,8 +152,8 @@ export default function NotesBoard() {
               />
               <Button
                 className="w-full"
-                onClick={() => createNote.mutate(newNoteContent)}
-                disabled={!newNoteContent || createNote.isPending}
+                onClick={() => createNoteMutation.mutate(newNoteContent)}
+                disabled={!newNoteContent || createNoteMutation.isPending}
               >
                 Save Note
               </Button>
@@ -164,7 +197,7 @@ export default function NotesBoard() {
                             variant="ghost"
                             size="icon"
                             className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={() => deleteNote.mutate(note.id)}
+                            onClick={() => deleteNoteMutation.mutate(note.id)}
                           >
                             <X className="h-4 w-4" />
                           </Button>

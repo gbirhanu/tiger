@@ -196,10 +196,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
     
     const fetchUserAndSettings = async () => {
       try {
+        const token = getAuthToken();
         const userRes = await fetch('/api/auth/me', {
           credentials: 'include',
-          headers: storedToken ? { 
-            Authorization: `Bearer ${storedToken}` 
+          headers: token ? { 
+            Authorization: `Bearer ${token}` 
           } : undefined
         });
         
@@ -225,7 +226,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             const settingsRes = await fetch('/api/settings/user', {
               credentials: 'include',
               headers: { 
-                Authorization: `Bearer ${userData.user.session?.id || storedToken}` 
+                Authorization: `Bearer ${userData.user.session?.id || token}` 
               }
             });
             
@@ -462,7 +463,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
       document.documentElement.className = 'light';
       // Reset query cache to clear any authenticated data
       resetQueryCache();
-      navigate('/auth');
+      
+      // Add a small delay to ensure state updates before navigation
+      setTimeout(() => {
+        navigate('/auth');
+        setLoading(false);
+      }, 50);
     } catch (err) {
       console.error('Logout error:', err);
       // Even if there's an error, we should still clear the local session
@@ -475,24 +481,32 @@ export function AuthProvider({ children }: AuthProviderProps) {
       document.documentElement.className = 'light';
       // Reset query cache to clear any authenticated data
       resetQueryCache();
-      navigate('/auth');
-      setLoading(false);
+      
+      // Add a small delay to ensure state updates before navigation
+      setTimeout(() => {
+        navigate('/auth');
+        setLoading(false);
+      }, 50);
     }
   };
   // Validate token function
   const validateToken = async (): Promise<boolean> => {
-    if (!sessionToken) {
-      console.debug('[Auth] No token to validate');
-      return false;
-    }
-    
-    console.debug(`[Auth] Validating token: ${sessionToken.substring(0, 5)}...`);
-    
     try {
+      setLoading(true);
+      
+      const token = getAuthToken(); // Use the shared token getter function for consistency
+      if (!token) {
+        console.debug('[Auth] No token to validate');
+        setUser(null);
+        setLoading(false);
+        return false;
+      }
+      
+      console.debug(`[Auth] Validating token: ${token.substring(0, 5)}...`);
+      
       const response = await fetch('/api/auth/validate-token', {
-        method: 'GET',
         headers: {
-          Authorization: `Bearer ${sessionToken}`
+          Authorization: `Bearer ${token}` // Ensure proper Bearer token format
         },
         credentials: 'include'
       });
@@ -534,6 +548,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
       console.error('[Auth] Token validation error:', err);
       // Don't clear token on network errors as it might be temporary
       return false;
+    } finally {
+      setLoading(false);
     }
   };
 

@@ -6,7 +6,7 @@ import {
   PomodoroSettings
 } from "../../shared/schema";
 import { eq, and } from "drizzle-orm";
-import { requireAuth } from "../middleware/auth";
+import { requireAuth } from "../lib/auth";
 import { z } from "zod";
 
 const router = Router();
@@ -266,4 +266,3 @@ router.delete("/pomodoro", async (req: Request, res: Response) => {
 });
 
 export default router;
-

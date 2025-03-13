@@ -1,8 +1,8 @@
-import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import { QueryClient, QueryFunction, QueryKey } from "@tanstack/react-query";
 
 // Token management functions
 // Use localStorage to persist token between page refreshes
-const TOKEN_STORAGE_KEY = 'auth_token';
+const TOKEN_STORAGE_KEY = 'sessionToken';
 
 export const setAuthToken = (token: string | null) => {
   if (token) {
@@ -99,7 +99,7 @@ export const getQueryFn: <T>(options: {
   on401: UnauthorizedBehavior;
 }) => QueryFunction<T> =
   ({ on401: unauthorizedBehavior }) =>
-  async ({ queryKey }) => {
+  async ({ queryKey }: { queryKey: QueryKey }) => {
     try {
       const token = getAuthToken();
       const headers: HeadersInit = {};
@@ -143,33 +143,25 @@ export const queryClient = new QueryClient({
       refetchInterval: false,
       refetchOnWindowFocus: false,
       staleTime: Infinity,
-      retry: (failureCount, error: any) => {
+      retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors up to 2 times
         if (error?.message?.includes('401')) {
+          console.error('Authentication error in query:', error.message);
+          setAuthToken(null); // Clear token on auth errors
           return false;
         }
         return failureCount < 2;
-      },
-      onError: (error: any) => {
-        if (error?.message?.includes('401')) {
-          console.error('Authentication error in query:', error.message);
-          setAuthToken(null);
-        }
       }
     },
     mutations: {
-      retry: (failureCount, error: any) => {
+      retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors once
         if (error?.message?.includes('401')) {
+          console.error('Authentication error in mutation:', error.message);
+          setAuthToken(null); // Clear token on auth errors
           return false;
         }
         return failureCount < 1;
-      },
-      onError: (error: any) => {
-        if (error?.message?.includes('401')) {
-          console.error('Authentication error in mutation:', error.message);
-          setAuthToken(null);
-        }
       }
     },
   },
