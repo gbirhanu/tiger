@@ -310,6 +310,8 @@ export default function TaskManager() {
       // Prepare the task data with proper formatting of fields
       const taskData = {
         title: data.title || "",
+        parent_task_id: null,
+        user_id: user?.id || 8,
         description: data.description || null,
         priority: data.priority || "medium",
         completed: false,
