@@ -8,7 +8,7 @@ import { setAuthToken as setToken, getAuthToken as getToken } from './queryClien
 export const setAuthToken = setToken;
 export const getAuthToken = getToken;
 const api = axios.create({
-  baseURL: "http://localhost:3000/api",
+  baseURL: "/api",
   headers: {
     "Content-Type": "application/json",
   },
@@ -17,7 +17,6 @@ const api = axios.create({
 api.interceptors.request.use(
   (config) => {
     const token = getToken();
-    console.log("Using session token:", token ? "token-exists" : "no-token");
     if (token) {
       config.headers["Authorization"] = `Bearer ${token}`;
     }
@@ -36,7 +35,6 @@ api.interceptors.response.use(
   (error) => {
     // Handle unauthorized errors
     if (error.response && error.response.status === 401) {
-      console.error("Authentication failed - Unauthorized access");
       // Clear token when unauthorized
       setToken(null);
       
@@ -74,14 +72,12 @@ export const getPomodoroSettings = () =>
   api.get<PomodoroSettings>("/settings/pomodoro")
     .then((res) => res.data)
     .catch((error) => {
-      console.error("Failed to fetch pomodoro settings:", error);
       throw error;
     });
 export const updatePomodoroSettings = (settings: Partial<PomodoroSettings>) => 
   api.put<PomodoroSettings>("/settings/pomodoro", settings)
     .then((res) => res.data)
     .catch((error) => {
-      console.error("Failed to update pomodoro settings:", error);
       throw error;
     });
 

@@ -3,7 +3,6 @@ import { db } from "../../shared/db";
 import {
   pomodoroSettings,
   insertPomodoroSettingsSchema,
-  PomodoroSettings
 } from "../../shared/schema";
 import { eq, and } from "drizzle-orm";
 import { requireAuth } from "../middleware/auth";
@@ -131,7 +130,7 @@ router.put("/pomodoro", async (req: Request, res: Response) => {
       // Update existing settings
       const settingsData = {
         ...validationResult.data,
-        updated_at: new Date()
+        updated_at: Math.floor(Date.now() / 1000)  
       };
 
       const updatedSettings = await db
@@ -193,7 +192,7 @@ router.patch("/pomodoro", async (req: Request, res: Response) => {
       // Update existing settings with just the fields provided
       const settingsData = {
         ...validationResult.data,
-        updated_at: new Date()
+        updated_at: Math.floor(Date.now() / 1000)
       };
 
       const updatedSettings = await db

@@ -17,11 +17,8 @@ export function RegisterForm() {
     e.preventDefault();
     setIsLoading(true);
     try {
-      console.log('Attempting registration with:', { email, name });
       await register(email, password, name);
-      console.log('Registration successful');
     } catch (err) {
-      console.error('Registration error:', err);
       // Error is handled by the auth context
     } finally {
       setIsLoading(false);

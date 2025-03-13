@@ -53,7 +53,6 @@ export default function PomodoroTimer() {
     retry: 2,
     refetchOnWindowFocus: false,
     onError: (error) => {
-      console.error("Failed to fetch pomodoro settings:", error);
       toast({
         title: "Error fetching settings",
         description: "Could not load your settings. Using defaults instead.",
@@ -87,7 +86,6 @@ export default function PomodoroTimer() {
         
         return await res.json();
       } catch (error) {
-        console.error("Failed to update settings:", error);
         throw error;
       }
     },

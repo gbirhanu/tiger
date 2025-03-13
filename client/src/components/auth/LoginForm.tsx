@@ -63,11 +63,9 @@ export function LoginForm() {
     if (response.credential) {
       setLoginStatus('loading');
       try {
-        console.log('Google login credential received, attempting login...');
         const result = await loginWithGoogle(response.credential);
         
-        console.debug('Login response:', result);
-        console.debug('Google login successful');
+      
         setLoginStatus('success');
         toast({
           title: "Success",
@@ -75,7 +73,6 @@ export function LoginForm() {
           variant: "default"
         });
       } catch (err) {
-        console.error('Google login error:', err);
         setLoginStatus('error');
         setLocalError(err instanceof Error ? err.message : 'Unknown error during Google login');
       }
@@ -89,14 +86,11 @@ export function LoginForm() {
     setLocalError(null);
     
     try {
-      console.log('Attempting login with email and password...');
       const result = await login(email, password);
       
-      console.debug('Login response:', result);
       
       // Verify user data and session is received
       if (result && result.session?.id) {
-        console.debug('Session token received:', result.session.id);
         setLoginStatus('success');
         toast({
           title: "Login Successful",
@@ -104,7 +98,6 @@ export function LoginForm() {
           variant: "default"
         });
       } else {
-        console.error('No session token in login response');
         setLoginStatus('error');
         setLocalError('Authentication failed. Please try again.');
         toast({
@@ -114,7 +107,6 @@ export function LoginForm() {
         });
       }
     } catch (err) {
-      console.error('Login error:', err);
       setLoginStatus('error');
       const errorMessage = err instanceof Error ? err.message : 'Unknown error during login';
       setLocalError(errorMessage);

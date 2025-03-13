@@ -2,9 +2,18 @@ import { Router, Request, Response } from 'express';
 import { db } from '../lib/db';
 import { users } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
-import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth } from '../lib/auth';
+import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth, validateSession } from '../lib/auth';
+import { logger } from '../../shared/logger';
 import { OAuth2Client } from 'google-auth-library';
 import { z } from 'zod';
+
+// Standardized cookie configuration
+const COOKIE_CONFIG = {
+  httpOnly: true,
+  secure: process.env.NODE_ENV === 'production',
+  sameSite: 'lax' as const,
+  maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
+};
 
 const router = Router();
 const googleClient = new OAuth2Client(
@@ -34,15 +43,12 @@ type GoogleLoginRequest = z.infer<typeof googleLoginSchema>;
 // Register
 router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Response) => {
   try {
-    console.log('Registration request body:', req.body);
     
     if (!req.body) {
-      console.error('No request body received');
       return res.status(400).json({ error: 'No request body provided' });
     }
 
     const { email, password, name } = registerSchema.parse(req.body);
-    console.log('Parsed registration data:', { email, name });
 
     // Check if user exists
     const existingUser = await db.query.users.findFirst({
@@ -50,13 +56,11 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     });
 
     if (existingUser) {
-      console.log('Registration failed: Email already exists');
       return res.status(400).json({ error: 'Email already registered' });
     }
 
     // Create user
     const hashedPassword = await hashPassword(password);
-    console.log('Attempting to create user...');
     const [user] = await db.insert(users)
       .values({
         email,
@@ -64,19 +68,12 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
         name: name || null
       })
       .returning();
-    console.log('User created successfully:', { id: user.id, email: user.email });
 
     // Create session
     const sessionId = await createSession(user.id);
-    console.log('Session created:', { sessionId });
 
     // Set cookie
-    res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    });
+    res.cookie('sessionId', sessionId, COOKIE_CONFIG);
     
     res.json({
       user: {
@@ -90,10 +87,8 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
       }
     });
   } catch (error) {
-    console.error('Registration error details:', error);
     
     if (error instanceof z.ZodError) {
-      console.error('Validation errors:', error.errors);
       return res.status(400).json({ 
         error: 'Invalid registration data', 
         details: error.errors.map(err => ({
@@ -104,7 +99,6 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     }
 
     if (error instanceof Error) {
-      console.error('Error message:', error.message);
       return res.status(400).json({ error: error.message });
     }
 
@@ -121,11 +115,9 @@ router.get('/validate-token', async (req: Request, res: Response) => {
     }
 
     const sessionId = authHeader.split(' ')[1];
-    console.log(`Validating session token: ${sessionId.substring(0, 10)}...`);
 
     const userId = await validateSession(sessionId);
     if (!userId) {
-      console.log('Session validation failed: Invalid or expired session');
       return res.status(401).json({ valid: false, error: 'Invalid or expired session' });
     }
 
@@ -134,11 +126,9 @@ router.get('/validate-token', async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      console.log('Session validation failed: User not found');
       return res.status(401).json({ valid: false, error: 'User not found' });
     }
 
-    console.log(`Session validation successful for user: ${user.email}`);
     return res.json({ 
       valid: true, 
       user: {
@@ -152,7 +142,6 @@ router.get('/validate-token', async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Token validation error:', error);
     return res.status(500).json({ valid: false, error: 'Server error' });
   }
 });
@@ -160,35 +149,50 @@ router.get('/validate-token', async (req: Request, res: Response) => {
 // Login
 router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) => {
   try {
+    // Validate request body using schema
     const { email, password } = loginSchema.parse(req.body);
+    console.log("I am here in login server", email, password);
+    
+    logger.info(`Login attempt for email: ${email}`);
 
-    // Find user
     const user = await db.query.users.findFirst({
       where: eq(users.email, email),
+      columns: {
+        id: true,
+        email: true,
+        password: true,
+        name: true
+      }
     });
 
     if (!user) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      logger.warn(`Login attempt failed: user not found for email ${email}`);
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials'
+      });
     }
 
-    // Verify password
     const isValid = await verifyPassword(password, user.password);
+    
     if (!isValid) {
-      return res.status(401).json({ error: 'Invalid credentials' });
+      logger.warn(`Login attempt failed: invalid password for email ${email}`);
+      return res.status(401).json({
+        success: false,
+        error: 'Invalid credentials'
+      });
     }
 
     // Create session
     const sessionId = await createSession(user.id);
 
     // Set cookie
-    res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    });
+    res.cookie('sessionId', sessionId, COOKIE_CONFIG);
 
-    res.json({
+    logger.info(`User logged in successfully: ${email}`);
+    
+    return res.json({
+      success: true,
       user: {
         id: user.id,
         email: user.email,
@@ -199,11 +203,13 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
         }
       }
     });
+
   } catch (error) {
-    console.error('Login error:', error);
+    logger.error('Login error:', error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
+        success: false,
         error: 'Invalid login data', 
         details: error.errors.map(err => ({
           field: err.path.join('.'),
@@ -212,11 +218,10 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
       });
     }
 
-    if (error instanceof Error) {
-      return res.status(400).json({ error: error.message });
-    }
-    
-    res.status(400).json({ error: 'Invalid login data' });
+    return res.status(500).json({
+      success: false,
+      error: 'An error occurred during login'
+    });
   }
 });
 
@@ -229,19 +234,20 @@ router.post('/logout', async (req: Request, res: Response) => {
 
     if (authHeader && authHeader.startsWith('Bearer ')) {
       sessionId = authHeader.split(' ')[1];
-      console.log(`Logging out session from authorization header: ${sessionId.substring(0, 10)}...`);
     } else {
       // Fallback to cookie
       sessionId = req.cookies?.sessionId;
-      console.log(`Logging out session from cookie: ${sessionId ? sessionId.substring(0, 10) + '...' : 'none'}`);
     }
 
     if (sessionId) {
       await deleteSession(sessionId);
-      res.clearCookie('sessionId');
+      res.clearCookie('sessionId', { 
+        httpOnly: true, 
+        secure: process.env.NODE_ENV === 'production', 
+        sameSite: 'lax' 
+      });
     }
 
-    console.log('Logout successful');
     res.json({
       message: 'Logged out successfully',
       session: {
@@ -256,18 +262,37 @@ router.post('/logout', async (req: Request, res: Response) => {
     res.status(500).json({ error: 'Failed to logout' });
   }
 });
+router.get('/session', (req, res) => {
+  const sessionId = req.cookies.sessionId; // Access the httpOnly cookie
 
+  if (sessionId) {
+    // Here, you could validate the sessionId against a database or session store
+    // For this example, we'll assume it's valid if it exists
+    res.json({
+      isAuthenticated: true,
+      message: 'Session is active',
+      sessionId: sessionId, // Optional: only return this if needed
+    });
+  } else {
+    res.status(401).json({
+      isAuthenticated: false,
+      message: 'No active session',
+    });
+  }
+});
 // Get current user
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
   try {
-    console.log(`Fetching current user data for user ID: ${req.userId}`);
     const user = await db.query.users.findFirst({
       where: eq(users.id, req.userId!),
     });
 
     if (!user) {
-      console.log('User not found in database, clearing session');
-      res.clearCookie('sessionId');
+      res.clearCookie('sessionId', { 
+        httpOnly: true, 
+        secure: process.env.NODE_ENV === 'production', 
+        sameSite: 'lax' 
+      });
       return res.json({ user: null });
     }
 
@@ -277,7 +302,6 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       ? authHeader.split(' ')[1] 
       : req.cookies?.sessionId;
        
-    console.log(`Returning user data with session ID: ${sessionId?.substring(0, 10)}...`);
     
     res.json({
       user: {
@@ -334,12 +358,7 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
     const sessionId = await createSession(user.id);
 
     // Set cookie
-    res.cookie('sessionId', sessionId, {
-      httpOnly: true,
-      secure: process.env.NODE_ENV === 'production',
-      sameSite: 'lax',
-      maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
-    });
+    res.cookie('sessionId', sessionId, COOKIE_CONFIG);
 
     res.json({
       user: {

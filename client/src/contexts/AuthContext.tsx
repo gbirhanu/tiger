@@ -66,7 +66,6 @@ class AuthErrorBoundary extends Component<{ children: ReactNode; onError: (error
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('AuthContext Error:', error, errorInfo);
     this.props.onError(error, errorInfo);
   }
 
@@ -96,12 +95,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Unified token management function to avoid code duplication
   const updateToken = (token: string | null) => {
-    console.debug(`[Auth] Updating token: ${token ? `${token.substring(0, 5)}...` : 'null'}`);
     
     // Validate token if present
     if (token) {
       if (typeof token !== 'string' || token.trim() === '') {
-        console.error('[Auth] Invalid token format - not setting token');
         return;
       }
       
@@ -115,18 +112,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setAuthToken(cleanToken);
         setApiAuthToken(cleanToken);
         
-        console.debug(`[Auth] Token stored successfully: ${cleanToken.substring(0, 5)}...`);
         
         // Verify the token was actually set in localStorage (can fail in incognito mode)
         const storedToken = localStorage.getItem('sessionToken');
         if (!storedToken) {
-          console.warn('[Auth] Failed to store token in localStorage - possibly in private browsing mode');
         }
       } catch (err) {
-        console.error('[Auth] Error while setting auth token:', err);
       }
     } else {
-      console.debug('[Auth] Clearing authentication token');
       try {
         // Clear token from all locations
         setSessionToken(null);
@@ -137,17 +130,14 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // Verify token was cleared from localStorage
         const storedToken = localStorage.getItem('sessionToken');
         if (storedToken) {
-          console.warn('[Auth] Failed to remove token from localStorage');
         }
       } catch (err) {
-        console.error('[Auth] Error while clearing auth token:', err);
       }
     }
   };
 
   // Unified error handling function
   const handleError = (err: unknown, defaultMessage: string) => {
-    console.error(`${defaultMessage}:`, err);
     setError(err instanceof Error ? err.message : defaultMessage);
     
     // Check if it's an authentication error
@@ -155,7 +145,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (errorMessage.includes('401') || 
         errorMessage.toLowerCase().includes('unauthorized') || 
         errorMessage.toLowerCase().includes('session')) {
-      console.debug('[Auth] Authentication error detected, clearing token');
       updateToken(null); // Clear token on auth error
     }
   };
@@ -165,7 +154,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // Initialize auth token from stored session on component mount
     const storedToken = localStorage.getItem('sessionToken');
     if (storedToken) {
-      console.debug(`[Auth] Found stored token on initialization: ${storedToken.substring(0, 5)}...`);
       
       // Verify if token format looks valid before using it
       if (typeof storedToken === 'string' && storedToken.trim() !== '') {
@@ -175,23 +163,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
         (async () => {
           try {
             const isValid = await validateToken();
-            console.debug(`[Auth] Stored token validation result: ${isValid}`);
             
             // If token is invalid, clear it
             if (!isValid) {
-              console.warn('[Auth] Stored token is invalid, clearing it');
               updateToken(null);
             }
           } catch (err) {
-            console.error('[Auth] Error validating stored token:', err);
           }
         })();
       } else {
-        console.warn('[Auth] Stored token format is invalid, clearing it');
         localStorage.removeItem('sessionToken');
       }
     } else {
-      console.debug('[Auth] No stored token found on initialization');
     }
     
     const fetchUserAndSettings = async () => {
@@ -214,10 +197,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
           
           // Set the auth token from the active session
           if (userData.user.session && userData.user.session.active) {
-            console.debug('[Auth] User has active session - updating token');
             updateToken(userData.user.session.id);
           } else {
-            console.warn('[Auth] User has no active session');
             updateToken(null);
           }
           // Fetch user settings
@@ -230,7 +211,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
             });
             
             if (!settingsRes.ok) {
-              console.warn('Failed to fetch user settings:', settingsRes.statusText);
             } else {
               const settingsData = await settingsRes.json();
               // Store all user settings
@@ -243,15 +223,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
               }
             }
           } catch (settingsError) {
-            console.warn('Error fetching user settings:', settingsError);
           }
         } else {
-          console.log('No authenticated user found');
           setUser(null);
           updateToken(null);
         }
       } catch (error) {
-        console.error('Error checking authentication status:', error);
         setUser(null);
         updateToken(null);
       } finally {
@@ -267,8 +244,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setLoading(true);
     setError(null);
     
-    console.debug('[Auth] Attempting login for email:', email);
-    
     try {
       const response = await fetch('/api/auth/login', {
         method: 'POST',
@@ -281,66 +256,54 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // Save the raw response for debugging if needed
       const responseText = await response.text();
-      console.debug('[Auth] Login response status:', response.status);
-      
+      alert("what is recieved:   " + responseText);
       let data;
       try {
         // Parse the response text
         data = JSON.parse(responseText);
       } catch (parseError) {
-        console.error('[Auth] Failed to parse login response:', responseText);
         throw new Error('Invalid response from server');
       }
 
       if (!response.ok) {
         const errorMessage = data.error || 'Login failed';
-        console.error('[Auth] Login failed with status:', response.status, errorMessage);
         throw new Error(errorMessage);
       }
 
-      console.debug('[Auth] Login response data:', JSON.stringify(data));
       
       // Validate response structure
       if (!data.user) {
-        console.error('[Auth] Missing user in login response:', data);
         throw new Error('Invalid response: Missing user data');
       }
       
       // Check session existence
       if (!data.user.session) {
-        console.error('[Auth] Missing session in login response:', data.user);
         throw new Error('No active session found');
       }
       
       // Validate session ID - critical for auth
       if (!data.user.session.id) {
-        console.error('[Auth] Missing session ID in login response:', data.user.session);
         throw new Error('Invalid session: Missing session ID');
       }
       
       if (typeof data.user.session.id !== 'string') {
-        console.error('[Auth] Session ID is not a string:', typeof data.user.session.id);
         throw new Error('Invalid session ID format');
       }
       
       if (data.user.session.id.trim() === '') {
-        console.error('[Auth] Empty session ID received');
         throw new Error('Empty session ID received');
       }
 
-      console.debug('[Auth] Login successful, setting user and session token');
       
       // Store user information
       setUser(data.user);
       
       // Save and propagate the session token
       const sessionToken = data.user.session.id;
-      console.debug(`[Auth] Setting session token: ${sessionToken.substring(0, 5)}...`);
       updateToken(sessionToken);
       
       return data.user;
     } catch (err) {
-      console.error('[Auth] Login process failed:', err);
       handleError(err, 'Login error');
       throw err;
     } finally {
@@ -378,7 +341,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw new Error('Invalid session ID received from server');
       }
 
-      console.debug('[Auth] Registration successful, setting user and token');
       setUser(data.user);
       updateToken(data.user.session.id);
       
@@ -421,7 +383,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw new Error('Invalid session ID received from server');
       }
 
-      console.debug('[Auth] Google login successful, setting user and token');
       setUser(data.user);
       updateToken(data.user.session.id);
       
@@ -450,10 +411,8 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // Even if the server returns an error, we should still clear the local session
       if (!response.ok) {
-        console.warn('Server logout failed, clearing session locally');
       }
       // Clear local state
-      console.debug('[Auth] Logging out user, clearing user data and token');
       setUser(null);
       setSettings(null);
       updateToken(null);
@@ -464,9 +423,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
       resetQueryCache();
       navigate('/auth');
     } catch (err) {
-      console.error('Logout error:', err);
       // Even if there's an error, we should still clear the local session
-      console.debug('[Auth] Logout encountered an error, still clearing user data and token');
       setUser(null);
       setSettings(null);
       updateToken(null);
@@ -482,11 +439,9 @@ export function AuthProvider({ children }: AuthProviderProps) {
   // Validate token function
   const validateToken = async (): Promise<boolean> => {
     if (!sessionToken) {
-      console.debug('[Auth] No token to validate');
       return false;
     }
     
-    console.debug(`[Auth] Validating token: ${sessionToken.substring(0, 5)}...`);
     
     try {
       const response = await fetch('/api/auth/validate-token', {
@@ -498,14 +453,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       });
       
       // Log response status for debugging
-      console.debug('[Auth] Token validation response status:', response.status);
       
       if (!response.ok) {
-        console.warn('[Auth] Token validation failed with status:', response.status);
         
         // If the token is invalid, clear it
         if (response.status === 401) {
-          console.debug('[Auth] Clearing invalid token');
           updateToken(null);
         }
         
@@ -515,23 +467,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const data = await response.json();
       
       if (data.valid === true) {
-        console.debug('[Auth] Token validated successfully');
         
         // If the response includes updated user/session info, update it
         if (data.user && data.user.session) {
-          console.debug('[Auth] Updating user data from validation response');
           setUser(data.user);
         }
         
         return true;
       } else {
-        console.warn('[Auth] Server returned valid:false for token');
         // Token is explicitly invalid, clear it
         updateToken(null);
         return false;
       }
     } catch (err) {
-      console.error('[Auth] Token validation error:', err);
       // Don't clear token on network errors as it might be temporary
       return false;
     }
@@ -549,7 +497,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Handle authentication errors
   const handleAuthError = (error: Error, errorInfo: ErrorInfo) => {
-    console.error('Auth Error Boundary caught an error:', error, errorInfo);
     setError(error.message);
     setLoading(false);
   };

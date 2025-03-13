@@ -10,6 +10,10 @@ import { z } from "zod";
 import { addDays, addWeeks, addMonths, addYears } from "date-fns";
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { requireAuth } from "../middleware/auth";
+import { useAuth } from "@/contexts/AuthContext";
+
+import dotenv from "dotenv";
+dotenv.config();
 
 const router = Router();
 
@@ -58,9 +62,7 @@ if (!GEMINI_API_KEY) {
 const genAI = new GoogleGenerativeAI(GEMINI_API_KEY || '');
 
 router.post("/generate-subtasks", async (req: Request, res: Response) => {
-  console.log("req.body", req.body)
   try {
-    console.log("GEMINI_API_KEY", GEMINI_API_KEY)
     // Verify API key is available
     if (!GEMINI_API_KEY) {
       return res.status(500).json({ 
@@ -77,17 +79,14 @@ router.post("/generate-subtasks", async (req: Request, res: Response) => {
     // Get the generative model
     const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
 
-    console.log(prompt)
     // Generate content
     const result = await model.generateContent(prompt);
     const response = await result.response;
     const text = response.text();
 
-    console.log("text", text)
 
     res.json({ subtasks: text });
   } catch (error) {
-    console.error("Error generating subtasks:", error);
     res.status(500).json({ 
       error: "Failed to generate subtasks",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -96,7 +95,7 @@ router.post("/generate-subtasks", async (req: Request, res: Response) => {
 });
 
 // Tasks
-router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
+router.get("/tasks", async (req: Request, res: Response) => {
   try {
     // Get all tasks for the current user
     const allTasks = await db
@@ -152,7 +151,7 @@ router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
 });
 
 // Route to get all tasks that have subtasks
-router.get("/tasks/subtasks", requireAuth, async (_req: Request, res: Response) => {
+router.get("/tasks/subtasks", async (_req: Request, res: Response) => {
   try {
     // Get all tasks that have subtasks
     const tasksWithSubtasks = await db
@@ -174,7 +173,7 @@ router.get("/tasks/subtasks", requireAuth, async (_req: Request, res: Response) 
 });
 
 // Route to get a specific task
-router.get("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
+router.get("/tasks/:id", async (req: Request, res: Response) => {
   try {
     const taskId = parseInt(req.params.id);
     const task = await db.select().from(tasks).where(eq(tasks.id, taskId));
@@ -190,7 +189,7 @@ router.get("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.post("/tasks", requireAuth, async (req: Request, res: Response) => {
+router.post("/tasks", async (req: Request, res: Response) => {
   try {
     const taskData = taskSchema.parse(req.body);
     
@@ -220,13 +219,13 @@ router.post("/tasks", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
+router.put("/tasks/:id", async (req: Request, res: Response) => {
   try {
     const taskId = parseInt(req.params.id);
-    console.log("Updating task. Current data:", req.body);
-     
+    const userId = useAuth().user?.id;
+
     // Check if task exists
-    const existingTask = await db.select().from(tasks).where(eq(tasks.id, taskId));
+    const existingTask = await db.select().from(tasks).where(eq(tasks.id, taskId) && eq(tasks.user_id, userId)).all();
     if (existingTask.length === 0) {
       return res.status(404).json({ error: "Task not found" });
     }
@@ -265,7 +264,6 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
         null;
     }
 
-    console.log("Processing update data:", updateData);
 
     // Update the task
     const updatedTask = await db.update(tasks)
@@ -314,7 +312,6 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
       }
     }
 
-    console.log("Updated task:", updatedTask);
     res.json(updatedTask);
   } catch (error) {
     console.error("Error updating task:", error);
@@ -325,10 +322,9 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.patch("/tasks/:id", requireAuth, async (req, res) => {
+router.patch("/tasks/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
-    console.log("Updating task. Current data:", req.body);
     
     // Get the current task
     const currentTask = await db.select().from(tasks).where(eq(tasks.id, id)).get();
@@ -370,7 +366,6 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
         null;
     }
 
-    console.log("Processing update data:", updateData);
 
     // Update the task
     const updatedTask = await db.update(tasks)
@@ -419,7 +414,6 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
       }
     }
 
-    console.log("Updated task:", updatedTask);
     res.json(updatedTask);
   } catch (error) {
     console.error("Error updating task:", error);
@@ -427,7 +421,7 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
   }
 });
 
-router.delete("/tasks/:id", requireAuth, async (req, res) => {
+router.delete("/tasks/:id", async (req, res) => {
   try {
     const id = Number(req.params.id);
     
@@ -453,7 +447,7 @@ router.delete("/tasks/:id", requireAuth, async (req, res) => {
 });
 
 // Notes
-router.get("/notes", requireAuth, async (_req: Request, res: Response) => {
+router.get("/notes", async (_req: Request, res: Response) => {
   try {
     const allNotes = await db.select().from(notes);
     res.json(allNotes);
@@ -463,7 +457,7 @@ router.get("/notes", requireAuth, async (_req: Request, res: Response) => {
   }
 });
 
-router.get("/notes/:id", requireAuth, async (req: Request, res: Response) => {
+router.get("/notes/:id", async (req: Request, res: Response) => {
   try {
     const noteId = parseInt(req.params.id);
     const note = await db.select().from(notes).where(eq(notes.id, noteId));
@@ -479,7 +473,7 @@ router.get("/notes/:id", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.post("/notes", requireAuth, async (req: Request, res: Response) => {
+router.post("/notes", async (req: Request, res: Response) => {
   try {
     const result = insertNoteSchema.safeParse(req.body);
     if (!result.success) {
@@ -498,7 +492,7 @@ router.post("/notes", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.patch("/notes/:id", requireAuth, async (req: Request, res: Response) => {
+router.patch("/notes/:id", async (req: Request, res: Response) => {
   try {
     const noteId = parseInt(req.params.id);
     
@@ -530,7 +524,7 @@ router.patch("/notes/:id", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.delete("/notes/:id", requireAuth, async (req: Request, res: Response) => {
+router.delete("/notes/:id", async (req: Request, res: Response) => {
   try {
     const noteId = parseInt(req.params.id);
     
@@ -549,7 +543,7 @@ router.delete("/notes/:id", requireAuth, async (req: Request, res: Response) => 
 });
 
 // Appointments
-router.get("/appointments", requireAuth, async (req, res) => {
+router.get("/appointments", async (req, res) => {
   try {
     const allAppointments = await db.select().from(appointments);
     res.json(allAppointments);
@@ -558,7 +552,7 @@ router.get("/appointments", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/appointments/:id", requireAuth, async (req, res) => {
+router.get("/appointments/:id", async (req, res) => {
   try {
     const appointmentId = parseInt(req.params.id);
     const appointment = await db.select().from(appointments).where(eq(appointments.id, appointmentId));
@@ -573,7 +567,7 @@ router.get("/appointments/:id", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/appointments", requireAuth, async (req, res) => {
+router.post("/appointments", async (req, res) => {
   try {
     const newAppointment = await db.insert(appointments).values(req.body).returning();
     res.json(newAppointment[0]);
@@ -582,7 +576,7 @@ router.post("/appointments", requireAuth, async (req, res) => {
   }
 });
 
-router.patch("/appointments/:id", requireAuth, async (req, res) => {
+router.patch("/appointments/:id", async (req, res) => {
   try {
     const appointmentId = parseInt(req.params.id);
     
@@ -607,7 +601,7 @@ router.patch("/appointments/:id", requireAuth, async (req, res) => {
   }
 });
 
-router.delete("/appointments/:id", requireAuth, async (req, res) => {
+router.delete("/appointments/:id", async (req, res) => {
   try {
     const appointmentId = parseInt(req.params.id);
     
@@ -626,7 +620,7 @@ router.delete("/appointments/:id", requireAuth, async (req, res) => {
 });
 
 // Meetings
-router.get("/meetings", requireAuth, async (req: Request, res: Response) => {
+router.get("/meetings", async (req: Request, res: Response) => {
   try {
     const allMeetings = await db
       .select()
@@ -638,7 +632,7 @@ router.get("/meetings", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.get("/meetings/:id", requireAuth, async (req, res) => {
+router.get("/meetings/:id", async (req, res) => {
   try {
     const meetingId = parseInt(req.params.id);
     const meeting = await db.select().from(meetings).where(eq(meetings.id, meetingId));
@@ -653,7 +647,7 @@ router.get("/meetings/:id", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/meetings", requireAuth, async (req: Request, res: Response) => {
+router.post("/meetings", async (req: Request, res: Response) => {
   try {
     const meetingData = {
       ...req.body,
@@ -668,7 +662,7 @@ router.post("/meetings", requireAuth, async (req: Request, res: Response) => {
   }
 });
 
-router.patch("/meetings/:id", requireAuth, async (req: Request, res: Response) => {
+router.patch("/meetings/:id", async (req: Request, res: Response) => {
   try {
     const meetingId = parseInt(req.params.id);
     
@@ -712,7 +706,7 @@ router.patch("/meetings/:id", requireAuth, async (req: Request, res: Response) =
   }
 });
 
-router.delete("/meetings/:id", requireAuth, async (req: Request, res: Response) => {
+router.delete("/meetings/:id", async (req: Request, res: Response) => {
   try {
     const meetingId = parseInt(req.params.id);
     
@@ -748,7 +742,7 @@ router.delete("/meetings/:id", requireAuth, async (req: Request, res: Response) 
 });
 
 // Settings
-router.get("/pomodoro-settings", requireAuth, async (req, res) => {
+router.get("/pomodoro-settings", async (req, res) => {
   try {
     const settings = await db.select().from(pomodoroSettings).limit(1);
     res.json(settings[0] || {});
@@ -757,7 +751,7 @@ router.get("/pomodoro-settings", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/pomodoro-settings", requireAuth, async (req, res) => {
+router.put("/pomodoro-settings", async (req, res) => {
   try {
     const settings = await db.select().from(pomodoroSettings).limit(1);
     if (settings.length === 0) {
@@ -776,7 +770,7 @@ router.put("/pomodoro-settings", requireAuth, async (req, res) => {
   }
 });
 
-router.patch("/pomodoro-settings", requireAuth, async (req, res) => {
+router.patch("/pomodoro-settings", async (req, res) => {
   try {
     const settings = await db.select().from(pomodoroSettings).limit(1);
     if (settings.length === 0) {
@@ -795,7 +789,7 @@ router.patch("/pomodoro-settings", requireAuth, async (req, res) => {
   }
 });
 
-router.get("/user-settings", requireAuth, async (req, res) => {
+router.get("/user-settings", async (req, res) => {
   try {
     const settings = await db.select().from(userSettings).limit(1);
     res.json(settings[0] || {});
@@ -804,33 +798,27 @@ router.get("/user-settings", requireAuth, async (req, res) => {
   }
 });
 
-router.put("/user-settings", requireAuth, async (req, res) => {
+router.put("/user-settings", async (req, res) => {
   try {
-    console.log('Received user settings update:', req.body);
     
     const settings = await db.select().from(userSettings).limit(1);
     if (settings.length === 0) {
-      console.log('No existing settings found, creating new settings');
       const newSettings = await db.insert(userSettings).values(req.body).returning();
-      console.log('Created new settings:', newSettings[0]);
       res.json(newSettings[0]);
     } else {
-      console.log('Updating existing settings:', settings[0]);
       const updatedSettings = await db
         .update(userSettings)
         .set(req.body)
         .where(eq(userSettings.id, settings[0].id))
         .returning();
-      console.log('Updated settings:', updatedSettings[0]);
       res.json(updatedSettings[0]);
     }
   } catch (error) {
-    console.error('Error updating user settings:', error);
     res.status(500).json({ error: "Failed to update user settings" });
   }
 });
 
-router.patch("/user-settings", requireAuth, async (req, res) => {
+router.patch("/user-settings", async (req, res) => {
   try {
     const settings = await db.select().from(userSettings).limit(1);
     if (settings.length === 0) {
@@ -850,7 +838,7 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
   }
 });
 
-router.post("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Response) => {
+router.post("/tasks/:id/subtasks", async (req: Request, res: Response) => {
   try {
     const taskId = parseInt(req.params.id);
     const { subtasks: subtasksList } = req.body;
@@ -875,7 +863,7 @@ router.post("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Respon
   }
 });
 
-router.get("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Response) => {
+router.get("/tasks/:id/subtasks", async (req: Request, res: Response) => {
   try {
     const taskId = parseInt(req.params.id);
     const taskSubtasks = await db
@@ -892,7 +880,7 @@ router.get("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Respons
 });
 
 // Add endpoint to update subtask completion status
-router.patch("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Request, res: Response) => {
+router.patch("/tasks/:taskId/subtasks/:subtaskId", async (req: Request, res: Response) => {
   try {
     const taskId = parseInt(req.params.taskId);
     const subtaskId = parseInt(req.params.subtaskId);

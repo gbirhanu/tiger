@@ -90,7 +90,6 @@ export default function Settings() {
           <Form {...form}>
             <form
               onSubmit={form.handleSubmit((data) => {
-                console.log('Submitting settings:', data);
                 updateSettings.mutate(data);
               })}
               className="space-y-6"

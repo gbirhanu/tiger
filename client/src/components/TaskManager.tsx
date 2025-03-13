@@ -223,7 +223,7 @@ export default function TaskManager() {
     queryKey: ["/api/tasks"],
     queryFn: async () => {
       try {
-        const sessionToken = useAuth().sessionToken || "";
+        const sessionToken = useAuth().sessionToken;
         // Get all tasks
         const res = await apiRequest("GET", "/api/tasks", undefined, sessionToken);
         if (!res.ok) {
@@ -245,7 +245,6 @@ export default function TaskManager() {
           has_subtasks: subtasksSet.has(task.id)
         }));
       } catch (error) {
-        console.error("Error fetching tasks:", error);
         throw error;
       }
     },
@@ -276,24 +275,19 @@ export default function TaskManager() {
           parent_task_id: null
         };
 
-        console.log('Sending task data:', taskData);
 
         const res = await apiRequest("POST", "/api/tasks", taskData);
         if (!res.ok) {
           const errorData = await res.json();
-          console.error('Server response:', errorData);
           throw new Error(errorData.message || "Failed to create task");
         }
         const data = await res.json();
-        console.log('Server response:', data);
         return data;
       } catch (error) {
-        console.error('Task creation error:', error);
         throw error;
       }
     },
     onSuccess: (data) => {
-      console.log('Task created successfully:', data);
       queryClient.invalidateQueries({ queryKey: ["/api/tasks"] });
       form.reset();
       setDate(null);
@@ -303,7 +297,6 @@ export default function TaskManager() {
       });
     },
     onError: (error: Error) => {
-      console.error('Mutation error:', error);
       toast({
         variant: "destructive",
         title: "Failed to create task",
@@ -391,7 +384,6 @@ export default function TaskManager() {
 
   const onSubmit = async (data: FormData) => {
     try {
-      console.log('Form data:', data);
       if (!data.title.trim()) {
         toast({
           variant: "destructive",
@@ -410,7 +402,6 @@ export default function TaskManager() {
 
       await createTask.mutateAsync(taskData);
     } catch (error) {
-      console.error('Submit error:', error);
       toast({
         variant: "destructive",
         title: "Error",
@@ -420,7 +411,6 @@ export default function TaskManager() {
   };
 
   const startEditing = (task: TaskWithSubtasks) => {
-    console.log('Starting edit for task:', task);
     setEditingTask(task.id);
     setEditForm({
       title: task.title || "",
@@ -481,7 +471,6 @@ export default function TaskManager() {
       // First check if subtasks already exist for this task
       const response = await apiRequest("GET", `/api/tasks/${task.id}/subtasks`);
       const existingSubtasks = await response.json();
-      console.log('Existing subtasks:', existingSubtasks);
       
       if (existingSubtasks && Array.isArray(existingSubtasks) && existingSubtasks.length > 0) {
         // If there are existing subtasks, just show them
@@ -501,10 +490,8 @@ export default function TaskManager() {
           ${task.due_date ? `Due Date: ${format(new Date(task.due_date), "PPP")}` : ''}
         `;
         
-        console.log('Sending prompt to generate subtasks:', prompt);
         
         const response = await generateSubtasksApi(prompt) as SubtasksResponse;
-        console.log('Received response from API:', response);
 
         if (response && Array.isArray(response.subtasks)) {
           const processedSubtasks = response.subtasks
@@ -515,7 +502,6 @@ export default function TaskManager() {
               completed: false
             }));
 
-          console.log('Processed subtasks:', processedSubtasks);
           setEditedSubtasks(processedSubtasks);
         } else if (response && typeof response.subtasks === 'string') {
           const subtasksArray = response.subtasks
@@ -527,14 +513,12 @@ export default function TaskManager() {
               completed: false
             }));
 
-          console.log('Processed string subtasks:', subtasksArray);
           setEditedSubtasks(subtasksArray);
         } else {
           throw new Error("Invalid response format from subtasks generation");
         }
       }
     } catch (error) {
-      console.error('Error generating subtasks:', error);
       toast({
         variant: "destructive",
         title: "Failed to generate subtasks",
@@ -568,7 +552,6 @@ export default function TaskManager() {
       });
       setShowSubtasks(false);
     } catch (error) {
-      console.error('Error saving subtasks:', error);
       toast({
         variant: "destructive",
         title: "Failed to save subtasks",

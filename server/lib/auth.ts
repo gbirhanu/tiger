@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from './db';
 import { users, sessions } from '../../shared/schema';
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
@@ -36,31 +36,131 @@ export async function createSession(userId: number): Promise<string> {
   return sessionId;
 }
 
-export async function validateSession(sessionId: string): Promise<number | null> {
+// Define a return type that includes both validation status and user info
+export interface ValidationResult {
+  isValid: boolean;
+  userId?: number;
+  userData?: {
+    id: number;
+    username: string;
+    email: string;
+    role?: string;
+    lastLogin?: Date;
+  };
+  error?: string;
+}
+
+/**
+ * Validates a session token and returns user information
+ * @param sessionIdOrToken - Can be a session ID, Bearer token, or null if checking cookies
+ * @param req - Optional Express request object for cookie-based auth
+ * @returns ValidationResult with status and user information if valid
+ */
+export async function validateSession(
+  sessionIdOrToken?: string | null, 
+  req?: Request
+): Promise<ValidationResult> {
+  const result: ValidationResult = { isValid: false };
+  const authLog = [];
+  authLog.push('Session validation started');
+
   try {
-    console.log(`Validating session: ${sessionId.substring(0, 10)}...`);
+    // Extract session ID from various sources
+    let sessionId: string | null = null;
+    
+    // Try to get session from the provided token
+    if (sessionIdOrToken) {
+      // Handle if this is a Bearer token
+      if (sessionIdOrToken.startsWith('Bearer ')) {
+        sessionId = sessionIdOrToken.split(' ')[1].trim();
+        authLog.push('Session ID extracted from Bearer token');
+      } else {
+        sessionId = sessionIdOrToken.trim();
+        authLog.push('Using provided session ID directly');
+      }
+    }
+    
+    // Try to get session from cookies if req is provided and no token was found
+    if (!sessionId && req?.cookies?.sessionId) {
+      sessionId = req.cookies.sessionId;
+      authLog.push('Session ID extracted from cookie');
+    }
+    
+    // No session ID found in any source
+    if (!sessionId) {
+      authLog.push('No session ID found in request');
+      result.error = 'No session identifier provided';
+      return result;
+    }
+    
+    // Validate session ID format (should be a hex string if created with randomBytes)
+    if (!/^[0-9a-f]+$/i.test(sessionId)) {
+      authLog.push('Malformed session ID - not a valid hex string');
+      result.error = 'Malformed session token';
+      return result;
+    }
+    
+    authLog.push(`Validating session: ${sessionId.substring(0, 10)}...`);
+    
+    // Query the database for the session
     const session = await db.query.sessions.findFirst({
       where: eq(sessions.id, sessionId),
     });
 
     if (!session) {
-      console.log('Session not found in database');
-      return null;
+      authLog.push('Session not found in database');
+      result.error = 'Session not found';
+      return result;
     }
 
+    // Check if the session has expired
     const currentTimestamp = Math.floor(Date.now() / 1000);
     if (currentTimestamp > session.expires_at) {
-      console.log(`Session expired at ${new Date(session.expires_at * 1000).toISOString()}`);
+      authLog.push(`Session expired at ${new Date(session.expires_at * 1000).toISOString()}`);
       // Clean up expired session
       await deleteSession(sessionId);
-      return null;
+      result.error = 'Session expired';
+      return result;
     }
 
-    console.log(`Valid session found for user ID: ${session.user_id}`);
-    return session.user_id;
+    // Fetch user data for the valid session
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, session.user_id),
+      columns: {
+        id: true,
+        username: true,
+        email: true,
+        role: true,
+        created_at: true,
+        updated_at: true
+      }
+    });
+
+    if (!user) {
+      authLog.push(`Associated user ID ${session.user_id} not found`);
+      result.error = 'User associated with session not found';
+      return result;
+    }
+
+    // If we get here, the session is valid
+    authLog.push(`Valid session for user: ${user.username} (ID: ${user.id})`);
+    result.isValid = true;
+    result.userId = user.id;
+    result.userData = {
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      role: user.role,
+      lastLogin: new Date(session.created_at * 1000)
+    };
+    
+    return result;
   } catch (error) {
-    console.error('Error validating session:', error);
-    return null;
+    // Handle unexpected errors
+    authLog.push(`Error during validation: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    
+    result.error = 'Server error during session validation';
+    return result;
   }
 }
 
@@ -72,41 +172,40 @@ export async function deleteSession(sessionId: string): Promise<void> {
 export async function cleanupExpiredSessions(): Promise<number> {
   try {
     const currentTimestamp = Math.floor(Date.now() / 1000);
-    console.log(`Cleaning up sessions that expired before ${new Date(currentTimestamp * 1000).toISOString()}`);
     
     const result = await db.delete(sessions)
-      .where(eq(sessions.expires_at > currentTimestamp, false))
+      .where(lt(sessions.expires_at, currentTimestamp))
       .returning({ id: sessions.id });
     
-    console.log(`Cleaned up ${result.length} expired sessions`);
     return result.length;
   } catch (error) {
-    console.error('Error cleaning up expired sessions:', error);
     return 0;
   }
 }
 
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    // Try to authenticate using header Authorization first
     const authHeader = req.headers.authorization;
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ error: 'Authentication required' });
+    let validationResult: ValidationResult;
+    
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      // Token-based authentication
+      validationResult = await validateSession(authHeader);
+    } else {
+      // Cookie-based authentication
+      validationResult = await validateSession(null, req);
     }
-
-    const sessionId = authHeader.split(' ')[1];
-    console.log(`Auth middleware: Received token ${sessionId.substring(0, 10)}...`);
-
-    const userId = await validateSession(sessionId);
-    if (!userId) {
-      console.log('Auth middleware: Invalid or expired session');
-      return res.status(401).json({ error: 'Invalid or expired session' });
+    
+    // Handle validation result
+    if (!validationResult.isValid) {
+      return res.status(401).json({ error: validationResult.error || 'Authentication required' });
     }
-
-    console.log(`Auth middleware: Authenticated user ID: ${userId}`);
-    req.userId = userId;
+    
+    // Authentication successful
+    req.userId = validationResult.userId;
     next();
   } catch (error) {
-    console.error('Authentication middleware error:', error);
     return res.status(500).json({ error: 'Server error during authentication' });
   }
 }; 

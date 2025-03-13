@@ -71,8 +71,9 @@ const DashboardOverview = () => {
   const { data: tasks = [], error: tasksError, isLoading: tasksLoading } = useQuery({
     queryKey: ["tasks"],
     queryFn: async () => {
+      console.log("Fetching tasks...");
       const response = await getTasks();
-      console.log("tasks", response);
+      console.log(response);
       
       return response;
     },

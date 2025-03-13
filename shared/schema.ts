@@ -179,6 +179,8 @@ export const insertAppointmentSchema = z.object({
   all_day: z.boolean().default(false),
 });
 
+export type InsertAppointment = z.infer<typeof insertAppointmentSchema>;
+
 export const insertMeetingSchema = z.object({
   title: z.string().min(1),
   description: z.string().nullable(),

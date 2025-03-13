@@ -1,28 +1,77 @@
 import { QueryClient, QueryFunction } from "@tanstack/react-query";
+import cookieParser from "cookie-parser";
 
 // Token management functions
-// Use localStorage to persist token between page refreshes
+// Supports both cookie-based and localStorage token storage
 const TOKEN_STORAGE_KEY = 'auth_token';
+
+// Helper function to parse cookies in browser
+const getCookieValue = (cookieName: string): string | null => {
+  if (typeof document === 'undefined') return null;
+  
+  const cookies = document.cookie.split(';');
+  for (let i = 0; i < cookies.length; i++) {
+    const cookie = cookies[i].trim();
+    if (cookie.startsWith(cookieName + '=')) {
+      return decodeURIComponent(cookie.substring(cookieName.length + 1));
+    }
+  }
+  return null;
+};
+
+// Helper function to validate token format and expiration
+const isValidToken = (token: string): boolean => {
+  if (!token) return false;
+  
+  // Basic format validation - tokens should have at least 2 parts separated by tabs
+  const parts = token.split('\t');
+  if (parts.length < 3) {
+    return false;
+  }
+  
+  // Check expiration time if the third part is a timestamp
+  try {
+    const expiryTimestamp = parseInt(parts[2], 10);
+    if (isNaN(expiryTimestamp)) return false;
+    
+    // Check if token is expired
+    if (Date.now() / 1000 > expiryTimestamp) {
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    return false;
+  }
+};
 
 export const setAuthToken = (token: string | null) => {
   if (token) {
-    localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    console.log("Auth token set in localStorage");
+    if (isValidToken(token)) {
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
+    } else {
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
   } else {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
-    console.log("Auth token removed from localStorage");
   }
 };
 
 export const getAuthToken = (): string | null => {
-  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+  // First check for session cookie
+  const sessionId = getCookieValue('sessionId');
+  console.log(sessionId);
   
-  if (token) {
-    console.log(`Retrieved auth token from storage: ${token.substring(0, 5)}...`);
+  if (sessionId && isValidToken(sessionId)) {
+    return sessionId;
+  }
+  
+  // If no valid cookie, check localStorage
+  const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (token && isValidToken(token)) {
     return token;
   }
   
-  console.log('No auth token found in storage');
   return null;
 };
 
@@ -46,7 +95,6 @@ async function throwIfResNotOk(res: Response) {
         }
       }
     } catch (error) {
-      console.error('Error parsing response body:', error);
     }
     
     throw new Error(errorMessage);
@@ -65,22 +113,27 @@ export async function apiRequest(
 
     const token = getAuthToken();
     if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-      console.log(`API Request to ${url} with token: ${token.substring(0, 10)}...`);
+      // Send token in Authorization header, but only if it's valid
+      // This handles token-based authentication
+      if (isValidToken(token)) {
+        headers["Authorization"] = `Bearer ${token}`;
+      } else {
+        // Clear invalid token from storage
+        setAuthToken(null);
+      }
     } else {
-      console.warn(`API Request to ${url} without authentication token`);
     }
 
+    // Always include credentials for cookie-based auth support
     const res = await fetch(url, {
       method,
       headers,
       body: data ? JSON.stringify(data) : undefined,
-      credentials: "include",
+      credentials: "include", // This enables cookie-based authentication
     });
 
     // Handle authentication errors specifically
     if (res.status === 401) {
-      console.error(`Authentication failed for request to ${url} - clearing token`);
       setAuthToken(null);
       // You could trigger a redirect to login here if needed
       // window.location.href = '/auth';
@@ -89,7 +142,9 @@ export async function apiRequest(
     await throwIfResNotOk(res);
     return res;
   } catch (error) {
-    console.error(`API Request failed for ${method} ${url}:`, error);
+    if (error instanceof TypeError) {
+    } else {
+    }
     throw error;
   }
 }
@@ -106,19 +161,23 @@ export const getQueryFn: <T>(options: {
       const url = queryKey[0] as string;
 
       if (token) {
-        headers["Authorization"] = `Bearer ${token}`;
-        console.log(`Query request to ${url} with token: ${token.substring(0, 10)}...`);
+        // Send token in Authorization header, but only if it's valid
+        if (isValidToken(token)) {
+          headers["Authorization"] = `Bearer ${token}`;
+        } else {
+          // Clear invalid token from storage
+          setAuthToken(null);
+        }
       } else {
-        console.warn(`Query request to ${url} without authentication token`);
       }
 
+      // Always include credentials for cookie-based auth
       const res = await fetch(url, {
-        credentials: "include",
+        credentials: "include", // This enables cookie-based authentication
         headers,
       });
 
       if (res.status === 401) {
-        console.error(`Authentication failed for query to ${url} - clearing token`);
         setAuthToken(null);
         
         if (unauthorizedBehavior === "returnNull") {
@@ -131,7 +190,9 @@ export const getQueryFn: <T>(options: {
       await throwIfResNotOk(res);
       return await res.json();
     } catch (error) {
-      console.error(`Query function error:`, error);
+      if (error instanceof TypeError) {
+      } else {
+      }
       throw error;
     }
   };
@@ -152,7 +213,6 @@ export const queryClient = new QueryClient({
       },
       onError: (error: any) => {
         if (error?.message?.includes('401')) {
-          console.error('Authentication error in query:', error.message);
           setAuthToken(null);
         }
       }
@@ -167,7 +227,6 @@ export const queryClient = new QueryClient({
       },
       onError: (error: any) => {
         if (error?.message?.includes('401')) {
-          console.error('Authentication error in mutation:', error.message);
           setAuthToken(null);
         }
       }
@@ -176,17 +235,18 @@ export const queryClient = new QueryClient({
 });
 
 // Add a global error handler for unhandled errors
+if (typeof window === 'undefined') {
+}else{
 window.addEventListener('unhandledrejection', (event) => {
   const error = event.reason;
   if (error?.message?.includes('401')) {
-    console.error('Unhandled authentication error:', error.message);
     // Clear token and potentially redirect to login
     setAuthToken(null);
   }
 });
+}
 
 // Export a function to reset the query cache when logging out
 export function resetQueryCache() {
-  console.log('Resetting query cache');
   queryClient.clear();
 }
