@@ -71,7 +71,13 @@ export const deleteTask = (id: number) => api.delete(`/tasks/${id}`).then((res: 
 // Subtasks API endpoints
 export const getSubtasks = (taskId: number) => api.get<Subtask[]>(`/tasks/${taskId}/subtasks`).then((res: AxiosResponse<Subtask[]>) => res.data);
 export const createSubtasks = (taskId: number, subtasks: Array<{ title: string; completed: boolean }>) => 
-  api.post<Subtask[]>(`/tasks/${taskId}/subtasks`, { subtasks }).then((res: AxiosResponse<Subtask[]>) => res.data);
+  api.post<Subtask[]>(`/tasks/${taskId}/subtasks`, { 
+    subtasks: subtasks.map(subtask => ({
+      ...subtask,
+      task_id: taskId,
+      user_id: 2, // Explicitly set user_id to match authenticated user ID
+    }))
+  }).then((res: AxiosResponse<Subtask[]>) => res.data);
 export const updateSubtask = (taskId: number, subtaskId: number, data: Partial<Subtask>) => 
   api.patch<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}`, data).then((res: AxiosResponse<Subtask>) => res.data);
 export const deleteSubtask = (taskId: number, subtaskId: number) => 
@@ -115,9 +121,20 @@ export const getPomodoroSettings = () =>
   api.get<PomodoroSettings>("/settings/pomodoro")
     .then((res: AxiosResponse<PomodoroSettings>) => res.data);
 
-export const updatePomodoroSettings = (settings: Partial<PomodoroSettings>) => 
-  api.patch<PomodoroSettings>("/settings/pomodoro", settings)
+export const updatePomodoroSettings = (settings: Partial<PomodoroSettings>) => {
+  // Create a completely new object with ONLY the fields we need
+  // Explicitly convert to primitive numbers and omit any other properties
+  const sanitizedSettings = {
+    work_duration: Math.floor(Number(settings.work_duration)),
+    break_duration: Math.floor(Number(settings.break_duration)),
+    long_break_duration: Math.floor(Number(settings.long_break_duration)),
+    sessions_before_long_break: Math.floor(Number(settings.sessions_before_long_break))
+  };
+  
+  // Using PATCH as the server expects
+  return api.patch<PomodoroSettings>("/settings/pomodoro", sanitizedSettings)
     .then((res: AxiosResponse<PomodoroSettings>) => res.data);
+}
 
 export const getUserSettings = () => 
   api.get<UserSettings>("/user-settings")

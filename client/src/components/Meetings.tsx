@@ -50,9 +50,13 @@ export default function Meetings() {
     mutationFn: async (data: any) => {
       const meeting = {
         ...data,
-        startTime: new Date(data.startTime).toISOString(),
-        endTime: new Date(data.endTime).toISOString(),
+        start_time: Math.floor(new Date(data.startTime).getTime() / 1000), // Convert to Unix timestamp in seconds
+        end_time: Math.floor(new Date(data.endTime).getTime() / 1000), // Convert to Unix timestamp in seconds
       };
+      // Remove the old format fields
+      delete meeting.startTime;
+      delete meeting.endTime;
+      
       const res = await apiRequest("POST", "/api/meetings", meeting);
       return res.json();
     },
@@ -189,18 +193,20 @@ export default function Meetings() {
                     {meeting.description}
                   </p>
                   <p className="text-sm text-muted-foreground">
-                    {format(new Date(meeting.startTime), "PPP h:mm a")} -{" "}
-                    {format(new Date(meeting.endTime), "h:mm a")}
+                    {format(new Date(meeting.start_time * 1000), "PPP h:mm a")} -{" "}
+                    {format(new Date(meeting.end_time * 1000), "h:mm a")}
                   </p>
-                  <a
-                    href={meeting.meetingLink}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center text-sm text-primary hover:underline mt-2"
-                  >
-                    <Video className="h-4 w-4 mr-1" />
-                    Join Meeting
-                  </a>
+                  {meeting.location && (
+                    <a
+                      href={meeting.location}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center text-sm text-primary hover:underline mt-2"
+                    >
+                      <Video className="h-4 w-4 mr-1" />
+                      Join Meeting
+                    </a>
+                  )}
                 </div>
                 <Button
                   variant="ghost"

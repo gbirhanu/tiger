@@ -866,8 +866,10 @@ router.post("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Respon
       task_id: taskId,
       position: index,
       completed: Boolean(subtask.completed),
+      user_id: req.userId, // Add user_id from the auth middleware
     }));
 
+    console.log("Creating subtasks with values:", subtaskValues);
     const savedSubtasks = await db.insert(subtasks).values(subtaskValues).returning();
     res.json(savedSubtasks);
 

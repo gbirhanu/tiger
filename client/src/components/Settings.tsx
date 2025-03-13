@@ -41,11 +41,12 @@ export default function Settings() {
     resolver: zodResolver(insertUserSettingsSchema),
     defaultValues: {
       timezone: "UTC",
-      workStartHour: 9,
-      workEndHour: 17,
+      work_start_hour: 9,
+      work_end_hour: 17,
       theme: "system",
-      defaultCalendarView: "month",
-      showNotifications: true,
+      default_calendar_view: "month",
+      show_notifications: true,
+      notifications_enabled: true,
     },
   });
 
@@ -91,7 +92,14 @@ export default function Settings() {
             <form
               onSubmit={form.handleSubmit((data) => {
                 console.log('Submitting settings:', data);
-                updateSettings.mutate(data);
+                // Ensure boolean values are handled correctly for SQLite
+                const formattedData = {
+                  ...data,
+                  // SQLite will handle conversion of boolean to integer (1/0)
+                  show_notifications: Boolean(data.show_notifications),
+                  notifications_enabled: Boolean(data.notifications_enabled)
+                };
+                updateSettings.mutate(formattedData);
               })}
               className="space-y-6"
             >
@@ -103,7 +111,7 @@ export default function Settings() {
                     <FormLabel>Theme</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      value={field.value}
+                      value={field.value as string}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -131,7 +139,7 @@ export default function Settings() {
                     <FormLabel>Timezone</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      value={field.value}
+                      value={field.value as string}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -156,7 +164,7 @@ export default function Settings() {
               <div className="grid gap-4 md:grid-cols-2">
                 <FormField
                   control={form.control}
-                  name="workStartHour"
+                  name="work_start_hour"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Work Start Hour</FormLabel>
@@ -165,9 +173,9 @@ export default function Settings() {
                           type="number"
                           min={0}
                           max={23}
-                          {...field}
+                          value={typeof field.value === 'number' ? field.value : 0}
                           onChange={(e) =>
-                            field.onChange(parseInt(e.target.value))
+                            field.onChange(parseInt(e.target.value, 10) || 0)
                           }
                         />
                       </FormControl>
@@ -180,7 +188,7 @@ export default function Settings() {
 
                 <FormField
                   control={form.control}
-                  name="workEndHour"
+                  name="work_end_hour"
                   render={({ field }) => (
                     <FormItem>
                       <FormLabel>Work End Hour</FormLabel>
@@ -189,9 +197,9 @@ export default function Settings() {
                           type="number"
                           min={0}
                           max={23}
-                          {...field}
+                          value={typeof field.value === 'number' ? field.value : 0}
                           onChange={(e) =>
-                            field.onChange(parseInt(e.target.value))
+                            field.onChange(parseInt(e.target.value, 10) || 0)
                           }
                         />
                       </FormControl>
@@ -205,13 +213,13 @@ export default function Settings() {
 
               <FormField
                 control={form.control}
-                name="defaultCalendarView"
+                name="default_calendar_view"
                 render={({ field }) => (
                   <FormItem>
                     <FormLabel>Default Calendar View</FormLabel>
                     <Select
                       onValueChange={field.onChange}
-                      value={field.value}
+                      value={field.value as string}
                     >
                       <FormControl>
                         <SelectTrigger>
@@ -233,7 +241,7 @@ export default function Settings() {
 
               <FormField
                 control={form.control}
-                name="showNotifications"
+                name="show_notifications"
                 render={({ field }) => (
                   <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
                     <div className="space-y-0.5">
@@ -246,7 +254,30 @@ export default function Settings() {
                     </div>
                     <FormControl>
                       <Switch
-                        checked={field.value}
+                        checked={!!field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="notifications_enabled"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-base">
+                        Notifications Enabled
+                      </FormLabel>
+                      <FormDescription>
+                        Enable or disable notifications
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <Switch
+                        checked={!!field.value}
                         onCheckedChange={field.onChange}
                       />
                     </FormControl>

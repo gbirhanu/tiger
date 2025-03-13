@@ -26,7 +26,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { queryClient } from '@/lib/queryClient';
-import { Loader2, Pencil, Trash2 } from 'lucide-react';
+import { Loader2, Pencil, Trash2, Plus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
 
@@ -95,8 +95,8 @@ export default function Calendar() {
         description: taskData.description || null,
         priority: taskData.priority,
         completed: false,
-        due_date: taskData.due_date?.toISOString(),
-        all_day: taskData.all_day,  // Send as boolean
+        due_date: taskData.due_date ? Math.floor(taskData.due_date.getTime() / 1000) : null,
+        all_day: taskData.all_day,
       });
       return res.json();
     },
@@ -116,10 +116,12 @@ export default function Calendar() {
       });
     },
     onError: (error: Error) => {
+      console.error('Calendar error:', error);
       toast({
         variant: 'destructive',
-        title: 'Failed to create task',
-        description: error.message || 'An error occurred while creating the task.',
+        title: 'Failed to complete action',
+        description: error.message || 'An error occurred. Please try again.',
+        className: 'dark:bg-red-950 dark:text-white dark:border-red-800',
       });
     },
   });
@@ -140,10 +142,12 @@ export default function Calendar() {
       });
     },
     onError: (error: Error) => {
+      console.error('Calendar error:', error);
       toast({
         variant: 'destructive',
-        title: 'Failed to update task',
-        description: error.message || 'An error occurred while updating the task.',
+        title: 'Failed to complete action',
+        description: error.message || 'An error occurred. Please try again.',
+        className: 'dark:bg-red-950 dark:text-white dark:border-red-800',
       });
     },
   });
@@ -162,10 +166,12 @@ export default function Calendar() {
       });
     },
     onError: (error: Error) => {
+      console.error('Calendar error:', error);
       toast({
         variant: 'destructive',
-        title: 'Failed to delete task',
-        description: error.message || 'An error occurred while deleting the task.',
+        title: 'Failed to complete action',
+        description: error.message || 'An error occurred. Please try again.',
+        className: 'dark:bg-red-950 dark:text-white dark:border-red-800',
       });
     },
   });
@@ -174,11 +180,12 @@ export default function Calendar() {
   const handleEventDrop = (info: any) => {
     const task = tasks.find(t => t.id.toString() === info.event.id);
     if (task) {
-      updateTask.mutate({
-        id: task.id,
-        due_date: info.event.start.toISOString(),
+      const updateData = {
+        id: Number(info.event.id),
+        due_date: Math.floor(info.event.start!.getTime() / 1000), // Convert to Unix timestamp in seconds
         all_day: info.event.allDay,  // Send as boolean
-      });
+      };
+      updateTask.mutate(updateData);
     }
   };
 
@@ -186,33 +193,69 @@ export default function Calendar() {
   useEffect(() => {
     if (!tasks) return;
 
-    const calendarEvents = tasks.map((task) => {
-      // Set colors based on priority and completion status
-      let backgroundColor = '#3B82F6'; // Default blue
-      let borderColor = '#2563EB';
-
-      if (task.completed) {
-        backgroundColor = '#10B981'; // Green for completed
-        borderColor = '#059669';
-      } else if (task.priority === 'high') {
-        backgroundColor = '#EF4444'; // Red for high priority
-        borderColor = '#DC2626';
+    const calendarEvents = tasks.map(task => {
+      // Determine color based on priority
+      let backgroundColor, borderColor;
+      if (task.priority === 'high') {
+        backgroundColor = '#DC2626'; // Bright red for high priority
+        borderColor = '#B91C1C';
       } else if (task.priority === 'medium') {
-        backgroundColor = '#F59E0B'; // Yellow for medium priority
+        backgroundColor = '#F59E0B'; // Amber for medium priority
         borderColor = '#D97706';
+      } else {
+        backgroundColor = '#10B981'; // Emerald for low priority
+        borderColor = '#059669';
       }
 
+      // If the task is completed
+      if (task.completed) {
+        backgroundColor = '#6B7280'; // Gray for completed tasks
+        borderColor = '#4B5563';
+      }
+      
+      // Check if task is overdue
+      let isOverdue = false;
+      if (!task.completed && task.due_date) {
+        const dueDate = typeof task.due_date === 'number' 
+          ? new Date(task.due_date * 1000) 
+          : new Date(task.due_date as string);
+          
+        isOverdue = dueDate < new Date();
+      }
+      
       // If the task is overdue and not completed
-      if (!task.completed && task.due_date && new Date(task.due_date) < new Date()) {
+      if (isOverdue) {
         backgroundColor = '#991B1B'; // Dark red for overdue
         borderColor = '#7F1D1D';
+      }
+
+      // Safely parse the date
+      let startDate = '';
+      if (task.due_date) {
+        try {
+          // Handle different types of due_date values
+          if (typeof task.due_date === 'number') {
+            // If it's a timestamp in seconds (from SQLite)
+            startDate = new Date(task.due_date * 1000).toISOString();
+          } else if (typeof task.due_date === 'string') {
+            // If it's a string date representation
+            startDate = new Date(task.due_date).toISOString();
+          } else if (typeof task.due_date === 'object' && task.due_date !== null && 'toISOString' in task.due_date) {
+            // If it's already a Date object somehow
+            startDate = (task.due_date as any).toISOString();
+          }
+        } catch (error) {
+          console.error(`Error parsing date for task ${task.id}:`, error);
+          // Fallback to empty string if date can't be parsed
+          startDate = '';
+        }
       }
 
       return {
         id: task.id.toString(),
         title: task.title,
-        start: task.due_date ? new Date(task.due_date).toISOString() : '',
-        allDay: task.all_day,  // SQLite boolean mode will handle this
+        start: startDate,
+        allDay: task.all_day,
         backgroundColor,
         borderColor,
         textColor: '#ffffff',
@@ -232,11 +275,33 @@ export default function Calendar() {
     const task = tasks.find(t => t.id.toString() === event.id);
     if (task) {
       setSelectedTask(task);
+      
+      // Safely handle the due_date when editing
+      let dueDate = null;
+      if (task.due_date) {
+        try {
+          // If it's a timestamp in seconds (from SQLite)
+          if (typeof task.due_date === 'number') {
+            dueDate = new Date(task.due_date * 1000);
+          } else if (typeof task.due_date === 'string') {
+            // If it's a string date representation
+            dueDate = new Date(task.due_date);
+          } else {
+            // Fall back to current date if we can't parse
+            console.warn(`Unexpected due_date type for task ${task.id}`);
+            dueDate = null;
+          }
+        } catch (error) {
+          console.error(`Error parsing date for editing task ${task.id}:`, error);
+          dueDate = null;
+        }
+      }
+      
       setNewTask({
         title: task.title,
         description: task.description || '',
         priority: task.priority as 'low' | 'medium' | 'high',
-        due_date: task.due_date ? new Date(task.due_date) : null,
+        due_date: dueDate,
         all_day: task.all_day ?? true,
       });
       setShowTaskDialog(true);
@@ -294,10 +359,111 @@ export default function Calendar() {
       title: newTask.title,
       description: newTask.description || null,
       priority: newTask.priority,
-      due_date: newTask.due_date?.toISOString(),
+      due_date: newTask.due_date ? Math.floor(newTask.due_date.getTime() / 1000) : null,
       all_day: newTask.all_day,  // Send as boolean
     });
   };
+
+  // Add custom CSS for FullCalendar to fix dark mode styling
+  useEffect(() => {
+    // Create a style element
+    const styleEl = document.createElement("style");
+    styleEl.setAttribute("id", "calendar-custom-styles");
+    
+    // Define our custom styles
+    styleEl.textContent = `
+      /* Fix calendar header colors for both light and dark themes */
+      .fc-col-header-cell-cushion {
+        color: var(--fc-theme-standard-content-color, inherit) !important;
+      }
+      
+      /* Ensure proper styling for dark mode */
+      .dark .fc-col-header {
+        background-color: hsl(var(--muted));
+      }
+      
+      .dark .fc-col-header-cell-cushion {
+        color: hsl(var(--foreground)) !important;
+      }
+      
+      .dark .fc-daygrid-day-number {
+        color: hsl(var(--foreground));
+      }
+      
+      .dark .fc-daygrid-day.fc-day-today {
+        background-color: hsl(var(--primary) / 0.2) !important;
+      }
+      
+      /* Fix button contrast in dark mode */
+      .dark .fc-button-primary {
+        background-color: hsl(var(--primary)) !important;
+        border-color: hsl(var(--primary)) !important;
+        color: hsl(var(--primary-foreground)) !important;
+      }
+      
+      .dark .fc-button-primary:not(.fc-button-active):hover {
+        background-color: hsl(var(--primary) / 0.9) !important;
+        color: hsl(var(--primary-foreground)) !important;
+      }
+      
+      .dark .fc-button-primary.fc-button-active {
+        background-color: hsl(var(--secondary)) !important;
+        border-color: hsl(var(--secondary)) !important;
+        color: hsl(var(--secondary-foreground)) !important;
+        font-weight: 600;
+      }
+      
+      /* Improve active buttons in light mode too */
+      .fc-button-primary.fc-button-active {
+        font-weight: 600;
+      }
+      
+      /* Style navigation buttons better in both modes */
+      .fc-prev-button, .fc-next-button {
+        transition: transform 0.2s ease;
+      }
+      
+      .fc-prev-button:hover, .fc-next-button:hover {
+        transform: scale(1.05);
+      }
+      
+      /* Make sure event text is readable */
+      .fc-event-title, .fc-event-time {
+        color: white !important;
+        font-weight: 500;
+      }
+      
+      /* Make the calendar header more prominent */
+      .fc .fc-toolbar-title {
+        font-size: 1.5rem;
+        font-weight: 600;
+      }
+      
+      /* Improve the appearance of today's date */
+      .fc-day-today .fc-daygrid-day-number {
+        background-color: hsl(var(--primary));
+        color: hsl(var(--primary-foreground)) !important;
+        border-radius: 9999px;
+        width: 1.75rem;
+        height: 1.75rem;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin: 0.25rem;
+      }
+    `;
+    
+    // Add the style element to the document
+    document.head.appendChild(styleEl);
+    
+    // Cleanup function to remove the style element when component unmounts
+    return () => {
+      const existingStyle = document.getElementById("calendar-custom-styles");
+      if (existingStyle) {
+        existingStyle.remove();
+      }
+    };
+  }, []); // Empty dependency array means this runs once when component mounts
 
   if (isLoading) {
     return (
@@ -308,167 +474,107 @@ export default function Calendar() {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center justify-between mb-6">
-        <h2 className="text-2xl font-bold">Calendar</h2>
-        <div className="text-sm text-muted-foreground">
-          Click on a date to add a new task
-        </div>
+    <div className="flex flex-col space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-2xl font-bold tracking-tight">Calendar</h2>
+        <Button 
+          onClick={() => {
+            setNewTask({
+              title: '',
+              description: '',
+              priority: 'medium',
+              due_date: new Date(),
+              all_day: true,
+            });
+            setShowNewTaskDialog(true);
+          }}
+          className="bg-primary hover:bg-primary/90 text-primary-foreground"
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Add Task
+        </Button>
       </div>
 
-      <Card className="border-t-4 border-t-primary shadow-md">
-        <CardContent className="p-6">
-          <style>
-            {`
-              .fc {
-                --fc-border-color: hsl(var(--border));
-                --fc-button-bg-color: hsl(var(--primary));
-                --fc-button-border-color: hsl(var(--primary));
-                --fc-button-hover-bg-color: hsl(var(--primary));
-                --fc-button-hover-border-color: hsl(var(--primary));
-                --fc-button-active-bg-color: hsl(var(--primary));
-                --fc-button-active-border-color: hsl(var(--primary));
-                --fc-event-border-color: transparent;
-                --fc-today-bg-color: hsl(var(--accent) / 0.1);
-                --fc-page-bg-color: transparent;
-                --fc-neutral-bg-color: hsl(var(--muted));
-                --fc-list-event-hover-bg-color: hsl(var(--accent));
-                --fc-highlight-color: hsl(var(--accent) / 0.1);
-              }
-              .fc .fc-button {
-                padding: 0.5rem 1rem;
-                font-weight: 500;
-                border-radius: 0.375rem;
-                color: white;
-              }
-              .fc .fc-toolbar-title {
-                font-size: 1.25rem;
-                font-weight: 600;
-                color: hsl(var(--foreground));
-              }
-              .fc .fc-event {
-                border-radius: 0.25rem;
-                padding: 2px 4px;
-                font-size: 0.875rem;
-              }
-              .fc .fc-day:hover {
-                background-color: hsl(var(--accent) / 0.1);
-                cursor: pointer;
-              }
+      <Card className="shadow-lg border rounded-lg overflow-hidden">
+        <CardContent className="p-0">
+          <div className="calendar-container p-2 md:p-4">
+            <style>{`
+              /* Fix for header color inconsistency */
               .fc .fc-col-header-cell {
-                padding: 8px 0;
-                background-color: hsl(var(--muted)) !important;
-              }
-              .fc .fc-col-header-cell.fc-day-sun {
-                background-color: hsl(var(--muted)) !important;
+                background-color: var(--background) !important;
               }
               .fc .fc-col-header-cell-cushion {
-                color: hsl(var(--foreground));
-                font-weight: 500;
-                padding: 4px;
+                color: var(--foreground);
+                font-weight: 600;
+                padding: 8px 4px;
               }
-              .fc .fc-daygrid-day-number {
-                color: hsl(var(--foreground));
-                padding: 8px;
+              /* Improve button styling */
+              .fc .fc-button-primary {
+                background-color: hsl(var(--primary));
+                border-color: hsl(var(--primary));
               }
+              .fc .fc-button-primary:hover {
+                background-color: hsl(var(--primary) / 0.9);
+                border-color: hsl(var(--primary) / 0.9);
+              }
+              /* Better today highlight */
               .fc .fc-day-today {
                 background-color: hsl(var(--accent) / 0.1) !important;
               }
-              .fc .fc-day-today .fc-daygrid-day-number {
-                font-weight: 600;
-              }
-              .fc .fc-button-primary:disabled {
-                background-color: hsl(var(--primary) / 0.5);
-                border-color: hsl(var(--primary) / 0.5);
-              }
-              /* Time grid specific styles */
-              .fc .fc-timegrid-slot-label {
-                color: hsl(var(--foreground));
+              /* Event styling */
+              .fc .fc-event {
+                border-radius: 4px;
+                padding: 2px 6px;
                 font-size: 0.875rem;
               }
-              .fc .fc-timegrid-axis-cushion {
-                color: hsl(var(--foreground));
-                font-size: 0.875rem;
+              /* Day cell hover effect */
+              .fc .fc-day:hover {
+                background-color: hsl(var(--muted) / 0.5);
+                cursor: pointer;
               }
-              .fc .fc-timegrid-slot-minor {
-                border-top-style: dashed;
-              }
-              .fc .fc-timegrid-now-indicator-line {
-                border-color: hsl(var(--destructive));
-              }
-              .fc .fc-timegrid-now-indicator-arrow {
-                border-color: hsl(var(--destructive));
-              }
-              .fc .fc-timegrid-col-frame {
-                background-color: transparent;
-              }
-              /* Week view specific styles */
-              .fc .fc-timegrid-col-header {
-                background-color: hsl(var(--muted));
-                padding: 8px 0;
-              }
-              .fc .fc-timegrid-col-header-cushion {
-                color: hsl(var(--foreground));
-                font-weight: 500;
-                padding: 4px;
-              }
-              /* Event styles */
-              .fc-direction-ltr .fc-daygrid-event.fc-event-end {
-                margin-right: 4px;
-              }
-              .fc-direction-ltr .fc-daygrid-event.fc-event-start {
-                margin-left: 4px;
-              }
-              /* Time slots */
-              .fc .fc-timegrid-slot {
-                height: 2.5rem;
-              }
-              .fc .fc-timegrid-slot-label-cushion {
-                color: hsl(var(--foreground));
-                font-size: 0.875rem;
-              }
-              /* Current time indicator */
-              .fc .fc-timegrid-now-indicator-container {
-                color: hsl(var(--destructive));
-              }
-            `}
-          </style>
-          <FullCalendar
-            plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-            initialView="dayGridMonth"
-            headerToolbar={{
-              left: 'prev,next today',
-              center: 'title',
-              right: 'dayGridMonth,timeGridWeek,timeGridDay',
-            }}
-            events={events}
-            eventClick={handleEventClick}
-            dateClick={handleDateClick}
-            height="auto"
-            aspectRatio={1.8}
-            editable={true}
-            selectable={true}
-            selectMirror={true}
-            dayMaxEvents={true}
-            weekends={true}
-            nowIndicator={true}
-            eventTimeFormat={{
-              hour: 'numeric',
-              minute: '2-digit',
-              meridiem: true,
-              hour12: true
-            }}
-            slotMinTime="06:00:00"
-            slotMaxTime="22:00:00"
-            eventDrop={handleEventDrop}
-            slotDuration="00:30:00"
-            allDaySlot={true}
-            slotLabelFormat={{
-              hour: 'numeric',
-              minute: '2-digit',
-              hour12: true
-            }}
-          />
+            `}</style>
+            
+            <FullCalendar
+              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
+              initialView="dayGridMonth"
+              headerToolbar={{
+                left: 'prev,next today',
+                center: 'title',
+                right: 'dayGridMonth,timeGridWeek,timeGridDay',
+              }}
+              buttonText={{
+                today: 'Today',
+                month: 'Month',
+                week: 'Week',
+                day: 'Day',
+              }}
+              events={events}
+              eventClick={handleEventClick}
+              dateClick={handleDateClick}
+              height="auto"
+              aspectRatio={1.5}
+              eventTimeFormat={{
+                hour: '2-digit',
+                minute: '2-digit',
+                meridiem: 'short',
+              }}
+              dayMaxEvents={3}
+              moreLinkClick="popover"
+              eventDisplay="block"
+              eventBackgroundColor="#3B82F6"
+              eventBorderColor="#2563EB"
+              themeSystem="standard"
+              dayHeaderClassNames="text-base font-medium py-2"
+              dayHeaderFormat={{ weekday: 'short', day: 'numeric' }}
+              slotLabelFormat={{
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: true
+              }}
+              allDayText="All day"
+              allDaySlot={true}
+            />
+          </div>
         </CardContent>
       </Card>
 

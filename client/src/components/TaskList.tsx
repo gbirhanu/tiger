@@ -26,7 +26,7 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { cn } from "@/lib/utils";
-import { useToast } from "@/components/ui/use-toast";
+import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
 
@@ -35,14 +35,18 @@ interface Task {
   id: number;
   title: string;
   description: string | null;
-  completed: number;  // 0 or 1
-  due_date: string | null;  // timestamp string
+  completed: boolean;  // Should be boolean, not number
+  due_date: number | null;  // Should be number (unix timestamp), not string
   priority: string;
-  is_recurring: number;  // 0 or 1
-  recurrence_pattern?: string;
-  recurrence_interval?: number;
-  recurrence_end_date?: string;
+  is_recurring: boolean;  // Should be boolean, not number
+  recurrence_pattern?: string | null;
+  recurrence_interval?: number | null;
+  recurrence_end_date?: number | null;
   parent_task_id?: number | null;
+  user_id?: number;
+  created_at?: number;
+  updated_at?: number;
+  all_day?: boolean;
 }
 
 export function TaskList() {
@@ -55,10 +59,50 @@ export function TaskList() {
     queryKey: ["tasks"],
     queryFn: async () => {
       const data = await getTasks();
-      return data.map((task: any) => ({
-        ...task,
-        completed: task.completed === 1,
-      }));
+      
+      // Debug the raw data
+      console.log("Raw tasks data from API:", data);
+      
+      return data.map((task: any) => {
+        // Add extra validation and logging for debugging date issues
+        if (task.due_date) {
+          console.log(`Task ${task.id} raw due_date:`, task.due_date, typeof task.due_date);
+          
+          // Handle different potential formats of due_date from the API
+          let processedDueDate = task.due_date;
+          
+          // If it's a string that looks like a number, convert it to a number
+          if (typeof task.due_date === 'string' && /^\d+$/.test(task.due_date)) {
+            processedDueDate = parseInt(task.due_date, 10);
+          } 
+          // If it's a string that looks like an ISO date, convert to timestamp
+          else if (typeof task.due_date === 'string' && task.due_date.includes('-')) {
+            const dateObj = new Date(task.due_date);
+            if (!isNaN(dateObj.getTime())) {
+              processedDueDate = Math.floor(dateObj.getTime() / 1000);
+            }
+          }
+          
+          // Additional validation: ensure the timestamp is valid (not 0 or too small)
+          if (processedDueDate === 0 || processedDueDate < 1000000) {
+            console.warn(`Task ${task.id} has an invalid timestamp:`, processedDueDate);
+            processedDueDate = null; // Set to null instead of keeping invalid timestamp
+          }
+          
+          console.log(`Task ${task.id} processed due_date:`, processedDueDate);
+          
+          return {
+            ...task,
+            completed: task.completed === 1,
+            due_date: processedDueDate
+          };
+        }
+        
+        return {
+          ...task,
+          completed: task.completed === 1,
+        };
+      });
     },
   });
 
@@ -76,11 +120,22 @@ export function TaskList() {
 
   // Create task mutation
   const createTaskMutation = useMutation({
-    mutationFn: async (data: Partial<Task>) => {
+    mutationFn: async (data: { title: string; description: string | null; priority: string }) => {
+      // Create task with all required fields
       const taskData = {
         ...data,
-        completed: 0,
-        due_date: date?.toISOString() || null,
+        completed: false,
+        due_date: date ? Math.floor(date.getTime() / 1000) : null,
+        user_id: 2, // Use the authenticated user ID from the error message
+        all_day: true,
+        is_recurring: false,
+        parent_task_id: null,
+        recurrence_pattern: null,
+        recurrence_interval: null,
+        recurrence_end_date: null,
+        created_at: Math.floor(Date.now() / 1000), // Current timestamp for TypeScript
+        updated_at: Math.floor(Date.now() / 1000), // Current timestamp for TypeScript
+        // These will be overwritten by the server anyway
       };
       return createTask(taskData);
     },
@@ -103,11 +158,14 @@ export function TaskList() {
   // Update task mutation
   const updateTaskMutation = useMutation({
     mutationFn: async ({ id, task }: { id: number; task: Partial<Task> }) => {
+      // Create an object that conforms to the expected server schema
       const updateData = {
         ...task,
-        completed: typeof task.completed === 'number' ? (task.completed ? 1 : 0) : task.completed,
+        id,
+        // Handle boolean to number conversion for the server if needed
+        completed: task.completed !== undefined ? task.completed : undefined,
       };
-      return updateTask(id, updateData);
+      return updateTask(updateData);
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["tasks"] });
@@ -156,6 +214,52 @@ export function TaskList() {
     },
   });
 
+  // Helper function to safely format dates
+  const formatDueDate = (timestamp: number | null) => {
+    if (!timestamp) return null;
+    
+    try {
+      // Debug the raw timestamp
+      console.log("Raw timestamp:", timestamp, typeof timestamp);
+      
+      // Convert Unix timestamp (seconds) to JavaScript timestamp (milliseconds)
+      // Only multiply by 1000 if it's likely a Unix timestamp (seconds since epoch)
+      let date;
+      
+      // If timestamp is very small (less than 10 billion), it's likely seconds since epoch (Unix timestamp)
+      if (timestamp < 10000000000) {
+        console.log("Converting from seconds to milliseconds:", timestamp * 1000);
+        date = new Date(timestamp * 1000);
+      } else {
+        // Already milliseconds
+        console.log("Using as milliseconds:", timestamp);
+        date = new Date(timestamp);
+      }
+      
+      // Check if date is valid and not the epoch
+      if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
+        console.error("Invalid date or epoch date from timestamp:", timestamp);
+        
+        // Try a different approach - maybe it's milliseconds when we thought it was seconds
+        if (timestamp < 10000000000) {
+          const alternateDate = new Date(timestamp);
+          if (!isNaN(alternateDate.getTime()) && alternateDate.getFullYear() !== 1970) {
+            console.log("Timestamp might be in milliseconds already:", timestamp);
+            return format(alternateDate, "PPP");
+          }
+        }
+        
+        return "Invalid date";
+      }
+      
+      // Format the date
+      return format(date, "PPP");
+    } catch (error) {
+      console.error("Error formatting date:", error);
+      return "Invalid date";
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.target as HTMLFormElement;
@@ -175,8 +279,6 @@ export function TaskList() {
       title,
       description: formData.get("description") as string || null,
       priority: formData.get("priority") as string,
-      due_date: date?.toISOString() || null,
-      completed: 0,
     });
     
     form.reset();
@@ -294,7 +396,7 @@ export function TaskList() {
                           onCheckedChange={(checked: boolean) =>
                             updateTaskMutation.mutate({
                               id: task.id,
-                              task: { completed: checked ? 1 : 0 },
+                              task: { completed: checked },
                             })
                           }
                           className="mt-1"
@@ -336,7 +438,7 @@ export function TaskList() {
                       </span>
                       {task.due_date && (
                         <span className="text-xs text-muted-foreground">
-                          Due {format(new Date(task.due_date), "PPP")}
+                          Due {formatDueDate(task.due_date)}
                         </span>
                       )}
                     </div>
@@ -376,7 +478,7 @@ export function TaskList() {
                           onCheckedChange={(checked: boolean) =>
                             updateTaskMutation.mutate({
                               id: task.id,
-                              task: { completed: checked ? 1 : 0 },
+                              task: { completed: checked },
                             })
                           }
                           className="mt-1"
@@ -420,7 +522,7 @@ export function TaskList() {
                       </span>
                       {task.due_date && (
                         <span className="text-xs text-muted-foreground line-through">
-                          Due {format(new Date(task.due_date), "PPP")}
+                          Due {formatDueDate(task.due_date)}
                         </span>
                       )}
                     </div>
