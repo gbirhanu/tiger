@@ -1422,7 +1422,6 @@ export default function TaskManager() {
                       form.setValue("due_date", newDate);
                     }}
                     timeFormat="12h"
-                    className="border-t border-gray-200 dark:border-gray-700"
                   />
                 )}
               </div>

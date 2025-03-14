@@ -319,7 +319,7 @@ export default function Dashboard() {
       className="h-screen items-stretch"
     >
       {/* Resizable sidebar with slightly larger initial width */}
-      <ResizablePanel defaultSize={18} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] border-r flex flex-col h-screen">
+      <ResizablePanel defaultSize={22} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] border-r flex flex-col h-screen">
         {/* App branding */}
         <div className="px-4 py-3 border-b">
           <div className="flex items-center justify-between">

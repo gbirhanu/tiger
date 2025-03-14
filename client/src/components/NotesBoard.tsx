@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
@@ -16,11 +17,13 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { getNotes, createNote as createNoteApi, updateNote as updateNoteApi, deleteNote as deleteNoteApi } from "@/lib/api";
 import { queryClient } from "@/lib/queryClient";
-import { Plus, X, GripVertical, Clipboard, Clock } from "lucide-react";
+import { Plus, X, GripVertical, StickyNote, Clock, Sparkles, Star, Heart, Pencil, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
+import { NoteCard } from "@/components/NoteCard";
+import { ColorPicker } from "@/components/ColorPicker";
 
-// Enhanced color palette with softer, more appealing colors
+// Enhanced color palette with vibrant, pleasing colors
 const COLORS = [
   "#FCE7F3", // Pink
   "#DBEAFE", // Light Blue
@@ -28,12 +31,15 @@ const COLORS = [
   "#FEF3C7", // Light Yellow
   "#F3E8FF", // Lavender
   "#FFEDD5", // Light Orange
+  "#E0F2FE", // Sky Blue
+  "#FEE2E2", // Light Red
 ];
 
 export default function NotesBoard() {
   const { toast } = useToast();
   const [newNoteContent, setNewNoteContent] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedColor, setSelectedColor] = useState(COLORS[0]);
 
   const { data: notes, isLoading, error } = useQuery({
     queryKey: ["notes"],
@@ -57,7 +63,7 @@ export default function NotesBoard() {
       const note = {
         title: "Note", // Add required fields
         content,
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        color: selectedColor,
         position: (notes?.length || 0) + 1,
         // Convert timestamps to seconds (integer) for SQLite storage
         created_at: Math.floor(Date.now() / 1000),
@@ -132,49 +138,59 @@ export default function NotesBoard() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="flex flex-col items-center space-y-2">
-          <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary"></div>
-          <p className="text-sm text-muted-foreground">Loading notes...</p>
+        <div className="flex flex-col items-center space-y-3">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+          <p className="text-sm text-muted-foreground font-medium animate-pulse">Loading your notes...</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex justify-between items-center">
-        <div className="flex items-center space-x-2">
-          <Clipboard className="h-6 w-6 text-primary" />
-          <h2 className="text-2xl font-bold tracking-tight">Notes Board</h2>
+    <div className="space-y-8 p-6 max-w-7xl mx-auto">
+      <div className="flex justify-between items-center bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg shadow-sm border border-indigo-100">
+        <div className="flex items-center space-x-3">
+          <StickyNote className="h-8 w-8 text-indigo-500" />
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600">
+              Your Notes Board
+            </h2>
+            <p className="text-sm text-gray-500">Organize your thoughts with drag-and-drop simplicity</p>
+          </div>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-primary hover:bg-primary/90 text-primary-foreground">
+            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5">
               <Plus className="h-4 w-4 mr-2" />
               Add Note
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-md bg-white backdrop-blur-sm bg-opacity-90 rounded-xl border border-indigo-100 shadow-xl">
             <DialogHeader>
-              <DialogTitle>Create New Note</DialogTitle>
+              <DialogTitle className="text-xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600">Create New Note</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 pt-4">
               <Textarea
                 value={newNoteContent}
                 onChange={(e) => setNewNoteContent(e.target.value)}
                 placeholder="Write your note here..."
-                className="min-h-[150px] resize-none focus:ring-2 focus:ring-primary"
+                className="min-h-[150px] resize-none focus:ring-2 focus:ring-indigo-300 border-indigo-100 rounded-xl shadow-inner bg-white transition-all duration-200"
               />
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Choose a color</label>
+                <ColorPicker colors={COLORS} selectedColor={selectedColor} onChange={setSelectedColor} />
+              </div>
             </div>
             <DialogFooter className="sm:justify-end">
               <Button
                 variant="outline"
                 onClick={() => setDialogOpen(false)}
+                className="rounded-full border-indigo-200 text-gray-600 hover:bg-gray-50"
               >
                 Cancel
               </Button>
               <Button
-                className="ml-2"
+                className="ml-2 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white rounded-full"
                 onClick={() => createNoteMutation.mutate(newNoteContent)}
                 disabled={!newNoteContent || createNoteMutation.isPending}
               >
@@ -184,7 +200,10 @@ export default function NotesBoard() {
                     Saving...
                   </>
                 ) : (
-                  "Save Note"
+                  <>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Save Note
+                  </>
                 )}
               </Button>
             </DialogFooter>
@@ -201,9 +220,20 @@ export default function NotesBoard() {
               className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
             >
               {notes?.length === 0 ? (
-                <div className="col-span-full flex flex-col items-center justify-center h-64 border border-dashed rounded-lg border-muted p-8">
-                  <Clipboard className="h-10 w-10 text-muted-foreground mb-4" />
-                  <p className="text-muted-foreground text-center">You don't have any notes yet. Click "Add Note" to create one.</p>
+                <div className="col-span-full flex flex-col items-center justify-center h-72 border border-dashed rounded-xl border-indigo-200 p-8 bg-gradient-to-b from-white to-indigo-50">
+                  <div className="relative mb-6">
+                    <StickyNote className="h-16 w-16 text-indigo-200" />
+                    <Plus className="h-6 w-6 text-indigo-500 absolute -right-1 -top-1 bg-white rounded-full p-1 shadow-sm" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-indigo-700 mb-2">No notes yet</h3>
+                  <p className="text-gray-500 text-center mb-6">Click "Add Note" to create your first note and start organizing your thoughts.</p>
+                  <Button 
+                    onClick={() => setDialogOpen(true)}
+                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5 animate-pulse"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Your First Note
+                  </Button>
                 </div>
               ) : (
                 notes?.map((note, index) => (
@@ -213,49 +243,11 @@ export default function NotesBoard() {
                     index={index}
                   >
                     {(provided) => (
-                      <div
-                        ref={provided.innerRef}
-                        {...provided.draggableProps}
-                        className="group h-full"
-                      >
-                        <Card
-                          style={{ backgroundColor: note.color }}
-                          className="h-full shadow-md hover:shadow-lg transition-all duration-200 transform hover:-translate-y-1 border border-opacity-10"
-                        >
-                          <div 
-                            {...provided.dragHandleProps}
-                            className="h-2 w-12 mx-auto mt-2 rounded-full bg-gray-200 opacity-50 cursor-grab"
-                          ></div>
-                          <CardContent className="p-5 relative">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              className="absolute top-1 right-1 h-6 w-6 rounded-full opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={() => deleteNoteMutation.mutate(note.id)}
-                            >
-                              <X className="h-3 w-3" />
-                            </Button>
-                            <div className="mt-1 mb-6">
-                              <p className="whitespace-pre-wrap font-medium text-gray-800">{note.content}</p>
-                            </div>
-                          </CardContent>
-                          <CardFooter className="px-5 py-2 border-t border-gray-100 bg-white bg-opacity-20">
-                            <div className="w-full flex items-center text-xs text-gray-500">
-                              <Clock className="h-3 w-3 mr-1" />
-                              <span>
-  {note.created_at
-    ? (() => {
-        const date = new Date(note.created_at);
-        return isNaN(date.getTime())
-          ? "Invalid date"
-          : format(date, "MMM d, yyyy");
-      })()
-    : "Date unknown"}
-</span>
-                            </div>
-                          </CardFooter>
-                        </Card>
-                      </div>
+                      <NoteCard
+                        note={note}
+                        provided={provided}
+                        onDelete={() => deleteNoteMutation.mutate(note.id)}
+                      />
                     )}
                   </Draggable>
                 ))
