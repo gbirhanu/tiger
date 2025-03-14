@@ -1324,243 +1324,244 @@ export default function TaskManager() {
             </h2>
           </div>
 
-          <Card>
-            <CardContent className="pt-6">
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                  <div className="flex items-start gap-4 flex-wrap">
-                    <FormField
-                      control={form.control}
-                      name="title"
-                      render={({ field }) => (
-                        <FormItem className="flex-1 min-w-[200px]">
-                          <FormControl>
-                            <Input 
-                              placeholder="Task title" 
-                              {...field} 
-                              value={field.value || ""}
-                            />
-                          </FormControl>
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="description"
-                      render={({ field }) => (
-                        <FormItem className="flex-1 min-w-[200px]">
-                          <FormControl>
-                            <Input 
-                              placeholder="Task description" 
-                              {...field} 
-                              value={field.value || ""}
-                              onChange={(e) => field.onChange(e.target.value || null)}
-                            />
-                          </FormControl>
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="priority"
-                      render={({ field }) => (
-                        <FormItem className="w-[140px]">
-                          <Select
-                            value={field.value}
-                            onValueChange={field.onChange}
-                          >
-                            <FormControl>
-                              <SelectTrigger>
-                                <SelectValue placeholder="Priority" />
-                              </SelectTrigger>
-                            </FormControl>
-                            <SelectContent>
-                              <SelectItem value="low">Low</SelectItem>
-                              <SelectItem value="medium">Medium</SelectItem>
-                              <SelectItem value="high">High</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </FormItem>
-                      )}
-                    />
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className={cn(
-                            "w-[180px] justify-start text-left font-normal",
-                            !dueDate && "text-muted-foreground"
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {dueDate ? format(dueDate, "PPP") : "Due date (optional)"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
-                        <div>
-                          <Calendar
-                            mode="single"
-                            selected={dueDate ? new Date(dueDate) : undefined}
-                            onSelect={(date) => {
-                              if (date) {
-                                const selectedTime = dueDate ? new Date(dueDate) : new Date();
-                                form.setValue("due_date", date);
-                              } else {
-                                form.setValue("due_date", null);
-                              }
-                            }}
-                            initialFocus
-                          />
-                          {dueDate && (
-                            <TimeSelect
-                              value={new Date(dueDate)}
-                              onChange={(newDate) => {
-                                form.setValue("due_date", newDate);
-                              }}
-                              timeFormat="12h"
-                            />
-                          )}
-                        </div>
-                      </PopoverContent>
-                    </Popover>
-                    <div className="flex items-center gap-2">
-                      <Switch
-                        checked={isRecurring}
-                        onCheckedChange={(checked) => {
-                          form.setValue("is_recurring", checked);
-                          if (!checked) {
-                            form.setValue("recurrence_pattern", null);
-                            form.setValue("recurrence_interval", null);
-                            form.setValue("recurrence_end_date", null);
-                          } else {
-                            form.setValue("recurrence_pattern", "weekly");
-                            form.setValue("recurrence_interval", 1);
-                          }
-                        }}
-                      >
-                        <Repeat className="h-4 w-4 mr-2" />
-                        Recurring Task
-                      </Switch>
-                    </div>
-                    <Button 
-                      type="button" 
-                      onClick={async () => {
-                        try {
-                          console.log("Add Task button clicked");
-                          const formData = form.getValues();
-                          console.log("Form data:", formData);
-                          
-                          // Create task with all required fields
-                          const taskData = {
-                            title: formData.title || "",
-                            description: formData.description || null,
-                            priority: formData.priority || "medium",
-                            completed: false,
-                            due_date: ensureUnixTimestamp(formData.due_date),
-                            all_day: true,
-                            parent_task_id: null,
-                            user_id: user.id, 
-                            is_recurring: Boolean(formData.is_recurring),
-                            recurrence_pattern: formData.is_recurring ? String(formData.recurrence_pattern || "weekly") : null,
-                            recurrence_interval: formData.is_recurring ? 1 : null,
-                            recurrence_end_date: ensureUnixTimestamp(formData.recurrence_end_date),
-                            // Remove created_at and updated_at, let the server handle these
-                          };
+          <Card className="w-full bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700">
+  <CardContent className="pt-6 px-6 pb-6">
+    <Form {...form}>
+      <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+        <div className="flex flex-wrap items-start gap-4">
+          <FormField
+            control={form.control}
+            name="title"
+            render={({ field }) => (
+              <FormItem className="flex-1 min-w-[200px]">
+                <FormControl>
+                  <Input 
+                    placeholder="Task title" 
+                    {...field} 
+                    value={field.value || ""}
+                    className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200"
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="description"
+            render={({ field }) => (
+              <FormItem className="flex-1 min-w-[200px]">
+                <FormControl>
+                  <Input 
+                    placeholder="Task description" 
+                    {...field} 
+                    value={field.value || ""}
+                    onChange={(e) => field.onChange(e.target.value || null)}
+                    className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200"
+                  />
+                </FormControl>
+              </FormItem>
+            )}
+          />
+          <FormField
+            control={form.control}
+            name="priority"
+            render={({ field }) => (
+              <FormItem className="w-[140px]">
+                <Select
+                  value={field.value}
+                  onValueChange={field.onChange}
+                >
+                  <FormControl>
+                    <SelectTrigger className="bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400">
+                      <SelectValue placeholder="Priority" />
+                    </SelectTrigger>
+                  </FormControl>
+                  <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                    <SelectItem value="low">Low</SelectItem>
+                    <SelectItem value="medium">Medium</SelectItem>
+                    <SelectItem value="high">High</SelectItem>
+                  </SelectContent>
+                </Select>
+              </FormItem>
+            )}
+          />
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                className={cn(
+                  "w-[180px] justify-start text-left font-normal bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors",
+                  !dueDate && "text-gray-500 dark:text-gray-400"
+                )}
+              >
+                <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
+                {dueDate ? format(dueDate, "PPP") : "Due date (optional)"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl">
+              <div>
+                <Calendar
+                  mode="single"
+                  selected={dueDate ? new Date(dueDate) : undefined}
+                  onSelect={(date) => {
+                    if (date) {
+                      const selectedTime = dueDate ? new Date(dueDate) : new Date();
+                      form.setValue("due_date", date);
+                    } else {
+                      form.setValue("due_date", null);
+                    }
+                  }}
+                  initialFocus
+                  className="rounded-lg border-0"
+                />
+                {dueDate && (
+                  <TimeSelect
+                    value={new Date(dueDate)}
+                    onChange={(newDate) => {
+                      form.setValue("due_date", newDate);
+                    }}
+                    timeFormat="12h"
+                    className="border-t border-gray-200 dark:border-gray-700"
+                  />
+                )}
+              </div>
+            </PopoverContent>
+          </Popover>
+          <div className="flex items-center gap-2 self-center">
+            <Switch
+              checked={isRecurring}
+              onCheckedChange={(checked) => {
+                form.setValue("is_recurring", checked);
+                if (!checked) {
+                  form.setValue("recurrence_pattern", null);
+                  form.setValue("recurrence_interval", null);
+                  form.setValue("recurrence_end_date", null);
+                } else {
+                  form.setValue("recurrence_pattern", "weekly");
+                  form.setValue("recurrence_interval", 1);
+                }
+              }}
+              className="data-[state=checked]:bg-[hsl(222.2,47.4%,11.2%)] dark:data-[state=checked]:bg-[hsl(222.2,47.4%,11.2%)]"
+            >
+              <Repeat className="h-4 w-4 mr-2 text-[hsl(222.2,47.4%,11.2%)] dark:text-[hsl(222.2,47.4%,11.2%)]" />
+              Recurring Task
+            </Switch>
+          </div>
+          <Button 
+            type="button" 
+            onClick={async () => {
+              try {
+                console.log("Add Task button clicked");
+                const formData = form.getValues();
+                console.log("Form data:", formData);
+                
+                const taskData = {
+                  title: formData.title || "",
+                  description: formData.description || null,
+                  priority: formData.priority || "medium",
+                  completed: false,
+                  due_date: ensureUnixTimestamp(formData.due_date),
+                  all_day: true,
+                  parent_task_id: null,
+                  user_id: user.id,
+                  is_recurring: Boolean(formData.is_recurring),
+                  recurrence_pattern: formData.is_recurring ? String(formData.recurrence_pattern || "weekly") : null,
+                  recurrence_interval: formData.is_recurring ? 1 : null,
+                  recurrence_end_date: ensureUnixTimestamp(formData.recurrence_end_date),
+                };
 
-                          // Log what's being sent to the API
-                          console.log('Sending task data to API:', JSON.stringify(taskData));
-
-                          // Use the mutation with type assertion to bypass the type error
-                          await createTaskMutation.mutateAsync(taskData as any);
-                          
-                          // Additional UI cleanup
-                          setShowAddTask(false);
-                        } catch (error) {
-                          console.error('Submit error:', error);
-                          toast({
-                            variant: "destructive",
-                            title: "Error creating task",
-                            description: error instanceof Error ? error.message : "An unknown error occurred",
-                          });
-                        }
-                      }}
-                      className="min-w-[100px]"
+                console.log('Sending task data to API:', JSON.stringify(taskData));
+                await createTaskMutation.mutateAsync(taskData as any);
+                
+                setShowAddTask(false);
+              } catch (error) {
+                console.error('Submit error:', error);
+                toast({
+                  variant: "destructive",
+                  title: "Error creating task",
+                  description: error instanceof Error ? error.message : "An unknown error occurred",
+                });
+              }
+            }}
+            className="min-w-[100px] bg-[hsl(222.2,47.4%,11.2%)] dark:bg-[hsl(222.2,47.4%,11.2%)] text-white hover:bg-[hsl(222.2,47.4%,15%)] dark:hover:bg-[hsl(222.2,47.4%,15%)] rounded-lg transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2"
+          >
+            <Plus className="h-4 w-4" />
+            Add Task
+          </Button>
+        </div>
+        {isRecurring && (
+          <div className="mt-6 p-4 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900/50 transition-all duration-200">
+            <div className="mb-3 text-sm text-gray-600 dark:text-gray-400">
+              Configure how often this task should repeat
+            </div>
+            <div className="flex flex-wrap gap-4">
+              <div className="flex-1 min-w-[200px]">
+                <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
+                  Repeat Every
+                </label>
+                <div className="flex gap-2">
+                  <Input
+                    type="number"
+                    min="1"
+                    placeholder="1"
+                    value={recurrenceInterval || ""}
+                    onChange={(e) => form.setValue("recurrence_interval", parseInt(e.target.value) || 1)}
+                    className="w-[80px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400"
+                  />
+                  <Select
+                    value={recurrencePattern || ""}
+                    onValueChange={(value) => form.setValue("recurrence_pattern", value as "daily" | "weekly" | "monthly" | "yearly" | null)}
+                  >
+                    <SelectTrigger className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400">
+                      <SelectValue placeholder="Select period" />
+                    </SelectTrigger>
+                    <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                      <SelectItem value="daily">Day(s)</SelectItem>
+                      <SelectItem value="weekly">Week(s)</SelectItem>
+                      <SelectItem value="monthly">Month(s)</SelectItem>
+                      <SelectItem value="yearly">Year(s)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <div className="flex-1 min-w-[200px]">
+                <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
+                  Ends (Optional)
+                </label>
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      className={cn(
+                        "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700",
+                        !recurrenceEndDate && "text-gray-500 dark:text-gray-400"
+                      )}
                     >
-                      Add Task
+                      <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
+                      {recurrenceEndDate
+                        ? format(recurrenceEndDate, "PPP")
+                        : "Select end date"}
                     </Button>
-                  </div>
-                  {isRecurring && (
-                    <div className="mt-4 p-4 border rounded-lg bg-accent/5">
-                      <div className="mb-3 text-sm text-muted-foreground">
-                        Configure how often this task should repeat
-                      </div>
-                      <div className="flex flex-wrap gap-4">
-                        <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm font-medium mb-1.5 block">
-                            Repeat Every
-                          </label>
-                          <div className="flex gap-2">
-                            <Input
-                              type="number"
-                              min="1"
-                              placeholder="1"
-                              value={recurrenceInterval || ""}
-                              onChange={(e) => form.setValue("recurrence_interval", parseInt(e.target.value) || 1)}
-                              className="w-[80px]"
-                            />
-                            <Select
-                              value={recurrencePattern || ""}
-                              onValueChange={(value) => form.setValue("recurrence_pattern", value as "daily" | "weekly" | "monthly" | "yearly" | null)}
-                            >
-                              <SelectTrigger className="flex-1">
-                                <SelectValue placeholder="Select period" />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="daily">Day(s)</SelectItem>
-                                <SelectItem value="weekly">Week(s)</SelectItem>
-                                <SelectItem value="monthly">Month(s)</SelectItem>
-                                <SelectItem value="yearly">Year(s)</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                        <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm font-medium mb-1.5 block">
-                            Ends (Optional)
-                          </label>
-                          <Popover>
-                            <PopoverTrigger asChild>
-                              <Button
-                                variant="outline"
-                                className={cn(
-                                  "w-full justify-start text-left font-normal",
-                                  !recurrenceEndDate && "text-muted-foreground"
-                                )}
-                              >
-                                <CalendarIcon className="mr-2 h-4 w-4" />
-                                {recurrenceEndDate
-                                  ? format(recurrenceEndDate, "PPP")
-                                  : "Select end date"}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0" align="start">
-                              <Calendar
-                                mode="single"
-                                selected={recurrenceEndDate ? recurrenceEndDate : undefined}
-                                onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
-                                initialFocus
-                              />
-                            </PopoverContent>
-                          </Popover>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </form>
-              </Form>
-            </CardContent>
-          </Card>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl">
+                    <Calendar
+                      mode="single"
+                      selected={recurrenceEndDate ? recurrenceEndDate : undefined}
+                      onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
+                      initialFocus
+                      className="rounded-lg border-0"
+                    />
+                  </PopoverContent>
+                </Popover>
+              </div>
+            </div>
+          </div>
+        )}
+      </form>
+    </Form>
+  </CardContent>
+</Card>
 
           <div className="flex gap-4 items-center flex-wrap">
             <div className="relative flex-1 min-w-[200px]">
