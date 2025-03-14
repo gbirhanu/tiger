@@ -23,9 +23,9 @@ const taskSchema = z.object({
   description: z.string().nullable(),
   priority: z.enum(["low", "medium", "high"]),
   completed: z.boolean(),
-  due_date: z.coerce.date().nullable(),
+  due_date: z.number().nullable(),
   all_day: z.boolean(),
-  recurrence_end_date: z.coerce.date().nullable(),
+  recurrence_end_date: z.number().nullable(),
   recurrence_pattern: z.enum(["daily", "weekly", "monthly", "yearly"]).nullable(),
   recurrence_interval: z.number().nullable(),
   is_recurring: z.boolean(),
@@ -99,11 +99,11 @@ router.post("/generate-subtasks", async (req: Request, res: Response) => {
 router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
   try {
     // Get all tasks for the current user
+    
     const allTasks = await db
       .select()
       .from(tasks)
       .where(eq(tasks.user_id, req.userId!));
-    
     // Get all tasks that have subtasks and their completion counts
     const tasksWithSubtasks = await db
       .select({
@@ -127,9 +127,6 @@ router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
     
     // Map the tasks to include the has_subtasks property and handle dates
     const tasksWithSubtasksInfo = allTasks.map(task => {
-      const due_date = task.due_date ? new Date(task.due_date) : null;
-      const recurrence_end_date = task.recurrence_end_date ? new Date(task.recurrence_end_date) : null;
-
       const subtaskInfo = subtasksMap.get(task.id) || { 
         has_subtasks: false,
         total_subtasks: 0,
@@ -138,8 +135,8 @@ router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
 
       return {
         ...task,
-        due_date,
-        recurrence_end_date,
+        due_date: task.due_date ? Number(task.due_date) : null,
+        recurrence_end_date: task.recurrence_end_date ? Number(task.recurrence_end_date) : null,
         ...subtaskInfo,
       };
     });
@@ -195,22 +192,28 @@ router.post("/tasks", requireAuth, async (req: Request, res: Response) => {
     // Log incoming data for debugging
     console.log("Received task data:", JSON.stringify(req.body));
     
-    // Extract and sanitize all task fields explicitly to ensure proper types
-    const taskValues = {
-      title: req.body.title || "",
-      description: req.body.description || null,
-      priority: req.body.priority || "medium",
-      // Boolean fields are stored as integers in SQLite (0 or 1)
-      completed: req.body.completed === true ? 1 : 0,
-      due_date: req.body.due_date ? Number(req.body.due_date) : null,
-      all_day: req.body.all_day === true ? 1 : 0,
-      parent_task_id: req.body.parent_task_id ? Number(req.body.parent_task_id) : null,
+    // Validate and parse the task data
+    const result = taskSchema.safeParse({
+      ...req.body,
       user_id: req.userId!,
-      is_recurring: req.body.is_recurring === true ? 1 : 0,
-      recurrence_pattern: req.body.recurrence_pattern || null,
-      recurrence_interval: req.body.recurrence_interval ? Number(req.body.recurrence_interval) : null,
-      recurrence_end_date: req.body.recurrence_end_date ? Number(req.body.recurrence_end_date) : null,
-      // Let SQLite handle timestamps via the default values
+      // Ensure timestamps are in Unix format (seconds)
+      due_date: req.body.due_date ? Math.floor(Number(req.body.due_date)) : null,
+      recurrence_end_date: req.body.recurrence_end_date ? Math.floor(Number(req.body.recurrence_end_date)) : null
+    });
+
+    if (!result.success) {
+      return res.status(400).json({ 
+        error: "Invalid task data", 
+        details: result.error.errors 
+      });
+    }
+
+    // Convert boolean values to SQLite integers and prepare task values
+    const taskValues = {
+      ...result.data,
+      completed: result.data.completed ? 1 : 0,
+      all_day: result.data.all_day ? 1 : 0,
+      is_recurring: result.data.is_recurring ? 1 : 0
     };
     
     console.log("Sanitized task values:", JSON.stringify(taskValues));
@@ -239,16 +242,16 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
     
     // Only include properties that are explicitly provided
     if ('completed' in req.body) {
-      updateData.completed = req.body.completed === true ? 1 : 0;
+      updateData.completed = Boolean(req.body.completed);
     }
     if ('title' in req.body) updateData.title = req.body.title;
     if ('description' in req.body) updateData.description = req.body.description;
     if ('priority' in req.body) updateData.priority = req.body.priority;
     if ('due_date' in req.body) {
-      updateData.due_date = req.body.due_date ? Math.floor(new Date(req.body.due_date).getTime() / 1000) : null;
+      updateData.due_date = req.body.due_date ? Math.floor(Number(req.body.due_date)) : null;
     }
     if ('is_recurring' in req.body) {
-      updateData.is_recurring = req.body.is_recurring === true ? 1 : 0;
+      updateData.is_recurring = Boolean(req.body.is_recurring);
       // If turning off recurring, clear related fields
       if (!req.body.is_recurring) {
         updateData.recurrence_pattern = null;
@@ -263,8 +266,8 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
       updateData.recurrence_interval = req.body.is_recurring === true ? req.body.recurrence_interval : null;
     }
     if ('recurrence_end_date' in req.body) {
-      updateData.recurrence_end_date = req.body.is_recurring === true ? 
-        (req.body.recurrence_end_date ? Math.floor(new Date(req.body.recurrence_end_date).getTime() / 1000) : null) : 
+      updateData.recurrence_end_date = req.body.is_recurring === true && req.body.recurrence_end_date ? 
+        Math.floor(Number(req.body.recurrence_end_date)) : 
         null;
     }
 
@@ -351,7 +354,7 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
     if ('description' in req.body) updateData.description = req.body.description;
     if ('priority' in req.body) updateData.priority = req.body.priority;
     if ('due_date' in req.body) {
-      updateData.due_date = req.body.due_date ? Math.floor(new Date(req.body.due_date).getTime() / 1000) : null;
+      updateData.due_date = req.body.due_date ? Math.floor(Number(req.body.due_date)) : null;
     }
     if ('is_recurring' in req.body) {
       updateData.is_recurring = req.body.is_recurring === true ? 1 : 0;
@@ -369,8 +372,8 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
       updateData.recurrence_interval = req.body.is_recurring === true ? req.body.recurrence_interval : null;
     }
     if ('recurrence_end_date' in req.body) {
-      updateData.recurrence_end_date = req.body.is_recurring === true ? 
-        (req.body.recurrence_end_date ? Math.floor(new Date(req.body.recurrence_end_date).getTime() / 1000) : null) : 
+      updateData.recurrence_end_date = req.body.is_recurring === true && req.body.recurrence_end_date ? 
+        Math.floor(Number(req.body.recurrence_end_date)) : 
         null;
     }
 
@@ -491,8 +494,11 @@ router.post("/notes", requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    const noteData: Task = result.data;
-    const newNote = await db.insert(notes).values(noteData).returning();
+const noteData = result.data;
+    const newNote = await db.insert(notes).values({
+      ...noteData,
+      user_id: req.userId!
+    }).returning();
     res.json(newNote[0]);
   } catch (error) {
     console.error("Error creating note:", error);
@@ -692,7 +698,6 @@ router.patch("/meetings/:id", requireAuth, async (req: Request, res: Response) =
     
     const updateData = {
       ...req.body,
-      updated_at: Math.floor(Date.now() / 1000)
     };
     
     const updatedMeeting = await db
@@ -920,4 +925,4 @@ router.patch("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Requ
   }
 });
 
-export default router; 
+export default router;

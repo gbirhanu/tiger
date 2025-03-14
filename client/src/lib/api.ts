@@ -59,6 +59,7 @@ export const getCurrentUser = () => api.get<{ id: number; email: string; name: s
 
 // Tasks API endpoints
 export const getTasks = () => api.get<Task[]>("/tasks").then((res: AxiosResponse<Task[]>) => res.data);
+
 export const getTask = (id: number) => api.get<Task>(`/tasks/${id}`).then((res: AxiosResponse<Task>) => res.data);
 export const createTask = (task: Omit<Task, "id">) => {
   // Allow user_id to be passed through instead of relying on the token

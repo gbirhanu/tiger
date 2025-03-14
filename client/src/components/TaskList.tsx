@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { getTasks, createTask, updateTask, deleteTask } from "../lib/api";
+import { getTasks, createTask, updateTask, deleteTask, getUserSettings } from "../lib/api";
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { format } from "date-fns";
+import { formatInTimeZone } from "date-fns-tz";
 import { Calendar as CalendarIcon, Loader2, AlertCircle, Trash2 } from "lucide-react";
 import { Calendar } from "@/components/ui/calendar";
 import {
@@ -53,6 +54,12 @@ export function TaskList() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [date, setDate] = useState<Date | null>(null);
+  
+  // Get user settings for timezone
+  const { data: userSettings } = useQuery({
+    queryKey: ['user-settings'],
+    queryFn: getUserSettings,
+  });
   
   // Fetch tasks
   const { data: tasks = [], isLoading, error } = useQuery({
@@ -219,41 +226,30 @@ export function TaskList() {
     if (!timestamp) return null;
     
     try {
-      // Debug the raw timestamp
-      console.log("Raw timestamp:", timestamp, typeof timestamp);
+      // Ensure timestamp is a valid number
+      if (typeof timestamp !== 'number' || isNaN(timestamp) || !isFinite(timestamp)) {
+        console.warn('Invalid timestamp:', timestamp);
+        return 'Invalid date';
+      }
+
+      let date: Date;
       
-      // Convert Unix timestamp (seconds) to JavaScript timestamp (milliseconds)
-      // Only multiply by 1000 if it's likely a Unix timestamp (seconds since epoch)
-      let date;
-      
-      // If timestamp is very small (less than 10 billion), it's likely seconds since epoch (Unix timestamp)
-      if (timestamp < 10000000000) {
-        console.log("Converting from seconds to milliseconds:", timestamp * 1000);
+      // Handle both Unix (seconds) and JavaScript (milliseconds) timestamps
+      if (timestamp < 10000000000) { // Unix timestamp (seconds)
         date = new Date(timestamp * 1000);
-      } else {
-        // Already milliseconds
-        console.log("Using as milliseconds:", timestamp);
+      } else { // JavaScript timestamp (milliseconds)
         date = new Date(timestamp);
       }
       
-      // Check if date is valid and not the epoch
-      if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
-        console.error("Invalid date or epoch date from timestamp:", timestamp);
-        
-        // Try a different approach - maybe it's milliseconds when we thought it was seconds
-        if (timestamp < 10000000000) {
-          const alternateDate = new Date(timestamp);
-          if (!isNaN(alternateDate.getTime()) && alternateDate.getFullYear() !== 1970) {
-            console.log("Timestamp might be in milliseconds already:", timestamp);
-            return format(alternateDate, "PPP");
-          }
-        }
-        
-        return "Invalid date";
+      // Validate the converted date
+      if (isNaN(date.getTime())) {
+        console.error("Invalid date after conversion:", date);
+        return 'Invalid date';
       }
       
-      // Format the date
-      return format(date, "PPP");
+      // Format the date using the user's timezone with fallback
+      const timezone = userSettings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+      return formatInTimeZone(date, timezone, 'PPP');
     } catch (error) {
       console.error("Error formatting date:", error);
       return "Invalid date";
@@ -441,6 +437,17 @@ export function TaskList() {
                           Due {formatDueDate(task.due_date)}
                         </span>
                       )}
+                      {task.is_recurring && (
+                        <span className="text-xs text-muted-foreground">
+                          Repeats {task.recurrence_pattern}
+                          {task.recurrence_interval && task.recurrence_interval > 1
+                            ? ` every ${task.recurrence_interval} ${task.recurrence_pattern}s`
+                            : ``}
+                          {task.recurrence_end_date
+                            ? ` until ${formatDueDate(task.recurrence_end_date)}`
+                            : ``}
+                        </span>
+                      )}
                     </div>
                   </li>
                 ))}
@@ -540,4 +547,4 @@ export function TaskList() {
       )}
     </div>
   );
-} 
+}

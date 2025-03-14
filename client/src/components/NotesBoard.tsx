@@ -243,10 +243,15 @@ export default function NotesBoard() {
                             <div className="w-full flex items-center text-xs text-gray-500">
                               <Clock className="h-3 w-3 mr-1" />
                               <span>
-                                {note.created_at
-                                  ? format(new Date(note.created_at * 1000), "MMM d, yyyy")
-                                  : "Date unknown"}
-                              </span>
+  {note.created_at
+    ? (() => {
+        const date = new Date(note.created_at);
+        return isNaN(date.getTime())
+          ? "Invalid date"
+          : format(date, "MMM d, yyyy");
+      })()
+    : "Date unknown"}
+</span>
                             </div>
                           </CardFooter>
                         </Card>
