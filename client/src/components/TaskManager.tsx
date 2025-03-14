@@ -2,14 +2,10 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { 
-  Task, TaskWithSubtasks, Subtask, NewSubtask,
-  insertTaskSchema, insertSubtaskSchema,
-  type NewTask
-} from "@shared/schema";
+import { z } from "zod";
+import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardFooter, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Form,
   FormControl,
@@ -21,20 +17,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useToast } from "@/hooks/use-toast";
-import { 
-  getTasks, 
-  createTask, 
-  updateTask, 
-  deleteTask, 
-  generateSubtasks as generateSubtasksApi, 
-  getSubtasks, 
-  createSubtasks,
-  getTasksWithSubtasks,
-  getUserSettings
-} from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
-import { CalendarIcon, Trash2, Loader2, Pencil, X, Check, Sparkles, Search, Clock, CheckCircle2, AlertCircle, Repeat, Plus, GripVertical, List, CheckSquare } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -42,14 +24,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { format, parseISO } from 'date-fns';
-import { Calendar } from "@/components/ui/calendar";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { Calendar } from "@/components/ui/calendar";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
   TooltipContent,
@@ -57,12 +43,62 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
 import {
-  Switch,
-} from "@/components/ui/switch";
-import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
-import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { useTheme } from "@/contexts/ThemeContext";
+  getTasks,
+  createTask,
+  updateTask,
+  deleteTask,
+  getSubtasks,
+  updateSubtask,
+  generateSubtasks as generateSubtasksApi,
+  createSubtasks,
+  getUserSettings,
+  getTasksWithSubtasks
+} from "@/lib/api";
+import {
+  Check,
+  Clock,
+  Trash2,
+  Edit as Pencil,
+  Plus,
+  ChevronDown,
+  ChevronUp,
+  CalendarIcon,
+  Loader2,
+  RefreshCw,
+  Filter,
+  SortAsc,
+  SortDesc,
+  MoreVertical,
+  Repeat,
+  Sparkles,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  Search,
+  List,
+  CheckSquare,
+  GripVertical
+} from "lucide-react";
+import { formatDate, getNow } from "@/lib/timezone";
+import { format } from "date-fns";
+import { Task, Subtask, NewTask } from "@shared/schema";
+import { TimeSelect } from "./TimeSelect"
+// Import the schema from shared
+const insertTaskSchema = z.object({
+  title: z.string().min(1, "Title is required"),
+  description: z.string().nullable(),
+  priority: z.enum(["low", "medium", "high"]),
+  completed: z.boolean().default(false),
+  due_date: z.date().nullable(),
+  is_recurring: z.boolean().default(false),
+  recurrence_pattern: z.enum(["daily", "weekly", "monthly", "yearly"]).nullable(),
+  recurrence_interval: z.number().nullable(),
+  recurrence_end_date: z.date().nullable(),
+});
 
 type FormData = {
   title: string;
@@ -85,63 +121,13 @@ interface SubtasksResponse {
   subtasks: string[] | string;
 }
 
-// TimeSelect component
-const TimeSelect = ({ value, onChange, timeFormat = "24h" }: { value: Date; onChange: (date: Date) => void; timeFormat?: "12h" | "24h" }) => {
-  const hours = Array.from({ length: 24 }, (_, i) => i);
-  const minutes = Array.from({ length: 12 }, (_, i) => i * 5);
-
-  const formatHour = (hour: number) => {
-    if (timeFormat === "12h") {
-      const period = hour >= 12 ? "PM" : "AM";
-      const displayHour = hour % 12 || 12;
-      return `${displayHour} ${period}`;
-    }
-    return `${hour.toString().padStart(2, '0')}:00`;
-  };
-
-  return (
-    <div className="flex gap-2">
-      <Select
-        value={value.getHours().toString()}
-        onValueChange={(hour) => {
-          const newDate = new Date(value);
-          newDate.setHours(parseInt(hour));
-          onChange(newDate);
-        }}
-      >
-        <SelectTrigger className="w-[100px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {hours.map((hour) => (
-            <SelectItem key={hour} value={hour.toString()}>
-              {formatHour(hour)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={value.getMinutes().toString()}
-        onValueChange={(minutes) => {
-          const newDate = new Date(value);
-          newDate.setMinutes(parseInt(minutes));
-          onChange(newDate);
-        }}
-      >
-        <SelectTrigger className="w-[100px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {minutes.map((minute) => (
-            <SelectItem key={minute} value={minute.toString()}>
-              {minute.toString().padStart(2, '0')}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-};
+// Define the TaskWithSubtasks interface
+interface TaskWithSubtasks extends Task {
+  subtasks: Subtask[];
+  has_subtasks?: boolean;
+  completed_subtasks?: number;
+  total_subtasks?: number;
+}
 
 // TaskProgress component
 const TaskProgress = ({ completed, total }: { completed: number; total: number }) => {
@@ -282,18 +268,44 @@ const ensureUnixTimestamp = (date: Date | null | undefined): number | null => {
   if (!date) return null;
   try {
     // Ensure it's a valid date
-    if (!(date instanceof Date) || isNaN(date.getTime())) {
+    if (Object.prototype.toString.call(date) !== '[object Date]' || isNaN(date.getTime())) {
       console.warn("Invalid date provided to ensureUnixTimestamp:", date);
       return null;
     }
     
     const timestamp = Math.floor(date.getTime() / 1000);
     console.log("Converted to Unix timestamp:", timestamp, "from", date.toISOString());
-    
     return timestamp;
   } catch (error) {
-    console.error("Error converting date to Unix timestamp:", error);
+    console.error("Error converting date to timestamp:", error);
     return null;
+  }
+};
+
+// Format a date for display with timezone support
+const formatDueDate = (timestamp: number | Date | null): string => {
+  if (!timestamp) return "";
+  
+  let date: Date;
+  
+  if (timestamp instanceof Date) {
+    date = timestamp;
+  } else if (typeof timestamp === 'number') {
+    // Handle both seconds and milliseconds timestamps
+    if (timestamp < 10000000000) {
+      date = new Date(timestamp * 1000);
+    } else {
+      date = new Date(timestamp);
+    }
+  } else {
+    return "";
+  }
+  
+  try {
+    return formatDate(date, "PPP");
+  } catch (error) {
+    console.error("Error formatting date:", error);
+    return formatDate(new Date(), "PPP");
   }
 };
 
@@ -315,9 +327,21 @@ export default function TaskManager() {
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
   const [dueDateFilter, setDueDateFilter] = useState<DueDateFilter>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('none');
-  const [currentPage, setCurrentPage] = useState(1);
+  
+  // Add state variables to control popover open states
+  const [editDatePickerOpen, setEditDatePickerOpen] = useState(false);
+  const [newTaskDatePickerOpen, setNewTaskDatePickerOpen] = useState(false);
+  const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false);
+  
+  // Remove the general pagination and use separate pagination for each task type
+  // const [currentPage, setCurrentPage] = useState(1);
   const [hasSubtasks, setHasSubtasks] = useState<Record<number, boolean>>({});
-  const tasksPerPage = 5;
+  
+  // Add separate pagination state for each task type
+  const [activePage, setActivePage] = useState(1);
+  const [overduePage, setOverduePage] = useState(1);
+  const [completedPage, setCompletedPage] = useState(1);
+  const tasksPerPage = 5; // Number of tasks to show per page
 
   const form = useForm<FormData>({
     resolver: zodResolver(insertTaskSchema),
@@ -347,7 +371,7 @@ export default function TaskManager() {
   }, [dueDate]);
 
   const { data: tasks, isLoading, isError, error: tasksError } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: [QUERY_KEYS.TASKS],
     queryFn: getTasks,
   });
 
@@ -355,15 +379,15 @@ export default function TaskManager() {
     if (tasksError) {
       console.error("Error fetching tasks:", tasksError);
       toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Failed to fetch tasks: ${tasksError instanceof Error ? tasksError.message : 'Unknown error'}`,
+        variant: "destructive", 
+        title: "Failed to fetch tasks",
+        description: tasksError instanceof Error ? tasksError.message : "An unknown error occurred"
       });
     }
   }, [tasksError, toast]);
 
   const { data: tasksWithSubtasksIds, error: subtasksError } = useQuery({
-    queryKey: ["tasks-with-subtasks"],
+    queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS],
     queryFn: getTasksWithSubtasks,
   });
 
@@ -386,35 +410,221 @@ export default function TaskManager() {
 
   const createTaskMutation = useMutation({
     mutationFn: createTask,
+    onMutate: async (newTask) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous value
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create an optimistic task with a temporary ID
+      const optimisticTask = {
+        id: -Date.now(), // Temporary negative ID
+        user_id: -1, // Will be set by the server
+        title: newTask.title,
+        description: newTask.description || null,
+        priority: newTask.priority as "low" | "medium" | "high",
+        completed: false,
+        // Convert Date to timestamp directly
+        due_date: typeof newTask.due_date === 'number' 
+          ? newTask.due_date 
+          : null,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
+        subtasks: [] as Subtask[],
+        has_subtasks: false
+      } as TaskWithSubtasks;
+      
+      // Optimistically update the tasks list
+      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], [...previousTasks, optimisticTask]);
+      
+      // Return the context
+      return { previousTasks };
+    },
+    onError: (error, _variables, context) => {
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      toast({
+        variant: "destructive",
+        title: "Error creating task",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    },
     onSuccess: () => {
       toast({
         title: "Task created",
         description: "Your task has been created successfully.",
       });
       form.reset();
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
     },
   });
 
   const updateTaskMutation = useMutation({
     mutationFn: updateTask,
-    onSuccess: () => {
+    onMutate: async (updatedTask) => {
+      console.log("Optimistically updating task:", updatedTask);
+      
+      // CRITICAL FIX: Cancel ALL related queries to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create a deep copy to avoid reference issues
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Find the task to update
+      const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === updatedTask.id);
+      
+      if (taskIndex !== -1) {
+        const oldCompleted = updatedTasks[taskIndex].completed;
+        const newCompleted = updatedTask.completed !== undefined ? updatedTask.completed === true : oldCompleted;
+        
+        // Update the task with the new data
+        updatedTasks[taskIndex] = {
+          ...updatedTasks[taskIndex],
+          ...updatedTask,
+          // Ensure completed is properly set as a boolean
+          completed: newCompleted
+        };
+        
+        console.log(`Updated task ${updatedTask.id} completed status: ${oldCompleted} -> ${newCompleted}`);
+        
+        // If the task is being completed or uncompleted, reset the pagination to page 1
+        // This ensures the task appears at the top of the appropriate section
+        if (updatedTask.completed !== undefined && oldCompleted !== newCompleted) {
+          console.log(`Task completion status changed. Resetting pagination.`);
+          if (newCompleted) {
+            // Task is being completed, reset completed tasks pagination
+            setCompletedPage(1);
+          } else {
+            // Task is being uncompleted
+            if (isOverdue(updatedTasks[taskIndex])) {
+              // Task is overdue, reset overdue tasks pagination
+              setOverduePage(1);
+            } else {
+              // Task is active, reset active tasks pagination
+              setActivePage(1);
+            }
+          }
+        }
+        
+        // CRITICAL FIX: Immediately update the UI with optimistic update
+        console.log("Immediately updating UI with optimistic task update");
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
+      // Return the context for potential rollback
+      return { previousTasks };
+    },
+    onError: (error, variables, context) => {
+      console.error("Error updating task:", error);
+      
+      // Roll back to the previous state if there was an error
+      if (context?.previousTasks) {
+        console.log("Rolling back to previous state due to error");
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
+      toast({
+        variant: "destructive",
+        title: "Error updating task",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    },
+    onSuccess: (data, variables) => {
+      console.log("Task updated successfully:", variables);
+      
+      // IMPORTANT: Do NOT invalidate the query here which would cause a refetch
+      // and override our optimistic update. Instead, update the local cache.
+      const tasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      const taskIndex = tasks.findIndex(t => t.id === variables.id);
+      
+      if (taskIndex !== -1) {
+        const updatedTasks = [...tasks];
+        updatedTasks[taskIndex] = {
+          ...updatedTasks[taskIndex],
+          // Merge server data with our local data
+          ...data,
+          // Ensure priority and recurrence_pattern are the correct types
+          priority: data.priority as "low" | "medium" | "high",
+          recurrence_pattern: data.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly" | null
+        };
+        
+        // Update with server data
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
       toast({
         title: "Task updated",
         description: "Your task has been updated successfully.",
       });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
 
   const deleteTaskMutation = useMutation({
     mutationFn: deleteTask,
-    onSuccess: () => {
+    onMutate: async (taskId) => {
+      console.log("Optimistically deleting task:", taskId);
+      
+      // Cancel any outgoing refetches to prevent them from overwriting our optimistic update
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create a deep copy to avoid reference issues
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Filter out the task to be deleted and any child tasks
+      const filteredTasks = updatedTasks.filter((task: TaskWithSubtasks) => {
+        return task.id !== taskId && task.parent_task_id !== taskId;
+      });
+      
+      // Immediately update the UI with the filtered tasks
+      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], filteredTasks);
+      
+      // Also update tasks-with-subtasks if the task had subtasks
+      const tasksWithSubtasks = queryClient.getQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS]) || [];
+      if (tasksWithSubtasks.includes(taskId)) {
+        queryClient.setQueryData<number[]>(
+          [QUERY_KEYS.TASKS_WITH_SUBTASKS],
+          tasksWithSubtasks.filter(id => id !== taskId)
+        );
+      }
+      
+      // Return the context for potential rollback
+      return { previousTasks };
+    },
+    onError: (error, taskId, context) => {
+      console.error("Error deleting task:", error);
+      
+      // Roll back to the previous state if there was an error
+      if (context?.previousTasks) {
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
+      toast({
+        variant: "destructive",
+        title: "Error deleting task",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    },
+    onSuccess: (_, taskId) => {
+      console.log("Task deleted successfully:", taskId);
+      
+      // We don't need to invalidate the queries here since we've already updated the cache
+      // But we'll still invalidate to ensure consistency with the server
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+      
       toast({
         title: "Task deleted",
         description: "Your task has been deleted successfully.",
       });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
 
@@ -526,10 +736,10 @@ export default function TaskManager() {
     if (!editForm) return;
     
     try {
-      const updateData: NewTask = {
-        title: editForm!.title,
+      const updateData: Partial<NewTask> = {
+        title: editForm!.title || "",
         description: editForm!.description,
-        priority: editForm!.priority,
+        priority: editForm!.priority || "medium",
         due_date: ensureUnixTimestamp(editForm!.due_date),
         is_recurring: editForm!.is_recurring,
         recurrence_pattern: editForm!.is_recurring ? editForm!.recurrence_pattern : null,
@@ -641,25 +851,103 @@ export default function TaskManager() {
       // The server will handle adding task_id and other metadata internally
       return createSubtasks(taskId, subtasks);
     },
-    onSuccess: () => {
-      toast({
-        title: "Subtasks saved",
-        description: "Your subtasks have been saved successfully.",
-      });
-      queryClient.invalidateQueries({ queryKey: ["tasks-with-subtasks"] });
+    onMutate: async ({ taskId, subtasks }) => {
+      console.log("Optimistically saving subtasks for task:", taskId, subtasks);
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       if (selectedTask) {
-        queryClient.invalidateQueries({ queryKey: [`task-subtasks-${selectedTask.id}`] });
+        await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASK_SUBTASKS(taskId)] });
       }
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      setShowSubtasks(false);
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous values
+      const previousTasksWithSubtasks = queryClient.getQueryData<any>([QUERY_KEYS.TASKS_WITH_SUBTASKS]);
+      const previousSubtasks = selectedTask ? 
+        queryClient.getQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(taskId)]) : null;
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create optimistic subtasks with temporary IDs
+      const optimisticSubtasks = subtasks.map((subtask, index) => ({
+        id: `temp-${Date.now()}-${index}`,
+        task_id: taskId,
+        title: subtask.title,
+        completed: subtask.completed,
+        position: index,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      }));
+      
+      // Optimistically update tasks-with-subtasks
+      if (previousTasksWithSubtasks) {
+        // Add this task ID to the list of tasks with subtasks if not already there
+        if (!previousTasksWithSubtasks.includes(taskId)) {
+          queryClient.setQueryData<any>([QUERY_KEYS.TASKS_WITH_SUBTASKS], 
+            [...previousTasksWithSubtasks, taskId]
+          );
+        }
+      }
+      
+      // Optimistically update the subtasks for this task
+      if (selectedTask) {
+        queryClient.setQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(taskId)], optimisticSubtasks);
+      }
+      
+      // Update the main tasks list to show this task has subtasks
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === taskId);
+      
+      if (taskIndex !== -1) {
+        // Add the subtasks to the task
+        updatedTasks[taskIndex].subtasks = optimisticSubtasks;
+        
+        // Update the tasks cache
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
+      console.log("Optimistically updated subtasks in cache");
+      
+      // Return the context
+      return { previousTasksWithSubtasks, previousSubtasks, previousTasks };
     },
-    onError: (error) => {
-      console.error('Error saving subtasks:', error);
+    onError: (error, variables, context) => {
+      console.error("Error saving subtasks:", error);
+      
+      // Roll back to the previous state if there was an error
+      if (context?.previousTasksWithSubtasks) {
+        queryClient.setQueryData([QUERY_KEYS.TASKS_WITH_SUBTASKS], context.previousTasksWithSubtasks);
+      }
+      if (context?.previousSubtasks && selectedTask) {
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], context.previousSubtasks);
+      }
+      if (context?.previousTasks) {
+        queryClient.setQueryData([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
       toast({
         variant: "destructive",
         title: "Failed to save subtasks",
         description: error instanceof Error ? error.message : "An error occurred while saving subtasks.",
       });
+    },
+    onSuccess: (data, variables) => {
+      console.log("Subtasks saved successfully:", data);
+      
+      // Update the cache with the server response
+      if (selectedTask) {
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], data);
+      }
+      
+      // Invalidate queries to ensure consistency
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      toast({
+        title: "Subtasks saved",
+        description: "Your subtasks have been saved successfully.",
+      });
+      
+      setShowSubtasks(false);
     }
   });
 
@@ -680,7 +968,26 @@ export default function TaskManager() {
     const items = Array.from(editedSubtasks);
     const [reorderedItem] = items.splice(result.source.index, 1);
     items.splice(result.destination.index, 0, reorderedItem);
+    
+    // Immediately update the UI
     setEditedSubtasks(items);
+    
+    // If we have a selected task, update the subtasks query data optimistically
+    if (selectedTask) {
+      // Get the current subtasks data
+      const currentSubtasks = queryClient.getQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)]);
+      
+      if (currentSubtasks) {
+        // Update the positions based on the new order
+        const updatedSubtasks = items.map((subtask, index) => ({
+          ...subtask,
+          position: index
+        }));
+        
+        // Update the query data optimistically
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)], updatedSubtasks);
+      }
+    }
   };
 
   const renderTaskContent = (task: TaskWithSubtasks, isCompleted: boolean) => {
@@ -707,13 +1014,13 @@ export default function TaskManager() {
               <SelectTrigger className="w-full">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
                 <SelectItem value="low">Low</SelectItem>
                 <SelectItem value="medium">Medium</SelectItem>
                 <SelectItem value="high">High</SelectItem>
               </SelectContent>
             </Select>
-            <Popover>
+            <Popover open={editDatePickerOpen} onOpenChange={setEditDatePickerOpen}>
               <PopoverTrigger asChild>
                 <Button
                   type="button"
@@ -722,11 +1029,11 @@ export default function TaskManager() {
                 >
                   <CalendarIcon className="mr-2 h-4 w-4" />
                   {editForm.due_date && editForm.due_date instanceof Date && !isNaN(editForm.due_date.getTime())
-                    ? format(editForm.due_date, "PPP")
+                    ? formatDate(editForm.due_date, "PPP")
                     : "Due date"}
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
+              <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[280px]">
                 <div>
                   <Calendar
                     mode="single"
@@ -743,7 +1050,10 @@ export default function TaskManager() {
                       onChange={(newDate) => {
                         setEditForm(prev => ({ ...prev, due_date: newDate }));
                       }}
-                      timeFormat="12h"
+                      onComplete={() => {
+                        setEditDatePickerOpen(false);
+                      }}
+                      compact={true}
                     />
                   )}
                 </div>
@@ -803,7 +1113,7 @@ export default function TaskManager() {
                         <SelectTrigger className="flex-1">
                           <SelectValue placeholder="Select period" />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
                           <SelectItem value="daily">Day(s)</SelectItem>
                           <SelectItem value="weekly">Week(s)</SelectItem>
                           <SelectItem value="monthly">Month(s)</SelectItem>
@@ -816,7 +1126,7 @@ export default function TaskManager() {
                     <label className="text-sm font-medium mb-1.5 block">
                       Ends (Optional)
                     </label>
-                    <Popover>
+                    <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
@@ -827,11 +1137,11 @@ export default function TaskManager() {
                         >
                           <CalendarIcon className="mr-2 h-4 w-4" />
                           {editForm.recurrence_end_date
-                            ? format(editForm.recurrence_end_date, "PPP")
+                            ? formatDate(editForm.recurrence_end_date, "PPP")
                             : "Select end date"}
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
+                      <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
                         <Calendar
                           mode="single"
                           selected={editForm.recurrence_end_date || undefined}
@@ -840,9 +1150,24 @@ export default function TaskManager() {
                               ...prev,
                               recurrence_end_date: date,
                             }));
+                            if (!date) {
+                              setRecurrenceEndDatePickerOpen(false);
+                            }
                           }}
                           initialFocus
                         />
+                        {editForm.recurrence_end_date && (
+                          <TimeSelect
+                            value={editForm.recurrence_end_date}
+                            onChange={(newDate) => {
+                              form.setValue("recurrence_end_date", newDate);
+                            }}
+                            onComplete={() => {
+                              setRecurrenceEndDatePickerOpen(false);
+                            }}
+                            compact={true}
+                          />
+                        )}
                       </PopoverContent>
                     </Popover>
                   </div>
@@ -919,37 +1244,11 @@ export default function TaskManager() {
             {task.priority}
           </span>
           {task.due_date && (
-            <div className="text-sm text-gray-500">
-              {(() => {
-                try {
-                  // Ensure due_date is a valid number
-                  const dueDate = Number(task.due_date);
-                  
-                  // Add robust validation
-                  if (isNaN(dueDate) || !isFinite(dueDate) || dueDate < 1000000) {
-                    console.warn('Invalid or epoch due_date value:', task.due_date);
-                    return 'Invalid date';
-                  }
-                  
-                  const date = new Date(dueDate * 1000);
-                  
-                  // Check if date is valid and not epoch
-                  if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
-                    console.error("Invalid due date after conversion:", date);
-                    return 'Invalid date';
-                  }
-                  
-                  // Create Date object and format it with timezone
-                  return formatInTimeZone(
-                    date,
-                    userSettings?.timezone || 'UTC',
-                    task.all_day ? 'PPP' : 'PPP p'
-                  );
-                } catch (error) {
-                  console.error('Error formatting date:', error, task.due_date);
-                  return 'Date error';
-                }
-              })()}
+            <div className={cn("text-xs", {
+              "text-red-500 font-medium": !task.completed && new Date(task.due_date * 1000) < getNow(),
+              "text-muted-foreground": task.completed || new Date(task.due_date * 1000) >= getNow()
+            })}>
+              {formatDueDate(task.due_date)}
             </div>
           )}
         </div>
@@ -1114,7 +1413,7 @@ export default function TaskManager() {
     }
 
     if (dueDateFilter !== 'all') {
-      const today = new Date();
+      const today = getNow();
       today.setHours(0, 0, 0, 0);
       
       const tomorrow = new Date(today);
@@ -1172,13 +1471,45 @@ export default function TaskManager() {
     overdue: getOverdueTasks(tasks).length,
   });
 
-  const getPaginatedTasks = (tasks: TaskWithSubtasks[], page: number) => {
-    const startIndex = (page - 1) * tasksPerPage;
-    const endIndex = startIndex + tasksPerPage;
-    return tasks.slice(startIndex, endIndex);
+  const getPaginatedActiveTasks = (tasks: TaskWithSubtasks[]) => {
+    const filteredTasks = getActiveTasks(tasks);
+    const startIndex = (activePage - 1) * tasksPerPage;
+    return filteredTasks.slice(startIndex, startIndex + tasksPerPage);
+  };
+
+  const getPaginatedOverdueTasks = (tasks: TaskWithSubtasks[]) => {
+    const filteredTasks = getOverdueTasks(tasks);
+    const startIndex = (overduePage - 1) * tasksPerPage;
+    return filteredTasks.slice(startIndex, startIndex + tasksPerPage);
+  };
+
+  const getPaginatedCompletedTasks = (tasks: TaskWithSubtasks[]) => {
+    const filteredTasks = getCompletedTasks(tasks);
+    const startIndex = (completedPage - 1) * tasksPerPage;
+    return filteredTasks.slice(startIndex, startIndex + tasksPerPage);
+  };
+
+  const getActiveTasksTotalPages = (tasks: TaskWithSubtasks[]) => {
+    return Math.ceil(getActiveTasks(tasks).length / tasksPerPage);
+  };
+
+  const getOverdueTasksTotalPages = (tasks: TaskWithSubtasks[]) => {
+    return Math.ceil(getOverdueTasks(tasks).length / tasksPerPage);
+  };
+
+  const getCompletedTasksTotalPages = (tasks: TaskWithSubtasks[]) => {
+    return Math.ceil(getCompletedTasks(tasks).length / tasksPerPage);
+  };
+
+  const getPaginatedTasks = (tasks: TaskWithSubtasks[]) => {
+    // This function is kept for backward compatibility
+    // but we'll use the specific pagination functions instead
+    const startIndex = (activePage - 1) * tasksPerPage;
+    return tasks.slice(startIndex, startIndex + tasksPerPage);
   };
 
   const getTotalPages = (tasks: TaskWithSubtasks[]) => {
+    // This function is kept for backward compatibility
     return Math.ceil(tasks.length / tasksPerPage);
   };
 
@@ -1227,13 +1558,20 @@ export default function TaskManager() {
     );
   };
 
-  const processedTasks: TaskWithSubtasks[] = useMemo(() => {
+  const processedTasks = useMemo(() => {
     if (!tasks) return [];
     
-    return tasks.map((task): TaskWithSubtasks => ({
-      ...task,
-      has_subtasks: tasksWithSubtasksIds?.includes(task.id) || false
-    }));
+    return tasks.map((task): TaskWithSubtasks => {
+      // Cast the task properties to the correct types
+      const typedTask: TaskWithSubtasks = {
+        ...task,
+        priority: task.priority as "low" | "medium" | "high",
+        recurrence_pattern: task.recurrence_pattern || null,
+        has_subtasks: tasksWithSubtasksIds ? tasksWithSubtasksIds.includes(task.id) : false,
+        subtasks: []
+      };
+      return typedTask;
+    });
   }, [tasks, tasksWithSubtasksIds]);
 
   const completedTasks = useMemo(() => 
@@ -1286,7 +1624,7 @@ export default function TaskManager() {
           <Button 
             variant="outline" 
             className="mt-4"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["tasks"] })}
+            onClick={() => queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] })}
           >
             Try Again
           </Button>
@@ -1385,7 +1723,7 @@ export default function TaskManager() {
               </FormItem>
             )}
           />
-          <Popover>
+          <Popover open={newTaskDatePickerOpen} onOpenChange={setNewTaskDatePickerOpen}>
             <PopoverTrigger asChild>
               <Button
                 type="button"
@@ -1396,10 +1734,10 @@ export default function TaskManager() {
                 )}
               >
                 <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-                {dueDate ? format(dueDate, "PPP") : "Due date (optional)"}
+                {dueDate ? formatDate(dueDate, "PPP") : "Due date (optional)"}
               </Button>
             </PopoverTrigger>
-            <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl">
+            <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[300px]">
               <div>
                 <Calendar
                   mode="single"
@@ -1410,6 +1748,7 @@ export default function TaskManager() {
                       form.setValue("due_date", date);
                     } else {
                       form.setValue("due_date", null);
+                      setNewTaskDatePickerOpen(false);
                     }
                   }}
                   initialFocus
@@ -1421,7 +1760,10 @@ export default function TaskManager() {
                     onChange={(newDate) => {
                       form.setValue("due_date", newDate);
                     }}
-                    timeFormat="12h"
+                    onComplete={() => {
+                      setNewTaskDatePickerOpen(false);
+                    }}
+                    compact={true}
                   />
                 )}
               </div>
@@ -1528,7 +1870,7 @@ export default function TaskManager() {
                 <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
                   Ends (Optional)
                 </label>
-                <Popover>
+                <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
                   <PopoverTrigger asChild>
                     <Button
                       variant="outline"
@@ -1539,11 +1881,11 @@ export default function TaskManager() {
                     >
                       <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
                       {recurrenceEndDate
-                        ? format(recurrenceEndDate, "PPP")
+                        ? formatDate(recurrenceEndDate, "PPP")
                         : "Select end date"}
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl">
+                  <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
                     <Calendar
                       mode="single"
                       selected={recurrenceEndDate ? recurrenceEndDate : undefined}
@@ -1551,6 +1893,18 @@ export default function TaskManager() {
                       initialFocus
                       className="rounded-lg border-0"
                     />
+                    {recurrenceEndDate && (
+                      <TimeSelect
+                        value={recurrenceEndDate}
+                        onChange={(newDate) => {
+                          form.setValue("recurrence_end_date", newDate);
+                        }}
+                        onComplete={() => {
+                          setRecurrenceEndDatePickerOpen(false);
+                        }}
+                        compact={true}
+                      />
+                    )}
                   </PopoverContent>
                 </Popover>
               </div>
@@ -1717,7 +2071,7 @@ export default function TaskManager() {
                   </span>
                 </h2>
                 <div className="space-y-4">
-                  {getPaginatedTasks(getActiveTasks(filterTasks(processedTasks)), currentPage).map((task) => (
+                  {getPaginatedActiveTasks(filterTasks(processedTasks)).map((task) => (
                     <div
                       key={task.id}
                       className="group p-4 rounded-lg border hover:bg-accent/5 transition-colors"
@@ -1750,6 +2104,15 @@ export default function TaskManager() {
                   )}
                 </div>
               </CardContent>
+              {getActiveTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+                <CardFooter className="flex justify-center border-t pt-4">
+                  <PaginationControls 
+                    currentPage={activePage}
+                    totalPages={getActiveTasksTotalPages(filterTasks(processedTasks))}
+                    onPageChange={setActivePage}
+                  />
+                </CardFooter>
+              )}
             </Card>
             
             {getOverdueTasks(filterTasks(processedTasks)).length > 0 && (
@@ -1762,7 +2125,7 @@ export default function TaskManager() {
                     </span>
                   </h2>
                   <div className="space-y-4">
-                    {getPaginatedTasks(getOverdueTasks(filterTasks(processedTasks)), currentPage).map((task) => (
+                    {getPaginatedOverdueTasks(filterTasks(processedTasks)).map((task) => (
                       <div
                         key={task.id}
                         className="group p-4 rounded-lg border hover:bg-accent/5 transition-colors"
@@ -1791,6 +2154,15 @@ export default function TaskManager() {
                     ))}
                   </div>
                 </CardContent>
+                {getOverdueTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+                  <CardFooter className="flex justify-center border-t pt-4">
+                    <PaginationControls 
+                      currentPage={overduePage}
+                      totalPages={getOverdueTasksTotalPages(filterTasks(processedTasks))}
+                      onPageChange={setOverduePage}
+                    />
+                  </CardFooter>
+                )}
               </Card>
             )}
 
@@ -1803,7 +2175,7 @@ export default function TaskManager() {
                   </span>
                 </h2>
                 <div className="space-y-4">
-                  {getPaginatedTasks(getCompletedTasks(filterTasks(processedTasks)), currentPage).map((task) => (
+                  {getPaginatedCompletedTasks(filterTasks(processedTasks)).map((task) => (
                     <div
                       key={task.id}
                       className="group p-4 rounded-lg border bg-muted/50"
@@ -1830,128 +2202,131 @@ export default function TaskManager() {
                   )}
                 </div>
               </CardContent>
+              {getCompletedTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+                <CardFooter className="flex justify-center border-t pt-4">
+                  <PaginationControls 
+                    currentPage={completedPage}
+                    totalPages={getCompletedTasksTotalPages(filterTasks(processedTasks))}
+                    onPageChange={setCompletedPage}
+                  />
+                </CardFooter>
+              )}
             </Card>
           </div>
 
-          <PaginationControls 
-            currentPage={currentPage}
-            totalPages={getTotalPages(filterTasks(processedTasks))}
-            onPageChange={setCurrentPage}
-          />
-        </div>
-      )}
-
-      {showSubtasks && selectedTask && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-2xl">
-            <CardContent className="pt-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold">
-                  Subtasks for "{selectedTask.title}"
-                </h2>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowSubtasks(false)}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              
-              <DragDropContext onDragEnd={onDragEnd}>
-                <Droppable droppableId="subtasks">
-                  {(provided) => (
-                    <div
-                      {...provided.droppableProps}
-                      ref={provided.innerRef}
-                      className="space-y-2"
+          {showSubtasks && selectedTask && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
+              <Card className="w-full max-w-2xl">
+                <CardContent className="pt-6">
+                  <div className="flex justify-between items-center mb-4">
+                    <h2 className="text-xl font-semibold">
+                      Subtasks for "{selectedTask.title}"
+                    </h2>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={() => setShowSubtasks(false)}
                     >
-                      {editedSubtasks.map((subtask, index) => (
-                        <Draggable
-                          key={index}
-                          draggableId={`subtask-${index}`}
-                          index={index}
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </div>
+                  
+                  <DragDropContext onDragEnd={onDragEnd}>
+                    <Droppable droppableId="subtasks">
+                      {(provided) => (
+                        <div
+                          {...provided.droppableProps}
+                          ref={provided.innerRef}
+                          className="space-y-2"
                         >
-                          {(provided) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              className="flex items-center gap-2 p-2 bg-muted rounded"
+                          {editedSubtasks.map((subtask, index) => (
+                            <Draggable
+                              key={index}
+                              draggableId={`subtask-${index}`}
+                              index={index}
                             >
-                              <div {...provided.dragHandleProps}>
-                                <GripVertical className="h-4 w-4 text-muted-foreground" />
-                              </div>
-                              <Checkbox
-                                checked={subtask.completed}
-                                onCheckedChange={(checked) => {
-                                  const newSubtasks = [...editedSubtasks];
-                                  newSubtasks[index].completed = checked as boolean;
-                                  setEditedSubtasks(newSubtasks);
-                                }}
-                              />
-                              <Input
-                                value={subtask.title}
-                                onChange={(e) => {
-                                  const newSubtasks = [...editedSubtasks];
-                                  newSubtasks[index].title = e.target.value;
-                                  setEditedSubtasks(newSubtasks);
-                                }}
-                                className="flex-1"
-                              />
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => {
-                                  const newSubtasks = editedSubtasks.filter((_, i) => i !== index);
-                                  setEditedSubtasks(newSubtasks);
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          )}
-                        </Draggable>
-                      ))}
-                      {provided.placeholder}
-                    </div>
-                  )}
-                </Droppable>
-              </DragDropContext>
+                              {(provided) => (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  className="flex items-center gap-2 p-2 bg-muted rounded"
+                                >
+                                  <div {...provided.dragHandleProps}>
+                                    <GripVertical className="h-4 w-4 text-muted-foreground" />
+                                  </div>
+                                  <Checkbox
+                                    checked={subtask.completed}
+                                    onCheckedChange={(checked) => {
+                                      const newSubtasks = [...editedSubtasks];
+                                      newSubtasks[index].completed = checked as boolean;
+                                      setEditedSubtasks(newSubtasks);
+                                    }}
+                                  />
+                                  <Input
+                                    value={subtask.title}
+                                    onChange={(e) => {
+                                      const newSubtasks = [...editedSubtasks];
+                                      newSubtasks[index].title = e.target.value;
+                                      setEditedSubtasks(newSubtasks);
+                                    }}
+                                    className="flex-1"
+                                  />
+                                  <Button
+                                    variant="ghost"
+                                    size="icon"
+                                    onClick={() => {
+                                      const newSubtasks = editedSubtasks.filter((_, i) => i !== index);
+                                      setEditedSubtasks(newSubtasks);
+                                    }}
+                                  >
+                                    <Trash2 className="h-4 w-4" />
+                                  </Button>
+                                </div>
+                              )}
+                            </Draggable>
+                          ))}
+                          {provided.placeholder}
+                        </div>
+                      )}
+                    </Droppable>
+                  </DragDropContext>
 
-              <div className="mt-4 space-y-2">
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => {
-                    setEditedSubtasks([...editedSubtasks, { title: "", completed: false }]);
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Subtask
-                </Button>
-                <div className="flex gap-2">
-                  <Button
-                    className="flex-1"
-                    onClick={saveSubtasks}
-                    disabled={saveSubtasksMutation.isPending}
-                  >
-                    {saveSubtasksMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      "Save Subtasks"
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => setShowSubtasks(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                  <div className="mt-4 space-y-2">
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => {
+                        setEditedSubtasks([...editedSubtasks, { title: "", completed: false }]);
+                      }}
+                    >
+                      <Plus className="mr-2 h-4 w-4" />
+                      Add Subtask
+                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1"
+                        onClick={saveSubtasks}
+                        disabled={saveSubtasksMutation.isPending}
+                      >
+                        {saveSubtasksMutation.isPending ? (
+                          <Loader2 className="h-4 w-4 animate-spin" />
+                        ) : (
+                          "Save Subtasks"
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => setShowSubtasks(false)}
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </div>
       )}
     </div>

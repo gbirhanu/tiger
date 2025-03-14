@@ -34,8 +34,9 @@ import Meetings from "./Meetings";
 import Settings from "./Settings";
 import { useAuth } from "@/contexts/AuthContext";
 import { getAppointments, getNotes, getPomodoroSettings, getTasks } from "@/lib/api";
-import { ThemeToggle } from "./ui/theme-toggle";
 import { ProfileDropdown } from "./ui/ProfileDropdown";
+import { formatDate, getNow } from "@/lib/timezone";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface NavItem {
   title: string;
@@ -121,13 +122,13 @@ const DashboardOverview = () => {
   const last5Days = Array.from({ length: 5 }, (_, i) => {
     const date = new Date();
     date.setDate(date.getDate() - i);
-    return format(date, "MMM d");
+    return formatDate(date, "MMM d");
   }).reverse();
 
   const notesByDate = last5Days.map(date => ({
     date,
     count: Array.isArray(notes) ? notes.filter((note: any) => 
-      note.createdAt && format(new Date(note.createdAt), "MMM d") === date
+      note.createdAt && formatDate(new Date(note.createdAt), "MMM d") === date
     ).length : 0
   }));
 
@@ -226,7 +227,7 @@ const DashboardOverview = () => {
                   <div>
                     <p className="font-medium">{appointment.title}</p>
                     <p className="text-sm text-muted-foreground">
-                      {format(new Date(appointment.startTime), "PPP p")}
+                      {formatDate(new Date(appointment.startTime), "PPP p")}
                     </p>
                   </div>
                 </div>
@@ -310,8 +311,19 @@ const navItems: NavItem[] = [
 ];
 
 export default function Dashboard() {
-  const [selectedNav, setSelectedNav] = React.useState<string>("Dashboard");
+  // Use localStorage to persist the selected navigation item
+  const [selectedNav, setSelectedNav] = React.useState<string>(() => {
+    // Try to get the saved navigation from localStorage
+    const savedNav = localStorage.getItem('selectedNav');
+    // Return the saved nav or default to "Dashboard"
+    return savedNav || "Dashboard";
+  });
   const { logout } = useAuth();
+
+  // Update localStorage when navigation changes
+  React.useEffect(() => {
+    localStorage.setItem('selectedNav', selectedNav);
+  }, [selectedNav]);
 
   return (
     <ResizablePanelGroup
@@ -320,14 +332,16 @@ export default function Dashboard() {
     >
       {/* Resizable sidebar with slightly larger initial width */}
       <ResizablePanel defaultSize={22} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] border-r flex flex-col h-screen">
-        {/* App branding */}
+        {/* App branding - now clickable */}
         <div className="px-4 py-3 border-b">
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
+            <div 
+              className="flex items-center gap-2 cursor-pointer" 
+              onClick={() => setSelectedNav("Dashboard")}
+            >
               <Flame className="h-5 w-5 text-yellow-500" />
               <h2 className="text-lg font-semibold">Tiger</h2>
             </div>
-            <ThemeToggle />
           </div>
         </div>
 

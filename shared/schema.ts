@@ -202,8 +202,20 @@ export const insertPomodoroSettingsSchema = z.object({
 
 export const insertUserSettingsSchema = z.object({
   timezone: z.string().default("UTC"),
-  work_start_hour: z.number().min(0).max(23).default(9),
-  work_end_hour: z.number().min(0).max(23).default(17),
+  work_start_hour: z.union([
+    z.number().min(0).max(23).default(9),
+    z.object({
+      hour: z.number().min(0).max(23),
+      minute: z.number().min(0).max(59)
+    })
+  ]).default(9),
+  work_end_hour: z.union([
+    z.number().min(0).max(23).default(17),
+    z.object({
+      hour: z.number().min(0).max(23),
+      minute: z.number().min(0).max(59)
+    })
+  ]).default(17),
   theme: z.enum(["light", "dark", "system"]).default("light"),
   default_calendar_view: z.enum(["day", "week", "month"]).default("month"),
   show_notifications: z.boolean().default(true),

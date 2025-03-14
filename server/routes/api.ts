@@ -804,9 +804,31 @@ router.patch("/pomodoro-settings", requireAuth, async (req, res) => {
 
 router.get("/user-settings", requireAuth, async (req, res) => {
   try {
-    const settings = await db.select().from(userSettings).limit(1);
-    res.json(settings[0] || {});
+    console.log('Fetching settings for user_id:', req.userId);
+    const settings = await db.select().from(userSettings).where(eq(userSettings.user_id, req.userId!));
+    
+    if (settings.length === 0) {
+      console.log('No settings found for user, returning default values');
+      // Return default values if no settings exist
+      return res.json({
+        id: null,
+        user_id: req.userId,
+        timezone: "UTC",
+        work_start_hour: 9,
+        work_end_hour: 17,
+        theme: "light",
+        default_calendar_view: "month",
+        show_notifications: true,
+        notifications_enabled: true,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      });
+    }
+    
+    console.log('Found settings for user:', settings[0]);
+    res.json(settings[0]);
   } catch (error) {
+    console.error("Error fetching user settings:", error);
     res.status(500).json({ error: "Failed to fetch user settings" });
   }
 });
@@ -815,18 +837,21 @@ router.put("/user-settings", requireAuth, async (req, res) => {
   try {
     console.log('Received user settings update:', req.body);
     
-    const settings = await db.select().from(userSettings).limit(1);
+    const settings = await db.select().from(userSettings).where(eq(userSettings.user_id, req.userId!));
     if (settings.length === 0) {
-      console.log('No existing settings found, creating new settings');
-      const newSettings = await db.insert(userSettings).values(req.body).returning();
+      console.log('No existing settings found, creating new settings with user_id:', req.userId);
+      const newSettings = await db.insert(userSettings).values({
+        ...req.body,
+        user_id: req.userId!
+      }).returning();
       console.log('Created new settings:', newSettings[0]);
       res.json(newSettings[0]);
     } else {
-      console.log('Updating existing settings:', settings[0]);
+      console.log('Updating existing settings for user_id:', req.userId);
       const updatedSettings = await db
         .update(userSettings)
         .set(req.body)
-        .where(eq(userSettings.id, settings[0].id))
+        .where(eq(userSettings.user_id, req.userId!))
         .returning();
       console.log('Updated settings:', updatedSettings[0]);
       res.json(updatedSettings[0]);
@@ -839,21 +864,111 @@ router.put("/user-settings", requireAuth, async (req, res) => {
 
 router.patch("/user-settings", requireAuth, async (req, res) => {
   try {
-    const settings = await db.select().from(userSettings).limit(1);
-    if (settings.length === 0) {
-      const newSettings = await db.insert(userSettings).values(req.body).returning();
+    console.log('Received settings update request:', JSON.stringify(req.body));
+    
+    // Check if settings exist for this user
+    const existingSettings = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.user_id, req.userId!));
+    
+    // Process work hours - ensure they are valid hour values (0-24)
+    let workStartHour = undefined;
+    let workEndHour = undefined;
+    
+    // Handle work_start_hour specially
+    if ('work_start_hour' in req.body) {
+      console.log('Processing work_start_hour:', JSON.stringify(req.body.work_start_hour));
+      if (req.body.work_start_hour !== null && typeof req.body.work_start_hour === 'number') {
+        // Ensure it's a valid hour value (0-24)
+        workStartHour = Math.min(Math.max(0, Math.floor(Number(req.body.work_start_hour))), 23);
+        console.log('Using work_start_hour:', workStartHour);
+      }
+    }
+    
+    // Handle work_end_hour specially
+    if ('work_end_hour' in req.body) {
+      console.log('Processing work_end_hour:', JSON.stringify(req.body.work_end_hour));
+      if (req.body.work_end_hour !== null && typeof req.body.work_end_hour === 'number') {
+        // Ensure it's a valid hour value (0-24)
+        workEndHour = Math.min(Math.max(1, Math.floor(Number(req.body.work_end_hour))), 24);
+        console.log('Using work_end_hour:', workEndHour);
+      }
+    }
+    
+    // If no settings exist, create new settings
+    if (existingSettings.length === 0) {
+      console.log('No existing settings found, creating new settings');
+      
+      // Create default hour values for work hours if not provided
+      if (workStartHour === undefined) {
+        workStartHour = 9; // Default start hour: 9 AM
+      }
+      
+      if (workEndHour === undefined) {
+        workEndHour = 17; // Default end hour: 5 PM
+      }
+      
+      // Create a new settings object with only the fields we need
+      const newSettingsData = {
+        user_id: req.userId!,
+        timezone: 'timezone' in req.body ? req.body.timezone : "UTC",
+        theme: 'theme' in req.body ? req.body.theme : "light",
+        default_calendar_view: 'default_calendar_view' in req.body ? req.body.default_calendar_view : "month",
+        show_notifications: 'show_notifications' in req.body ? req.body.show_notifications : true,
+        notifications_enabled: 'notifications_enabled' in req.body ? req.body.notifications_enabled : true,
+        work_start_hour: workStartHour,
+        work_end_hour: workEndHour
+      };
+      
+      console.log('Creating new settings with data:', JSON.stringify(newSettingsData));
+      
+      const newSettings = await db
+        .insert(userSettings)
+        .values(newSettingsData)
+        .returning();
+      
+      console.log('Created new settings:', newSettings[0]);
       return res.json(newSettings[0]);
     }
     
-    const updatedSettings = await db
+    // Update existing settings
+    console.log('Updating existing settings for user_id:', req.userId);
+    
+    // Create update object with only the fields that are provided
+    const updateData: Record<string, any> = {};
+    
+    if ('timezone' in req.body) updateData.timezone = req.body.timezone;
+    if ('theme' in req.body) updateData.theme = req.body.theme;
+    if ('default_calendar_view' in req.body) updateData.default_calendar_view = req.body.default_calendar_view;
+    if ('show_notifications' in req.body) updateData.show_notifications = req.body.show_notifications;
+    if ('notifications_enabled' in req.body) updateData.notifications_enabled = req.body.notifications_enabled;
+    if (workStartHour !== undefined) updateData.work_start_hour = workStartHour;
+    if (workEndHour !== undefined) updateData.work_end_hour = workEndHour;
+    
+    console.log('Final update data:', JSON.stringify(updateData));
+    
+    // Only update if there are fields to update
+    if (Object.keys(updateData).length === 0) {
+      console.log('No fields to update');
+      return res.json(existingSettings[0]);
+    }
+    
+    const result = await db
       .update(userSettings)
-      .set(req.body)
-      .where(eq(userSettings.id, settings[0].id))
+      .set(updateData)
+      .where(eq(userSettings.user_id, req.userId!))
       .returning();
-    res.json(updatedSettings[0]);
+    
+    console.log('Updated settings:', result[0]);
+    res.json(result[0]);
+    
   } catch (error) {
     console.error("Error updating user settings:", error);
-    res.status(500).json({ error: "Failed to update user settings" });
+    res.status(500).json({ 
+      error: "Failed to update user settings",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
   }
 });
 

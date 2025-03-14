@@ -1,4 +1,3 @@
-
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
@@ -16,12 +15,14 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { getNotes, createNote as createNoteApi, updateNote as updateNoteApi, deleteNote as deleteNoteApi } from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
+import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
 import { Plus, X, GripVertical, StickyNote, Clock, Sparkles, Star, Heart, Pencil, Trash2 } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { NoteCard } from "@/components/NoteCard";
 import { ColorPicker } from "@/components/ColorPicker";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 
 // Enhanced color palette with vibrant, pleasing colors
 const COLORS = [
@@ -42,7 +43,7 @@ export default function NotesBoard() {
   const [selectedColor, setSelectedColor] = useState(COLORS[0]);
 
   const { data: notes, isLoading, error } = useQuery({
-    queryKey: ["notes"],
+    queryKey: [QUERY_KEYS.NOTES],
     queryFn: getNotes,
   });
 
@@ -58,6 +59,8 @@ export default function NotesBoard() {
     }
   }, [error, toast]);
 
+;
+
   const createNoteMutation = useMutation({
     mutationFn: (content: string) => {
       const note = {
@@ -71,8 +74,43 @@ export default function NotesBoard() {
       };
       return createNoteApi(note);
     },
+    onMutate: async (content) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
+      // Snapshot the previous value
+      const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
+      
+      // Optimistically add the new note
+      const optimisticNote = {
+        id: Date.now(), // Temporary ID
+        user_id: 1, // Temporary user ID
+        title: "Note",
+        content,
+        color: selectedColor,
+        position: (previousNotes?.length || 0) + 1,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      };
+      
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], [...previousNotes, optimisticNote]);
+      
+      // Return the snapshot
+      return { previousNotes };
+    },
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousNotes) {
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
+      }
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to create note: ${error.message}`,
+      });
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
       setNewNoteContent("");
       setDialogOpen(false);
       toast({
@@ -80,44 +118,77 @@ export default function NotesBoard() {
         description: "Your note has been created successfully.",
       });
     },
-    onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Failed to create note: ${error.message}`,
-      });
-    },
   });
 
   const updateNoteMutation = useMutation({
     mutationFn: ({ id, ...data }: Partial<Note> & { id: number }) => 
       updateNoteApi(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
+    onMutate: async ({ id, ...updatedData }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
+      // Snapshot the previous value
+      const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
+      
+      // Optimistically update the note
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], 
+        previousNotes.map(note => 
+          note.id === id ? { ...note, ...updatedData } : note
+        )
+      );
+      
+      // Return the snapshot
+      return { previousNotes };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousNotes) {
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
+      }
       toast({
         variant: "destructive",
         title: "Error",
         description: `Failed to update note: ${error.message}`,
       });
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+    },
   });
 
   const deleteNoteMutation = useMutation({
     mutationFn: deleteNoteApi,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
-      toast({
-        title: "Note deleted",
-        description: "Your note has been deleted successfully.",
-      });
+    onMutate: async (noteId) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
+      // Snapshot the previous value
+      const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
+      
+      // Optimistically remove the note
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], 
+        previousNotes.filter(note => note.id !== noteId)
+      );
+      
+      // Return the snapshot
+      return { previousNotes };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousNotes) {
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
+      }
       toast({
         variant: "destructive",
         title: "Error",
         description: `Failed to delete note: ${error.message}`,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      toast({
+        title: "Note deleted",
+        description: "Your note has been deleted successfully.",
       });
     },
   });
@@ -125,14 +196,58 @@ export default function NotesBoard() {
   const handleDragEnd = (result: any) => {
     if (!result.destination || !notes) return;
 
-    const items = Array.from(notes);
-    const [reorderedItem] = items.splice(result.source.index, 1);
-    items.splice(result.destination.index, 0, reorderedItem);
+    // Don't do anything if dropped in the same position
+    if (result.destination.index === result.source.index) return;
 
-    // Update positions
-    items.forEach((note, index) => {
-      updateNoteMutation.mutate({ id: note.id, position: index + 1 });
-    });
+    console.log(`Moving note from position ${result.source.index} to ${result.destination.index}`);
+
+    try {
+      // Create a new array with the updated order
+      const reorderedNotes = Array.from(notes);
+      const [movedNote] = reorderedNotes.splice(result.source.index, 1);
+      reorderedNotes.splice(result.destination.index, 0, movedNote);
+
+      // Update positions for all notes
+      const updatedNotes = reorderedNotes.map((note, index) => ({
+        ...note,
+        position: index + 1
+      }));
+
+      // CRITICAL FIX: Immediately update the UI with the new order BEFORE any server calls
+      queryClient.setQueryData([QUERY_KEYS.NOTES], updatedNotes);
+
+      // Get the moved note's new position
+      const movedNoteWithNewPosition = updatedNotes[result.destination.index];
+      
+      console.log(`Updating note ${movedNoteWithNewPosition.id} to position ${movedNoteWithNewPosition.position}`);
+      
+      // First update the moved note with proper optimistic update
+      updateNoteMutation.mutate({
+        id: movedNoteWithNewPosition.id,
+        position: movedNoteWithNewPosition.position
+      });
+      
+      // Queue up other position updates with a slight delay to prevent race conditions
+      const otherNotes = updatedNotes.filter(n => n.id !== movedNoteWithNewPosition.id);
+      
+      // Wait 100ms before updating other positions to ensure main note update completes first
+      setTimeout(() => {
+        otherNotes.forEach((note) => {
+          console.log(`Updating note ${note.id} to position ${note.position}`);
+          updateNoteMutation.mutate({
+            id: note.id,
+            position: note.position
+          });
+        });
+      }, 100);
+    } catch (error) {
+      console.error("Error during drag and drop:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to update note positions. Please try again."
+      });
+    }
   };
 
   if (isLoading) {

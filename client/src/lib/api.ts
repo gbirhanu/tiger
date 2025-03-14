@@ -141,9 +141,43 @@ export const getUserSettings = () =>
   api.get<UserSettings>("/user-settings")
     .then((res: AxiosResponse<UserSettings>) => res.data);
 
-export const updateUserSettings = (settings: Partial<UserSettings>) => 
-  api.patch<UserSettings>("/user-settings", settings)
-    .then((res: AxiosResponse<UserSettings>) => res.data);
+export const updateUserSettings = async (settings: any): Promise<UserSettings> => {
+  console.log('Updating user settings:', settings);
+  
+  // Process work hours to ensure they're in the correct format for the server
+  const formattedSettings = { ...settings };
+  
+  // Extract just the hour values (0-24) for work hours
+  if (formattedSettings.work_start_hour && 
+      typeof formattedSettings.work_start_hour === 'object' && 
+      'hour' in formattedSettings.work_start_hour) {
+    // Extract just the hour value (0-24)
+    formattedSettings.work_start_hour = formattedSettings.work_start_hour.hour;
+    console.log('Extracted hour value for work_start_hour:', formattedSettings.work_start_hour);
+  } else if (typeof formattedSettings.work_start_hour === 'number' && formattedSettings.work_start_hour > 1000000) {
+    // If it's a Unix timestamp, convert to hour
+    const date = new Date(formattedSettings.work_start_hour * 1000);
+    formattedSettings.work_start_hour = date.getHours();
+    console.log('Converted timestamp to hour for work_start_hour:', formattedSettings.work_start_hour);
+  }
+  
+  if (formattedSettings.work_end_hour && 
+      typeof formattedSettings.work_end_hour === 'object' && 
+      'hour' in formattedSettings.work_end_hour) {
+    // Extract just the hour value (0-24)
+    formattedSettings.work_end_hour = formattedSettings.work_end_hour.hour;
+    console.log('Extracted hour value for work_end_hour:', formattedSettings.work_end_hour);
+  } else if (typeof formattedSettings.work_end_hour === 'number' && formattedSettings.work_end_hour > 1000000) {
+    // If it's a Unix timestamp, convert to hour
+    const date = new Date(formattedSettings.work_end_hour * 1000);
+    formattedSettings.work_end_hour = date.getHours();
+    console.log('Converted timestamp to hour for work_end_hour:', formattedSettings.work_end_hour);
+  }
+  
+  // Use the existing api object instead of fetch
+  const response = await api.patch<UserSettings>("/user-settings", formattedSettings);
+  return response.data;
+};
 
 // Auth-related API endpoints
 export const validateToken = () => api.get<{ valid: boolean; user: any }>("/auth/validate-token")

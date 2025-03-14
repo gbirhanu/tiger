@@ -6,8 +6,8 @@ import interactionPlugin from '@fullcalendar/interaction';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { Card, CardContent } from '@/components/ui/card';
 import { useToast } from '@/hooks/use-toast';
-import { apiRequest } from '@/lib/queryClient';
-import { Task } from '@shared/schema';
+import { apiRequest, QUERY_KEYS } from '@/lib/queryClient';
+import { Task, UserSettings } from '@shared/schema';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -29,6 +29,16 @@ import { queryClient } from '@/lib/queryClient';
 import { Loader2, Pencil, Trash2, Plus } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
+import { getUserTimezone, formatDate, getNow } from '@/lib/timezone';
+import { TimeSelect } from "./TimeSelect";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Calendar } from "@/components/ui/calendar";
 
 interface CalendarEvent {
   id: string;
@@ -54,7 +64,7 @@ interface NewTaskForm {
   all_day: boolean;
 }
 
-export default function Calendar() {
+export default function CalendarView() {
   const { toast } = useToast();
   const [events, setEvents] = useState<CalendarEvent[]>([]);
   const [showNewTaskDialog, setShowNewTaskDialog] = useState(false);
@@ -68,6 +78,10 @@ export default function Calendar() {
     due_date: null,
     all_day: true,
   });
+
+  // Add state for dialog open control
+  const [newTaskDialogOpen, setNewTaskDialogOpen] = useState(false);
+  const [taskDialogOpen, setTaskDialogOpen] = useState(false);
 
   // Fetch tasks
   const { data: tasks = [], isLoading } = useQuery<Task[]>({
@@ -86,6 +100,14 @@ export default function Calendar() {
       return res.json();
     },
   });
+
+  // Get user settings for timezone
+  const { data: userSettings } = useQuery<UserSettings>({
+    queryKey: [QUERY_KEYS.SETTINGS],
+    staleTime: 1000 * 60 * 5, // 5 minutes
+  });
+  
+  const timezone = getUserTimezone();
 
   // Create task mutation
   const createTask = useMutation({
@@ -330,6 +352,7 @@ export default function Calendar() {
       }));
     }
     setShowNewTaskDialog(true);
+    setNewTaskDialogOpen(true);
   };
 
   const handleCreateTask = () => {
@@ -465,6 +488,35 @@ export default function Calendar() {
     };
   }, []); // Empty dependency array means this runs once when component mounts
 
+  // Update the calendar configuration to use the user's timezone
+  const calendarOptions = {
+    plugins: [dayGridPlugin, timeGridPlugin, interactionPlugin],
+    initialView: 'dayGridMonth',
+    headerToolbar: {
+      left: 'prev,next today',
+      center: 'title',
+      right: 'dayGridMonth,timeGridWeek,timeGridDay',
+    },
+    editable: true,
+    selectable: true,
+    selectMirror: true,
+    dayMaxEvents: true,
+    weekends: true,
+    events: events,
+    eventClick: handleEventClick,
+    dateClick: handleDateClick,
+    eventDrop: handleEventDrop,
+    timeZone: timezone, // Set the timezone from user settings
+  };
+
+  // When formatting dates for display or API calls, use the timezone utilities
+  const formatDateForDisplay = (date: Date | string) => {
+    if (typeof date === 'string') {
+      date = new Date(date);
+    }
+    return formatDate(date, 'PPP p');
+  };
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -535,111 +587,131 @@ export default function Calendar() {
             `}</style>
             
             <FullCalendar
-              plugins={[dayGridPlugin, timeGridPlugin, interactionPlugin]}
-              initialView="dayGridMonth"
-              headerToolbar={{
-                left: 'prev,next today',
-                center: 'title',
-                right: 'dayGridMonth,timeGridWeek,timeGridDay',
-              }}
-              buttonText={{
-                today: 'Today',
-                month: 'Month',
-                week: 'Week',
-                day: 'Day',
-              }}
-              events={events}
-              eventClick={handleEventClick}
-              dateClick={handleDateClick}
-              height="auto"
-              aspectRatio={1.5}
-              eventTimeFormat={{
-                hour: '2-digit',
-                minute: '2-digit',
-                meridiem: 'short',
-              }}
-              dayMaxEvents={3}
-              moreLinkClick="popover"
-              eventDisplay="block"
-              eventBackgroundColor="#3B82F6"
-              eventBorderColor="#2563EB"
-              themeSystem="standard"
-              dayHeaderClassNames="text-base font-medium py-2"
-              dayHeaderFormat={{ weekday: 'short', day: 'numeric' }}
-              slotLabelFormat={{
-                hour: '2-digit',
-                minute: '2-digit',
-                hour12: true
-              }}
-              allDayText="All day"
-              allDaySlot={true}
+              {...calendarOptions}
             />
           </div>
         </CardContent>
       </Card>
 
-      <Dialog open={showNewTaskDialog} onOpenChange={setShowNewTaskDialog}>
+      <Dialog open={showNewTaskDialog && newTaskDialogOpen} onOpenChange={(open) => {
+        setShowNewTaskDialog(open);
+        setNewTaskDialogOpen(open);
+      }}>
         <DialogContent className="sm:max-w-[425px]">
-            <DialogHeader>
-            <DialogTitle>
-              Create Task for {newTask.due_date ? format(newTask.due_date, newTask.all_day ? 'PPP' : 'PPP p') : 'New Task'}
-            </DialogTitle>
-            </DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Create New Task</DialogTitle>
+            <DialogDescription>
+              Add a new task to your calendar
+            </DialogDescription>
+          </DialogHeader>
           <div className="grid gap-4 py-4">
             <div className="grid gap-2">
+              <Label htmlFor="title">Title</Label>
               <Input
-                placeholder="Task title"
+                id="title"
                 value={newTask.title}
-                onChange={(e) => setNewTask(prev => ({ ...prev, title: e.target.value }))}
+                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                placeholder="Task title"
               />
             </div>
             <div className="grid gap-2">
-              <Input
-                placeholder="Task description (optional)"
+              <Label htmlFor="description">Description (Optional)</Label>
+              <Textarea
+                id="description"
                 value={newTask.description}
-                onChange={(e) => setNewTask(prev => ({ ...prev, description: e.target.value }))}
+                onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                placeholder="Task description"
               />
             </div>
             <div className="grid gap-2">
+              <Label>Priority</Label>
               <Select
                 value={newTask.priority}
-                onValueChange={(value: 'low' | 'medium' | 'high') =>
-                  setNewTask(prev => ({ ...prev, priority: value }))
-                }
+                onValueChange={(value) => setNewTask({ ...newTask, priority: value as 'low' | 'medium' | 'high' })}
               >
                 <SelectTrigger>
                   <SelectValue placeholder="Select priority" />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="low">Low Priority</SelectItem>
-                  <SelectItem value="medium">Medium Priority</SelectItem>
-                  <SelectItem value="high">High Priority</SelectItem>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {!newTask.all_day && newTask.due_date && (
-              <div className="grid gap-2">
-                <Input
-                  type="time"
-                  value={formatInTimeZone(
-                    newTask.due_date || new Date(),
-                    settings?.timezone || 'UTC',
-                    'HH:mm'
+            <div className="grid gap-2">
+              <Label>Due Date</Label>
+              <Popover>
+                <PopoverTrigger>
+                  <Button
+                    variant={"outline"}
+                    size={"sm"}
+                    className={`w-[100px] justify-start text-left font-normal`}
+                  >
+                    {newTask.due_date ? (
+                      formatInTimeZone(newTask.due_date, timezone, 'PPP p')
+                    ) : (
+                      <span>Pick date</span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start" side="top">
+                  <Calendar
+                    mode="single"
+                    selected={newTask.due_date instanceof Date ? newTask.due_date : undefined}
+                    onSelect={(date) => {
+                      if (date) {
+                        const newDate = new Date(date);
+                        if (newTask.due_date instanceof Date) {
+                          newDate.setHours(
+                            newTask.due_date.getHours(),
+                            newTask.due_date.getMinutes()
+                          );
+                        } else {
+                          // Default to current time
+                          const now = new Date();
+                          newDate.setHours(now.getHours(), now.getMinutes());
+                        }
+                        setNewTask({ ...newTask, due_date: newDate });
+                      } else {
+                        setNewTask({ ...newTask, due_date: null });
+                      }
+                    }}
+                    initialFocus
+                  />
+                  {!newTask.all_day && newTask.due_date && (
+                    <div className="grid gap-2">
+                      <TimeSelect
+                        value={newTask.due_date}
+                        onChange={(newDate) => {
+                          setNewTask({ ...newTask, due_date: newDate });
+                        }}
+                        compact={true}
+                      />
+                    </div>
                   )}
-                  onChange={(e) => {
-                    const [hours, minutes] = e.target.value.split(':');
-                    const newDate = new Date(newTask.due_date || new Date());
-                    newDate.setHours(parseInt(hours), parseInt(minutes));
-                    setNewTask({ ...newTask, due_date: newDate });
-                  }}
-                />
-              </div>
-            )}
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">
+                All Day
+              </label>
+              <input
+                type="checkbox"
+                checked={newTask.all_day}
+                onChange={(e) => setNewTask(prev => ({ ...prev, all_day: e.target.checked }))}
+                className="ml-2"
+              />
+            </div>
           </div>
           <DialogFooter>
             <Button
               variant="outline"
-              onClick={() => setShowNewTaskDialog(false)}
+              onClick={() => {
+                setShowNewTaskDialog(false);
+                setNewTaskDialogOpen(false);
+              }}
             >
               Cancel
             </Button>
@@ -660,181 +732,154 @@ export default function Calendar() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showTaskDialog} onOpenChange={setShowTaskDialog}>
+      <Dialog open={showTaskDialog && taskDialogOpen} onOpenChange={(open) => {
+        setShowTaskDialog(open);
+        setTaskDialogOpen(open);
+      }}>
         <DialogContent className="sm:max-w-[425px]">
           <DialogHeader>
-            <DialogTitle>
-              {isEditing ? 'Edit Task' : 'Task Details'}
-            </DialogTitle>
-            {!isEditing && selectedTask?.due_date && (
-              <DialogDescription>
-                {selectedTask?.due_date && formatInTimeZone(
-                  new Date(selectedTask.due_date),
-                  settings?.timezone || 'UTC',
-                  selectedTask.all_day ? 'PPP' : 'PPP p'
-                )}
-              </DialogDescription>
-            )}
+            <DialogTitle>Edit Task</DialogTitle>
+            <DialogDescription>
+              Make changes to your task
+            </DialogDescription>
           </DialogHeader>
-          
-          {isEditing ? (
-            <div className="grid gap-4 py-4">
-              <div className="grid gap-2">
-                <Input
-                  placeholder="Task title"
-                  value={newTask.title}
-                  onChange={(e) => setNewTask(prev => ({ ...prev, title: e.target.value }))}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Input
-                  placeholder="Task description (optional)"
-                  value={newTask.description}
-                  onChange={(e) => setNewTask(prev => ({ ...prev, description: e.target.value }))}
-                />
-              </div>
-              <div className="grid gap-2">
-                <Select
-                  value={newTask.priority}
-                  onValueChange={(value: 'low' | 'medium' | 'high') =>
-                    setNewTask(prev => ({ ...prev, priority: value }))
-                  }
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select priority" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="low">Low Priority</SelectItem>
-                    <SelectItem value="medium">Medium Priority</SelectItem>
-                    <SelectItem value="high">High Priority</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="flex items-center gap-2">
-                <label className="text-sm font-medium">
-                  All Day
-                </label>
-                <input
-                  type="checkbox"
-                  checked={newTask.all_day}
-                  onChange={(e) => setNewTask(prev => ({ ...prev, all_day: e.target.checked }))}
-                  className="ml-2"
-                />
-              </div>
-              {newTask.due_date && (
-                <div className="grid gap-2">
-                  {!newTask.all_day && (
-                    <Input
-                      type="time"
-                      value={formatInTimeZone(
-                        newTask.due_date || new Date(),
-                        settings?.timezone || 'UTC',
-                        'HH:mm'
-                      )}
-                      onChange={(e) => {
-                        const [hours, minutes] = e.target.value.split(':');
-                        const newDate = new Date(newTask.due_date || new Date());
-                        newDate.setHours(parseInt(hours), parseInt(minutes));
-                        setNewTask({ ...newTask, due_date: newDate });
-                      }}
-                    />
-                  )}
-                </div>
-              )}
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="edit-title">Title</Label>
+              <Input
+                id="edit-title"
+                value={newTask.title}
+                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                placeholder="Task title"
+              />
             </div>
-          ) : (
-            <div className="py-4 space-y-4">
-              <div>
-                <h3 className="font-medium">{selectedTask?.title}</h3>
-                {selectedTask?.description && (
-                  <p className="text-sm text-muted-foreground mt-1">
-                    {selectedTask.description}
-                  </p>
-                )}
-              </div>
-              <div className="flex gap-2 text-sm">
-                <span className="font-medium">Priority:</span>
-                <span className="capitalize">{selectedTask?.priority}</span>
-              </div>
-              <div className="flex gap-2 text-sm">
-                <span className="font-medium">Status:</span>
-                <span>{selectedTask?.completed ? 'Completed' : 'Pending'}</span>
-              </div>
-              <div className="flex gap-2 text-sm">
-                <span className="font-medium">Type:</span>
-                <span>{selectedTask?.all_day ? 'All Day' : 'Time-Specific'}</span>
-              </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-description">Description (Optional)</Label>
+              <Textarea
+                id="edit-description"
+                value={newTask.description}
+                onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                placeholder="Task description"
+              />
             </div>
-          )}
-
-          <DialogFooter className="gap-2 sm:gap-0">
-            {isEditing ? (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => {
-                    setIsEditing(false);
-                    if (selectedTask) {
-                      setNewTask({
-                        title: selectedTask.title,
-                        description: selectedTask.description || '',
-                        priority: selectedTask.priority as 'low' | 'medium' | 'high',
-                        due_date: selectedTask.due_date ? new Date(selectedTask.due_date) : null,
-                        all_day: selectedTask.all_day ?? true,
-                      });
-                    }
-                  }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleUpdateTask}
-                  disabled={updateTask.isPending}
-                >
-                  {updateTask.isPending ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    'Save Changes'
-                  )}
-                </Button>
-              </>
-            ) : (
-              <>
-                <Button
-                  variant="outline"
-                  onClick={() => setShowTaskDialog(false)}
-                >
-                  Close
-                </Button>
-                <div className="flex gap-2">
+            <div className="grid gap-2">
+              <Label>Priority</Label>
+              <Select
+                value={newTask.priority}
+                onValueChange={(value) => setNewTask({ ...newTask, priority: value as 'low' | 'medium' | 'high' })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Select priority" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">Low</SelectItem>
+                  <SelectItem value="medium">Medium</SelectItem>
+                  <SelectItem value="high">High</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label>Due Date</Label>
+              <Popover>
+                <PopoverTrigger>
                   <Button
-                    variant="outline"
-                    onClick={() => setIsEditing(true)}
+                    variant={"outline"}
+                    size={"sm"}
+                    className={`w-[100px] justify-start text-left font-normal`}
                   >
-                    <Pencil className="h-4 w-4 mr-2" />
-                    Edit
+                    {newTask.due_date ? (
+                      formatInTimeZone(newTask.due_date, timezone, 'PPP p')
+                    ) : (
+                      <span>Pick date</span>
+                    )}
                   </Button>
-                          <Button
-                    variant="destructive"
-                    onClick={() => {
-                      if (selectedTask) {
-                        deleteTask.mutate(selectedTask.id);
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start" side="top">
+                  <Calendar
+                    mode="single"
+                    selected={newTask.due_date instanceof Date ? newTask.due_date : undefined}
+                    onSelect={(date) => {
+                      if (date) {
+                        const newDate = new Date(date);
+                        if (newTask.due_date instanceof Date) {
+                          newDate.setHours(
+                            newTask.due_date.getHours(),
+                            newTask.due_date.getMinutes()
+                          );
+                        } else {
+                          // Default to current time
+                          const now = new Date();
+                          newDate.setHours(now.getHours(), now.getMinutes());
+                        }
+                        setNewTask({ ...newTask, due_date: newDate });
+                      } else {
+                        setNewTask({ ...newTask, due_date: null });
                       }
                     }}
-                    disabled={deleteTask.isPending}
-                  >
-                    {deleteTask.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      <Trash2 className="h-4 w-4" />
-                    )}
-                          </Button>
-                </div>
-              </>
-            )}
+                    initialFocus
+                  />
+                  {newTask.due_date && !newTask.all_day && (
+                    <TimeSelect
+                      value={newTask.due_date}
+                      onChange={(newDate) => {
+                        setNewTask({ ...newTask, due_date: newDate });
+                      }}
+                      compact={true}
+                    />
+                  )}
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="grid gap-2">
+              <label className="text-sm font-medium">
+                All Day
+              </label>
+              <input
+                type="checkbox"
+                checked={newTask.all_day}
+                onChange={(e) => setNewTask(prev => ({ ...prev, all_day: e.target.checked }))}
+                className="ml-2"
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setShowTaskDialog(false);
+                setTaskDialogOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleUpdateTask}
+              disabled={updateTask.isPending}
+            >
+              {updateTask.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Updating...
+                </>
+              ) : (
+                'Update Task'
+              )}
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => {
+                if (selectedTask) {
+                  deleteTask.mutate(selectedTask.id);
+                }
+              }}
+              disabled={deleteTask.isPending}
+            >
+              {deleteTask.isPending ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                'Delete'
+              )}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

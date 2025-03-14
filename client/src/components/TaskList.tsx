@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
+import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
 
 // Update Task interface to match database schema
 interface Task {
@@ -63,7 +64,7 @@ export function TaskList() {
   
   // Fetch tasks
   const { data: tasks = [], isLoading, error } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: [QUERY_KEYS.TASKS],
     queryFn: async () => {
       const data = await getTasks();
       
@@ -146,18 +147,53 @@ export function TaskList() {
       };
       return createTask(taskData);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      toast({
-        title: "Task created",
-        description: "Your task has been created successfully.",
-      });
+    onMutate: async (data) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous value
+      const previousTasks = queryClient.getQueryData<Task[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create an optimistic task with a temporary ID
+      const optimisticTask: Task = {
+        ...data,
+        id: Date.now(), // Temporary ID
+        completed: false,
+        due_date: date ? Math.floor(date.getTime() / 1000) : null,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
+        // Add other required fields
+        user_id: 2,
+        all_day: true,
+        is_recurring: false,
+        parent_task_id: null,
+        recurrence_pattern: null,
+        recurrence_interval: null,
+        recurrence_end_date: null,
+      } as Task;
+      
+      // Optimistically update the tasks list
+      queryClient.setQueryData<Task[]>([QUERY_KEYS.TASKS], [...previousTasks, optimisticTask]);
+      
+      // Return the context
+      return { previousTasks };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        queryClient.setQueryData<Task[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
       toast({
         variant: "destructive",
         title: "Failed to create task",
         description: error.message || "An error occurred while creating the task.",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      toast({
+        title: "Task created",
+        description: "Your task has been created successfully.",
       });
     },
   });
@@ -174,20 +210,50 @@ export function TaskList() {
       };
       return updateTask(updateData);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      toast({
-        title: "Task updated",
-        description: "Task status has been updated.",
-      });
+    onMutate: async ({ id, task }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous value
+      const previousTasks = queryClient.getQueryData<Task[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create a deep copy of the tasks to avoid reference issues
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Find the task to update
+      const taskIndex = updatedTasks.findIndex((t: Task) => t.id === id);
+      
+      if (taskIndex !== -1) {
+        // Update the task with the new data
+        updatedTasks[taskIndex] = {
+          ...updatedTasks[taskIndex],
+          ...task
+        };
+        
+        // Immediately update the UI
+        queryClient.setQueryData<Task[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
+      // Return the context for potential rollback
+      return { previousTasks };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        queryClient.setQueryData<Task[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
       toast({
         variant: "destructive",
         title: "Failed to update task",
         description: error.message || "An error occurred while updating the task.",
       });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      toast({
+        title: "Task updated",
+        description: "Your task has been updated successfully.",
+      });
     },
   });
 
@@ -205,18 +271,44 @@ export function TaskList() {
       // Then delete the parent task
       return deleteTask(id);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      toast({
-        title: "Task deleted",
-        description: "The task and its subtasks have been deleted successfully.",
-      });
+    onMutate: async (id) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous value
+      const previousTasks = queryClient.getQueryData<Task[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Get child tasks
+      const childTaskIds = tasks
+        .filter(task => task.parent_task_id === id)
+        .map(task => task.id);
+      
+      // Optimistically remove the task and its children from the list
+      queryClient.setQueryData<Task[]>([QUERY_KEYS.TASKS], 
+        previousTasks.filter(task => 
+          task.id !== id && !childTaskIds.includes(task.id)
+        )
+      );
+      
+      // Return the context
+      return { previousTasks };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        queryClient.setQueryData<Task[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
       toast({
         variant: "destructive",
         title: "Failed to delete task",
         description: error.message || "An error occurred while deleting the task.",
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      toast({
+        title: "Task deleted",
+        description: "The task and its subtasks have been deleted successfully.",
       });
     },
   });
