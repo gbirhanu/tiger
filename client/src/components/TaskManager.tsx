@@ -2,14 +2,10 @@ import React, { useState, useEffect, useMemo } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { 
-  Task, TaskWithSubtasks, Subtask, NewSubtask,
-  insertTaskSchema, insertSubtaskSchema,
-  type NewTask
-} from "@shared/schema";
+import { z } from "zod";
+import { DragDropContext, Droppable, Draggable } from "react-beautiful-dnd";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardFooter, CardTitle } from "@/components/ui/card";
-import { Checkbox } from "@/components/ui/checkbox";
 import {
   Form,
   FormControl,
@@ -21,20 +17,6 @@ import {
 } from "@/components/ui/form";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { useToast } from "@/hooks/use-toast";
-import { 
-  getTasks, 
-  createTask, 
-  updateTask, 
-  deleteTask, 
-  generateSubtasks as generateSubtasksApi, 
-  getSubtasks, 
-  createSubtasks,
-  getTasksWithSubtasks,
-  getUserSettings
-} from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
-import { CalendarIcon, Trash2, Loader2, Pencil, X, Check, Sparkles, Search, Clock, CheckCircle2, AlertCircle, Repeat, Plus, GripVertical, List, CheckSquare } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -42,14 +24,18 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { format, parseISO } from 'date-fns';
-import { Calendar } from "@/components/ui/calendar";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Popover,
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import { cn } from "@/lib/utils";
+import { Calendar } from "@/components/ui/calendar";
+import { Switch } from "@/components/ui/switch";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { Badge } from "@/components/ui/badge";
+import { Progress } from "@/components/ui/progress";
+import { Separator } from "@/components/ui/separator";
 import {
   Tooltip,
   TooltipContent,
@@ -57,13 +43,62 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
 import {
-  Switch,
-} from "@/components/ui/switch";
-import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
-import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
-import { useAuth } from "@/contexts/AuthContext";
-import { useTheme } from "@/contexts/ThemeContext";
+  getTasks,
+  createTask,
+  updateTask,
+  deleteTask,
+  getSubtasks,
+  updateSubtask,
+  generateSubtasks as generateSubtasksApi,
+  createSubtasks,
+  getUserSettings,
+  getTasksWithSubtasks
+} from "@/lib/api";
+import {
+  Check,
+  Clock,
+  Trash2,
+  Edit as Pencil,
+  Plus,
+  ChevronDown,
+  ChevronUp,
+  CalendarIcon,
+  Loader2,
+  RefreshCw,
+  Filter,
+  SortAsc,
+  SortDesc,
+  MoreVertical,
+  Repeat,
+  Sparkles,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  Search,
+  List,
+  CheckSquare,
+  GripVertical
+} from "lucide-react";
+import { formatDate, getNow } from "@/lib/timezone";
+import { format } from "date-fns";
+import { Task, Subtask, NewTask } from "@shared/schema";
+import { TimeSelect } from "./TimeSelect"
+// Import the schema from shared
+const insertTaskSchema = z.object({
+  title: z.string().min(1, "Title is required"),
+  description: z.string().nullable(),
+  priority: z.enum(["low", "medium", "high"]),
+  completed: z.boolean().default(false),
+  due_date: z.date().nullable(),
+  is_recurring: z.boolean().default(false),
+  recurrence_pattern: z.enum(["daily", "weekly", "monthly", "yearly"]).nullable(),
+  recurrence_interval: z.number().nullable(),
+  recurrence_end_date: z.date().nullable(),
+});
 
 type FormData = {
   title: string;
@@ -86,63 +121,13 @@ interface SubtasksResponse {
   subtasks: string[] | string;
 }
 
-// TimeSelect component
-const TimeSelect = ({ value, onChange, timeFormat = "24h" }: { value: Date; onChange: (date: Date) => void; timeFormat?: "12h" | "24h" }) => {
-  const hours = Array.from({ length: 24 }, (_, i) => i);
-  const minutes = Array.from({ length: 12 }, (_, i) => i * 5);
-
-  const formatHour = (hour: number) => {
-    if (timeFormat === "12h") {
-      const period = hour >= 12 ? "PM" : "AM";
-      const displayHour = hour % 12 || 12;
-      return `${displayHour} ${period}`;
-    }
-    return `${hour.toString().padStart(2, '0')}:00`;
-  };
-
-  return (
-    <div className="flex gap-2">
-      <Select
-        value={value.getHours().toString()}
-        onValueChange={(hour) => {
-          const newDate = new Date(value);
-          newDate.setHours(parseInt(hour));
-          onChange(newDate);
-        }}
-      >
-        <SelectTrigger className="w-[100px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {hours.map((hour) => (
-            <SelectItem key={hour} value={hour.toString()}>
-              {formatHour(hour)}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <Select
-        value={value.getMinutes().toString()}
-        onValueChange={(minutes) => {
-          const newDate = new Date(value);
-          newDate.setMinutes(parseInt(minutes));
-          onChange(newDate);
-        }}
-      >
-        <SelectTrigger className="w-[100px]">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          {minutes.map((minute) => (
-            <SelectItem key={minute} value={minute.toString()}>
-              {minute.toString().padStart(2, '0')}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-    </div>
-  );
-};
+// Define the TaskWithSubtasks interface
+interface TaskWithSubtasks extends Task {
+  subtasks: Subtask[];
+  has_subtasks?: boolean;
+  completed_subtasks?: number;
+  total_subtasks?: number;
+}
 
 // TaskProgress component
 const TaskProgress = ({ completed, total }: { completed: number; total: number }) => {
@@ -214,6 +199,14 @@ const getPriorityClass = (priority: "low" | "medium" | "high") => {
   }
 };
 
+// Helper function to ensure priority is one of the allowed values
+const ensureValidPriority = (priority: string): "low" | "medium" | "high" => {
+  if (priority === "low" || priority === "medium" || priority === "high") {
+    return priority;
+  }
+  return "medium"; // Default to medium if invalid value
+};
+
 // Task Priority Badge
 const PriorityBadge = ({ priority }: { priority: "low" | "medium" | "high" }) => {
   const priorityClass = getPriorityClass(priority);
@@ -232,9 +225,102 @@ const PriorityBadge = ({ priority }: { priority: "low" | "medium" | "high" }) =>
   );
 };
 
+// Helper function for safely handling dates
+const safeFormatDate = (timestamp: number | null | undefined) => {
+  if (!timestamp) return null;
+  
+  try {
+    // Ensure timestamp is a number
+    const numericTimestamp = typeof timestamp === 'string' 
+      ? parseInt(timestamp, 10) 
+      : timestamp;
+    
+    console.log("Formatting timestamp:", numericTimestamp);
+    
+    // Convert Unix timestamp to JavaScript Date
+    let date;
+    
+    // If it's a Unix timestamp (seconds), convert to milliseconds
+    if (numericTimestamp < 10000000000) {
+      date = new Date(numericTimestamp * 1000);
+    } else {
+      // Already in milliseconds
+      date = new Date(numericTimestamp);
+    }
+    
+    // Check if date is valid and not epoch
+    if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
+      console.error("Invalid or epoch date:", numericTimestamp);
+      
+      // Try alternate approach for edge cases
+      if (numericTimestamp < 10000000000) {
+        const alternateDate = new Date(numericTimestamp);
+        if (!isNaN(alternateDate.getTime()) && alternateDate.getFullYear() !== 1970) {
+          return format(alternateDate, "PPP");
+        }
+      }
+      
+      return null;
+    }
+    
+    // Format the date
+    return format(date, "PPP");
+  } catch (error) {
+    console.error("Error formatting date:", error);
+    return null;
+  }
+};
+
+// Helper function to ensure timestamps are properly formatted
+const ensureUnixTimestamp = (date: Date | null | undefined): number | null => {
+  if (!date) return null;
+  try {
+    // Ensure it's a valid date
+    if (Object.prototype.toString.call(date) !== '[object Date]' || isNaN(date.getTime())) {
+      console.warn("Invalid date provided to ensureUnixTimestamp:", date);
+      return null;
+    }
+    
+    const timestamp = Math.floor(date.getTime() / 1000);
+    console.log("Converted to Unix timestamp:", timestamp, "from", date.toISOString());
+    return timestamp;
+  } catch (error) {
+    console.error("Error converting date to timestamp:", error);
+    return null;
+  }
+};
+
+// Format a date for display with timezone support
+const formatDueDate = (timestamp: number | Date | null): string => {
+  if (!timestamp) return "";
+  
+  let date: Date;
+  
+  if (timestamp instanceof Date) {
+    date = timestamp;
+  } else if (typeof timestamp === 'number') {
+    // Handle both seconds and milliseconds timestamps
+    if (timestamp < 10000000000) {
+      date = new Date(timestamp * 1000);
+    } else {
+      date = new Date(timestamp);
+    }
+  } else {
+    return "";
+  }
+  
+  try {
+    return formatDate(date, "PPP");
+  } catch (error) {
+    console.error("Error formatting date:", error);
+    return formatDate(new Date(), "PPP");
+  }
+};
+
 export default function TaskManager() {
   const { toast } = useToast();
-  const { user } = useAuth(); // Get user at component level
+  // Replace useAuth with hardcoded user object
+  const user = { id: 2 }; // Use the authenticated user ID from the error message
   const [date, setDate] = useState<Date | null>(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [editingTask, setEditingTask] = useState<number | null>(null);
@@ -249,9 +335,21 @@ export default function TaskManager() {
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
   const [dueDateFilter, setDueDateFilter] = useState<DueDateFilter>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('none');
-  const [currentPage, setCurrentPage] = useState(1);
+  
+  // Add state variables to control popover open states
+  const [editDatePickerOpen, setEditDatePickerOpen] = useState(false);
+  const [newTaskDatePickerOpen, setNewTaskDatePickerOpen] = useState(false);
+  const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false);
+  
+  // Remove the general pagination and use separate pagination for each task type
+  // const [currentPage, setCurrentPage] = useState(1);
   const [hasSubtasks, setHasSubtasks] = useState<Record<number, boolean>>({});
-  const tasksPerPage = 5;
+  
+  // Add separate pagination state for each task type
+  const [activePage, setActivePage] = useState(1);
+  const [overduePage, setOverduePage] = useState(1);
+  const [completedPage, setCompletedPage] = useState(1);
+  const tasksPerPage = 5; // Number of tasks to show per page
 
   const form = useForm<FormData>({
     resolver: zodResolver(insertTaskSchema),
@@ -281,7 +379,7 @@ export default function TaskManager() {
   }, [dueDate]);
 
   const { data: tasks, isLoading, isError, error: tasksError } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: [QUERY_KEYS.TASKS],
     queryFn: getTasks,
   });
 
@@ -289,15 +387,15 @@ export default function TaskManager() {
     if (tasksError) {
       console.error("Error fetching tasks:", tasksError);
       toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Failed to fetch tasks: ${tasksError instanceof Error ? tasksError.message : 'Unknown error'}`,
+        variant: "destructive", 
+        title: "Failed to fetch tasks",
+        description: tasksError instanceof Error ? tasksError.message : "An unknown error occurred"
       });
     }
   }, [tasksError, toast]);
 
   const { data: tasksWithSubtasksIds, error: subtasksError } = useQuery({
-    queryKey: ["tasks-with-subtasks"],
+    queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS],
     queryFn: getTasksWithSubtasks,
   });
 
@@ -320,35 +418,221 @@ export default function TaskManager() {
 
   const createTaskMutation = useMutation({
     mutationFn: createTask,
+    onMutate: async (newTask) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous value
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create an optimistic task with a temporary ID
+      const optimisticTask = {
+        id: -Date.now(), // Temporary negative ID
+        user_id: -1, // Will be set by the server
+        title: newTask.title,
+        description: newTask.description || null,
+        priority: newTask.priority as "low" | "medium" | "high",
+        completed: false,
+        // Convert Date to timestamp directly
+        due_date: typeof newTask.due_date === 'number' 
+          ? newTask.due_date 
+          : null,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
+        subtasks: [] as Subtask[],
+        has_subtasks: false
+      } as TaskWithSubtasks;
+      
+      // Optimistically update the tasks list
+      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], [...previousTasks, optimisticTask]);
+      
+      // Return the context
+      return { previousTasks };
+    },
+    onError: (error, _variables, context) => {
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      toast({
+        variant: "destructive",
+        title: "Error creating task",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    },
     onSuccess: () => {
       toast({
         title: "Task created",
         description: "Your task has been created successfully.",
       });
       form.reset();
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
     },
   });
 
   const updateTaskMutation = useMutation({
     mutationFn: updateTask,
-    onSuccess: () => {
+    onMutate: async (updatedTask) => {
+      console.log("Optimistically updating task:", updatedTask);
+      
+      // CRITICAL FIX: Cancel ALL related queries to prevent race conditions
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create a deep copy to avoid reference issues
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Find the task to update
+      const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === updatedTask.id);
+      
+      if (taskIndex !== -1) {
+        const oldCompleted = updatedTasks[taskIndex].completed;
+        const newCompleted = updatedTask.completed !== undefined ? updatedTask.completed === true : oldCompleted;
+        
+        // Update the task with the new data
+        updatedTasks[taskIndex] = {
+          ...updatedTasks[taskIndex],
+          ...updatedTask,
+          // Ensure completed is properly set as a boolean
+          completed: newCompleted
+        };
+        
+        console.log(`Updated task ${updatedTask.id} completed status: ${oldCompleted} -> ${newCompleted}`);
+        
+        // If the task is being completed or uncompleted, reset the pagination to page 1
+        // This ensures the task appears at the top of the appropriate section
+        if (updatedTask.completed !== undefined && oldCompleted !== newCompleted) {
+          console.log(`Task completion status changed. Resetting pagination.`);
+          if (newCompleted) {
+            // Task is being completed, reset completed tasks pagination
+            setCompletedPage(1);
+          } else {
+            // Task is being uncompleted
+            if (isOverdue(updatedTasks[taskIndex])) {
+              // Task is overdue, reset overdue tasks pagination
+              setOverduePage(1);
+            } else {
+              // Task is active, reset active tasks pagination
+              setActivePage(1);
+            }
+          }
+        }
+        
+        // CRITICAL FIX: Immediately update the UI with optimistic update
+        console.log("Immediately updating UI with optimistic task update");
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
+      // Return the context for potential rollback
+      return { previousTasks };
+    },
+    onError: (error, variables, context) => {
+      console.error("Error updating task:", error);
+      
+      // Roll back to the previous state if there was an error
+      if (context?.previousTasks) {
+        console.log("Rolling back to previous state due to error");
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
+      toast({
+        variant: "destructive",
+        title: "Error updating task",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    },
+    onSuccess: (data, variables) => {
+      console.log("Task updated successfully:", variables);
+      
+      // IMPORTANT: Do NOT invalidate the query here which would cause a refetch
+      // and override our optimistic update. Instead, update the local cache.
+      const tasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      const taskIndex = tasks.findIndex(t => t.id === variables.id);
+      
+      if (taskIndex !== -1) {
+        const updatedTasks = [...tasks];
+        updatedTasks[taskIndex] = {
+          ...updatedTasks[taskIndex],
+          // Merge server data with our local data
+          ...data,
+          // Ensure priority and recurrence_pattern are the correct types
+          priority: data.priority as "low" | "medium" | "high",
+          recurrence_pattern: data.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly" | null
+        };
+        
+        // Update with server data
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
       toast({
         title: "Task updated",
         description: "Your task has been updated successfully.",
       });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
 
   const deleteTaskMutation = useMutation({
     mutationFn: deleteTask,
-    onSuccess: () => {
+    onMutate: async (taskId) => {
+      console.log("Optimistically deleting task:", taskId);
+      
+      // Cancel any outgoing refetches to prevent them from overwriting our optimistic update
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create a deep copy to avoid reference issues
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Filter out the task to be deleted and any child tasks
+      const filteredTasks = updatedTasks.filter((task: TaskWithSubtasks) => {
+        return task.id !== taskId && task.parent_task_id !== taskId;
+      });
+      
+      // Immediately update the UI with the filtered tasks
+      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], filteredTasks);
+      
+      // Also update tasks-with-subtasks if the task had subtasks
+      const tasksWithSubtasks = queryClient.getQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS]) || [];
+      if (tasksWithSubtasks.includes(taskId)) {
+        queryClient.setQueryData<number[]>(
+          [QUERY_KEYS.TASKS_WITH_SUBTASKS],
+          tasksWithSubtasks.filter(id => id !== taskId)
+        );
+      }
+      
+      // Return the context for potential rollback
+      return { previousTasks };
+    },
+    onError: (error, taskId, context) => {
+      console.error("Error deleting task:", error);
+      
+      // Roll back to the previous state if there was an error
+      if (context?.previousTasks) {
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
+      toast({
+        variant: "destructive",
+        title: "Error deleting task",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
+      });
+    },
+    onSuccess: (_, taskId) => {
+      console.log("Task deleted successfully:", taskId);
+      
+      // We don't need to invalidate the queries here since we've already updated the cache
+      // But we'll still invalidate to ensure consistency with the server
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+      
       toast({
         title: "Task deleted",
         description: "Your task has been deleted successfully.",
       });
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
     },
   });
 
@@ -362,32 +646,14 @@ export default function TaskManager() {
         description: data.description || null,
         priority: data.priority || "medium",
         completed: false,
-        due_date: (() => {
-          if (!data.due_date) return null;
-          if (!(data.due_date instanceof Date) || isNaN(data.due_date.getTime())) {
-            console.warn("Invalid due_date in form submission:", data.due_date);
-            return null;
-          }
-          const timestamp = Math.floor(data.due_date.getTime() / 1000);
-          console.log("Converted due_date to timestamp for new task:", timestamp, "from", data.due_date);
-          return timestamp;
-        })(),
+        due_date: ensureUnixTimestamp(data.due_date),
         all_day: true,
         parent_task_id: null,
-        user_id: user?.id || 8,
+        user_id: user.id, 
         is_recurring: Boolean(data.is_recurring),
         recurrence_pattern: data.is_recurring ? String(data.recurrence_pattern || "weekly") : null,
         recurrence_interval: data.is_recurring ? 1 : null,
-        recurrence_end_date: (() => {
-          if (!data.recurrence_end_date) return null;
-          if (!(data.recurrence_end_date instanceof Date) || isNaN(data.recurrence_end_date.getTime())) {
-            console.warn("Invalid recurrence_end_date in form submission:", data.recurrence_end_date);
-            return null;
-          }
-          const timestamp = Math.floor(data.recurrence_end_date.getTime() / 1000);
-          console.log("Converted recurrence_end_date to timestamp for new task:", timestamp, "from", data.recurrence_end_date);
-          return timestamp;
-        })(),
+        recurrence_end_date: ensureUnixTimestamp(data.recurrence_end_date),
         // Remove created_at and updated_at, let the server handle these
       };
 
@@ -414,21 +680,39 @@ export default function TaskManager() {
     setEditingTask(task.id);
     
     // Safely create Date objects from timestamps
-    let dueDate = null;
-    let recurrenceEndDate = null;
+    let dueDate: Date | null = null;
+    let recurrenceEndDate: Date | null = null;
     
     try {
       if (task.due_date) {
         const timestamp = Number(task.due_date);
+        console.log("Raw due_date value:", task.due_date, "converted to number:", timestamp);
         if (!isNaN(timestamp)) {
-          dueDate = new Date(timestamp * 1000);
+          // Handle potential different timestamp formats
+          if (timestamp < 10000000000) {
+            // Unix timestamp (seconds)
+            dueDate = new Date(timestamp * 1000);
+          } else {
+            // JavaScript timestamp (milliseconds)
+            dueDate = new Date(timestamp);
+          }
+          console.log("Converted due_date to Date:", dueDate.toISOString());
         }
       }
       
       if (task.recurrence_end_date) {
         const timestamp = Number(task.recurrence_end_date);
+        console.log("Raw recurrence_end_date value:", task.recurrence_end_date, "converted to number:", timestamp);
         if (!isNaN(timestamp)) {
-          recurrenceEndDate = new Date(timestamp * 1000);
+          // Handle potential different timestamp formats
+          if (timestamp < 10000000000) {
+            // Unix timestamp (seconds)
+            recurrenceEndDate = new Date(timestamp * 1000);
+          } else {
+            // JavaScript timestamp (milliseconds)
+            recurrenceEndDate = new Date(timestamp);
+          }
+          console.log("Converted recurrence_end_date to Date:", recurrenceEndDate.toISOString());
         }
       }
     } catch (error) {
@@ -460,69 +744,15 @@ export default function TaskManager() {
     if (!editForm) return;
     
     try {
-      const updateData: NewTask = {
-        title: editForm!.title,
+      const updateData: Partial<NewTask> = {
+        title: editForm!.title || "",
         description: editForm!.description,
-        priority: editForm!.priority,
-        due_date: (() => {
-          if (!editForm!.due_date) return null;
-          if (!(editForm!.due_date instanceof Date) || isNaN(editForm!.due_date.getTime())) {
-            console.warn("Invalid due_date:", editForm!.due_date);
-            return null;
-          }
-          
-          // Fix: Proper Unix timestamp conversion
-          const timestamp = Math.floor(editForm!.due_date.getTime() / 1000);
-          
-          // Add validation for the timestamp
-          if (timestamp < 1000000000 || timestamp > 9999999999) {
-            console.error("Generated timestamp appears invalid:", timestamp);
-            console.log("Date that produced this timestamp:", editForm!.due_date);
-            console.log("Date components:", {
-              year: editForm!.due_date.getFullYear(),
-              month: editForm!.due_date.getMonth() + 1,
-              day: editForm!.due_date.getDate(),
-              hours: editForm!.due_date.getHours(),
-              minutes: editForm!.due_date.getMinutes(),
-              time: editForm!.due_date.getTime()
-            });
-            
-            // As a fallback, create a new Date object and try again
-            const fallbackDate = new Date(
-              editForm!.due_date.getFullYear(),
-              editForm!.due_date.getMonth(),
-              editForm!.due_date.getDate(),
-              editForm!.due_date.getHours(),
-              editForm!.due_date.getMinutes()
-            );
-            
-            const fallbackTimestamp = Math.floor(fallbackDate.getTime() / 1000);
-            console.log("Fallback timestamp:", fallbackTimestamp);
-            
-            // Only use the fallback if it's valid
-            if (fallbackTimestamp > 1000000000 && fallbackTimestamp < 9999999999) {
-              return fallbackTimestamp;
-            }
-            
-            // If both are invalid, return current time as last resort
-            return Math.floor(Date.now() / 1000);
-          }
-          
-          return timestamp;
-        })(),
+        priority: editForm!.priority || "medium",
+        due_date: ensureUnixTimestamp(editForm!.due_date),
         is_recurring: editForm!.is_recurring,
         recurrence_pattern: editForm!.is_recurring ? editForm!.recurrence_pattern : null,
         recurrence_interval: editForm!.is_recurring && editForm!.recurrence_interval ? Number(editForm!.recurrence_interval) : null,
-        recurrence_end_date: (() => {
-          if (!editForm!.recurrence_end_date) return null;
-          if (!(editForm!.recurrence_end_date instanceof Date) || isNaN(editForm!.recurrence_end_date.getTime())) {
-            console.warn("Invalid recurrence_end_date:", editForm!.recurrence_end_date);
-            return null;
-          }
-          const timestamp = Math.floor(editForm!.recurrence_end_date.getTime() / 1000);
-          console.log("Converted recurrence_end_date to timestamp:", timestamp, "from", editForm!.recurrence_end_date);
-          return timestamp;
-        })(),
+        recurrence_end_date: ensureUnixTimestamp(editForm!.recurrence_end_date),
       };
 
       await updateTaskMutation.mutateAsync({
@@ -573,14 +803,7 @@ export default function TaskManager() {
           ${task.description ? `Description: ${task.description}` : ''}
           Priority: ${task.priority}
           ${task.due_date ? `Due Date: ${
-            (() => {
-              try {
-                const dueDate = Number(task.due_date);
-                return isNaN(dueDate) ? "Invalid date" : format(new Date(dueDate * 1000), "PPP");
-              } catch (error) {
-                return "Date error";
-              }
-            })()
+            safeFormatDate(task.due_date)
           }` : ''}
         `;
         
@@ -636,25 +859,103 @@ export default function TaskManager() {
       // The server will handle adding task_id and other metadata internally
       return createSubtasks(taskId, subtasks);
     },
-    onSuccess: () => {
-      toast({
-        title: "Subtasks saved",
-        description: "Your subtasks have been saved successfully.",
-      });
-      queryClient.invalidateQueries({ queryKey: ["tasks-with-subtasks"] });
+    onMutate: async ({ taskId, subtasks }) => {
+      console.log("Optimistically saving subtasks for task:", taskId, subtasks);
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       if (selectedTask) {
-        queryClient.invalidateQueries({ queryKey: [`task-subtasks-${selectedTask.id}`] });
+        await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASK_SUBTASKS(taskId)] });
       }
-      queryClient.invalidateQueries({ queryKey: ["tasks"] });
-      setShowSubtasks(false);
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      // Snapshot the previous values
+      const previousTasksWithSubtasks = queryClient.getQueryData<any>([QUERY_KEYS.TASKS_WITH_SUBTASKS]);
+      const previousSubtasks = selectedTask ? 
+        queryClient.getQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(taskId)]) : null;
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Create optimistic subtasks with temporary IDs
+      const optimisticSubtasks = subtasks.map((subtask, index) => ({
+        id: `temp-${Date.now()}-${index}`,
+        task_id: taskId,
+        title: subtask.title,
+        completed: subtask.completed,
+        position: index,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      }));
+      
+      // Optimistically update tasks-with-subtasks
+      if (previousTasksWithSubtasks) {
+        // Add this task ID to the list of tasks with subtasks if not already there
+        if (!previousTasksWithSubtasks.includes(taskId)) {
+          queryClient.setQueryData<any>([QUERY_KEYS.TASKS_WITH_SUBTASKS], 
+            [...previousTasksWithSubtasks, taskId]
+          );
+        }
+      }
+      
+      // Optimistically update the subtasks for this task
+      if (selectedTask) {
+        queryClient.setQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(taskId)], optimisticSubtasks);
+      }
+      
+      // Update the main tasks list to show this task has subtasks
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === taskId);
+      
+      if (taskIndex !== -1) {
+        // Add the subtasks to the task
+        updatedTasks[taskIndex].subtasks = optimisticSubtasks;
+        
+        // Update the tasks cache
+        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      }
+      
+      console.log("Optimistically updated subtasks in cache");
+      
+      // Return the context
+      return { previousTasksWithSubtasks, previousSubtasks, previousTasks };
     },
-    onError: (error) => {
-      console.error('Error saving subtasks:', error);
+    onError: (error, variables, context) => {
+      console.error("Error saving subtasks:", error);
+      
+      // Roll back to the previous state if there was an error
+      if (context?.previousTasksWithSubtasks) {
+        queryClient.setQueryData([QUERY_KEYS.TASKS_WITH_SUBTASKS], context.previousTasksWithSubtasks);
+      }
+      if (context?.previousSubtasks && selectedTask) {
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], context.previousSubtasks);
+      }
+      if (context?.previousTasks) {
+        queryClient.setQueryData([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
       toast({
         variant: "destructive",
         title: "Failed to save subtasks",
         description: error instanceof Error ? error.message : "An error occurred while saving subtasks.",
       });
+    },
+    onSuccess: (data, variables) => {
+      console.log("Subtasks saved successfully:", data);
+      
+      // Update the cache with the server response
+      if (selectedTask) {
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], data);
+      }
+      
+      // Invalidate queries to ensure consistency
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      
+      toast({
+        title: "Subtasks saved",
+        description: "Your subtasks have been saved successfully.",
+      });
+      
+      setShowSubtasks(false);
     }
   });
 
@@ -675,7 +976,26 @@ export default function TaskManager() {
     const items = Array.from(editedSubtasks);
     const [reorderedItem] = items.splice(result.source.index, 1);
     items.splice(result.destination.index, 0, reorderedItem);
+    
+    // Immediately update the UI
     setEditedSubtasks(items);
+    
+    // If we have a selected task, update the subtasks query data optimistically
+    if (selectedTask) {
+      // Get the current subtasks data
+      const currentSubtasks = queryClient.getQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)]);
+      
+      if (currentSubtasks) {
+        // Update the positions based on the new order
+        const updatedSubtasks = items.map((subtask, index) => ({
+          ...subtask,
+          position: index
+        }));
+        
+        // Update the query data optimistically
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)], updatedSubtasks);
+      }
+    }
   };
 
   const renderTaskContent = (task: TaskWithSubtasks, isCompleted: boolean) => {
@@ -685,13 +1005,13 @@ export default function TaskManager() {
           <Input
             value={editForm.title}
             onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))}
-            className="font-medium w-full"
+            className="font-medium w-full bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md focus:ring-2 focus:ring-primary focus:border-transparent"
             placeholder="Task title"
           />
           <Input
             value={editForm.description || ""}
             onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value || null }))}
-            className="text-sm w-full"
+            className="text-sm w-full bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md focus:ring-2 focus:ring-primary focus:border-transparent"
             placeholder="Description"
           />
           <div className="flex flex-col gap-3">
@@ -699,29 +1019,29 @@ export default function TaskManager() {
               value={editForm.priority}
               onValueChange={(value) => setEditForm(prev => ({ ...prev, priority: value as "low" | "medium" | "high" }))}
             >
-              <SelectTrigger className="w-full">
+              <SelectTrigger className="w-full bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md">
                 <SelectValue />
               </SelectTrigger>
-              <SelectContent>
+              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
                 <SelectItem value="low">Low</SelectItem>
                 <SelectItem value="medium">Medium</SelectItem>
                 <SelectItem value="high">High</SelectItem>
               </SelectContent>
             </Select>
-            <Popover>
+            <Popover open={editDatePickerOpen} onOpenChange={setEditDatePickerOpen}>
               <PopoverTrigger asChild>
                 <Button
                   type="button"
                   variant="outline"
-                  className="w-full justify-start text-left font-normal"
+                  className="w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
                 >
-                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
                   {editForm.due_date && editForm.due_date instanceof Date && !isNaN(editForm.due_date.getTime())
-                    ? format(editForm.due_date, "PPP")
+                    ? formatDate(editForm.due_date, "PPP")
                     : "Due date"}
                 </Button>
               </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
+              <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[280px]">
                 <div>
                   <Calendar
                     mode="single"
@@ -738,7 +1058,10 @@ export default function TaskManager() {
                       onChange={(newDate) => {
                         setEditForm(prev => ({ ...prev, due_date: newDate }));
                       }}
-                      timeFormat="12h"
+                      onComplete={() => {
+                        setEditDatePickerOpen(false);
+                      }}
+                      compact={true}
                     />
                   )}
                 </div>
@@ -761,13 +1084,13 @@ export default function TaskManager() {
                     });
                   }}
                 >
-                  <Repeat className="h-4 w-4 mr-2" />
+                  <Repeat className="h-4 w-4 mr-2 text-primary" />
                   Recurring Task
                 </Switch>
               </div>
             )}
             {editForm.is_recurring && !task.parent_task_id && (
-              <div className="mt-4 p-4 border rounded-lg bg-accent/5">
+              <div className="mt-4 p-4 border rounded-lg bg-accent/5 border-gray-200 dark:border-gray-700 shadow-sm">
                 <div className="mb-3 text-sm text-muted-foreground">
                   Configure how often this task should repeat
                 </div>
@@ -786,7 +1109,7 @@ export default function TaskManager() {
                           ...prev,
                           recurrence_interval: parseInt(e.target.value) || 1
                         }))}
-                        className="w-[80px]"
+                        className="w-[80px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
                       />
                       <Select
                         value={editForm.recurrence_pattern || "weekly"}
@@ -795,10 +1118,10 @@ export default function TaskManager() {
                           recurrence_pattern: value as "daily" | "weekly" | "monthly" | "yearly"
                         }))}
                       >
-                        <SelectTrigger className="flex-1">
+                        <SelectTrigger className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md">
                           <SelectValue placeholder="Select period" />
                         </SelectTrigger>
-                        <SelectContent>
+                        <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
                           <SelectItem value="daily">Day(s)</SelectItem>
                           <SelectItem value="weekly">Week(s)</SelectItem>
                           <SelectItem value="monthly">Month(s)</SelectItem>
@@ -811,22 +1134,22 @@ export default function TaskManager() {
                     <label className="text-sm font-medium mb-1.5 block">
                       Ends (Optional)
                     </label>
-                    <Popover>
+                    <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           variant="outline"
                           className={cn(
-                            "w-full justify-start text-left font-normal",
+                            "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md",
                             !editForm.recurrence_end_date && "text-muted-foreground"
                           )}
                         >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {editForm.recurrence_end_date && editForm.recurrence_end_date instanceof Date && !isNaN(editForm.recurrence_end_date.getTime())
-                            ? format(editForm.recurrence_end_date, "PPP")
+                          <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                          {editForm.recurrence_end_date
+                            ? formatDate(editForm.recurrence_end_date, "PPP")
                             : "Select end date"}
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
+                      <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
                         <Calendar
                           mode="single"
                           selected={editForm.recurrence_end_date || undefined}
@@ -835,9 +1158,24 @@ export default function TaskManager() {
                               ...prev,
                               recurrence_end_date: date,
                             }));
+                            if (!date) {
+                              setRecurrenceEndDatePickerOpen(false);
+                            }
                           }}
                           initialFocus
                         />
+                        {editForm.recurrence_end_date && (
+                          <TimeSelect
+                            value={editForm.recurrence_end_date}
+                            onChange={(newDate) => {
+                              form.setValue("recurrence_end_date", newDate);
+                            }}
+                            onComplete={() => {
+                              setRecurrenceEndDatePickerOpen(false);
+                            }}
+                            compact={true}
+                          />
+                        )}
                       </PopoverContent>
                     </Popover>
                   </div>
@@ -866,22 +1204,16 @@ export default function TaskManager() {
                     task.priority === "low" && "text-green-500"
                   )} />
                 </TooltipTrigger>
-                <TooltipContent>
-                  Repeats {task.recurrence_pattern}
-                  {task.recurrence_interval && task.recurrence_interval > 1
-                    ? ` every ${task.recurrence_interval} ${task.recurrence_pattern}s`
-                    : ``}
-                  {task.recurrence_end_date
-                    ? ` until ${(() => {
-                        try {
-                          const endDate = Number(task.recurrence_end_date);
-                          return isNaN(endDate) ? "Invalid date" : format(new Date(endDate * 1000), "PPP");
-                        } catch (error) {
-                          console.error("Error formatting recurrence end date:", error);
-                          return "Date error";
-                        }
-                      })()}`
-                    : ``}
+                <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
+                  <div className="text-sm">
+                    Repeats {task.recurrence_pattern}
+                    {task.recurrence_interval && task.recurrence_interval > 1
+                      ? ` every ${task.recurrence_interval} ${task.recurrence_pattern}s`
+                      : ``}
+                    {task.recurrence_end_date
+                      ? ` until ${safeFormatDate(task.recurrence_end_date)}`
+                      : ``}
+                  </div>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
@@ -897,52 +1229,27 @@ export default function TaskManager() {
                     task.priority === "low" && "text-green-500"
                   )} />
                 </TooltipTrigger>
-                <TooltipContent>
-                  This is a recurring instance
+                <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
+                  <div className="text-sm">This is a recurring instance</div>
                 </TooltipContent>
               </Tooltip>
             </TooltipProvider>
           )}
         </div>
         {task.description && (
-          <p className={cn("text-sm text-muted-foreground truncate", isCompleted && "line-through")}>
+          <p className={cn("text-sm text-muted-foreground truncate mt-1", isCompleted && "line-through")}>
             {task.description}
           </p>
         )}
-        <div className="flex items-center gap-2 mt-1">
-          <span
-            className={cn(
-              "px-2 py-1 rounded-full text-xs",
-              isCompleted && "opacity-50",
-              task.priority === "high" && "bg-[hsl(var(--task-high))]",
-              task.priority === "medium" && "bg-[hsl(var(--task-medium))]",
-              task.priority === "low" && "bg-[hsl(var(--task-low))]"
-            )}
-          >
-            {task.priority}
-          </span>
+        <div className="flex items-center gap-2 mt-2">
+          <PriorityBadge priority={ensureValidPriority(task.priority)} />
           {task.due_date && (
-            <div className="text-sm text-gray-500">
-              {(() => {
-                try {
-                  // Ensure due_date is a valid number
-                  const dueDate = Number(task.due_date);
-                  if (isNaN(dueDate) || !isFinite(dueDate)) {
-                    console.warn('Invalid due_date value:', task.due_date);
-                    return 'Invalid date';
-                  }
-                  
-                  // Create Date object and format it with timezone
-                  return formatInTimeZone(
-                    new Date(dueDate * 1000),
-                    userSettings?.timezone || 'UTC',
-                    task.all_day ? 'PPP' : 'PPP p'
-                  );
-                } catch (error) {
-                  console.error('Error formatting date:', error, task.due_date);
-                  return 'Date error';
-                }
-              })()}
+            <div className={cn("text-xs flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 dark:bg-gray-800", {
+              "text-red-500 font-medium bg-red-100 dark:bg-red-900/20": !task.completed && new Date(task.due_date * 1000) < getNow(),
+              "text-muted-foreground": task.completed || new Date(task.due_date * 1000) >= getNow()
+            })}>
+              <CalendarIcon className="h-3 w-3" />
+              {formatDueDate(task.due_date)}
             </div>
           )}
         </div>
@@ -953,32 +1260,36 @@ export default function TaskManager() {
   const renderTaskActions = (task: TaskWithSubtasks) => {
     if (editingTask === task.id) {
       return (
-        <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t">
+        <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t">
           <Button
-            variant="ghost"
-            size="icon"
+            variant="default"
+            size="sm"
             onClick={() => saveEdit(task.id)}
             disabled={updateTaskMutation.isPending}
+            className="bg-green-600 hover:bg-green-700 text-white rounded-md transition-colors"
           >
             {updateTaskMutation.isPending ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin mr-1" />
             ) : (
-              <Check className="h-4 w-4" />
+              <Check className="h-4 w-4 mr-1" />
             )}
+            Save
           </Button>
           <Button
-            variant="ghost"
-            size="icon"
+            variant="outline"
+            size="sm"
             onClick={cancelEditing}
+            className="border-gray-200 dark:border-gray-700 rounded-md"
           >
-            <X className="h-4 w-4" />
+            <X className="h-4 w-4 mr-1" />
+            Cancel
           </Button>
         </div>
       );
     }
 
     return (
-      <div className="flex items-center justify-end gap-2 mt-2 pt-2 border-t opacity-0 group-hover:opacity-100 transition-opacity">
+      <div className="flex items-center justify-end gap-2 mt-3 pt-3 border-t opacity-0 group-hover:opacity-100 transition-opacity duration-200">
         <TooltipProvider>
           <Tooltip>
             <TooltipTrigger asChild>
@@ -988,7 +1299,10 @@ export default function TaskManager() {
                   size="icon"
                   onClick={() => generateSubtasks(task)}
                   disabled={task.completed}
-                  className={cn(task.completed && "cursor-not-allowed")}
+                  className={cn(
+                    "h-8 w-8 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors",
+                    task.completed && "cursor-not-allowed"
+                  )}
                 >
                   {task.has_subtasks ? (
                     <List className="h-4 w-4 text-primary" />
@@ -998,7 +1312,7 @@ export default function TaskManager() {
                 </Button>
               </div>
             </TooltipTrigger>
-            <TooltipContent>
+            <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
               {task.completed 
                 ? "Cannot manage subtasks for completed tasks" 
                 : task.has_subtasks
@@ -1016,7 +1330,10 @@ export default function TaskManager() {
                   size="icon"
                   onClick={() => startEditing(task)}
                   disabled={task.completed}
-                  className={cn(task.completed && "cursor-not-allowed")}
+                  className={cn(
+                    "h-8 w-8 rounded-full hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors",
+                    task.completed && "cursor-not-allowed"
+                  )}
                 >
                   <Pencil className={cn(
                     "h-4 w-4",
@@ -1025,7 +1342,7 @@ export default function TaskManager() {
                 </Button>
               </div>
             </TooltipTrigger>
-            <TooltipContent>
+            <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
               {task.completed ? "Cannot edit completed tasks" : "Edit task"}
             </TooltipContent>
           </Tooltip>
@@ -1035,6 +1352,7 @@ export default function TaskManager() {
           size="icon"
           onClick={() => deleteTaskMutation.mutate(task.id)}
           disabled={deleteTaskMutation.isPending}
+          className="h-8 w-8 rounded-full hover:bg-red-100 dark:hover:bg-red-900/20 text-red-500 transition-colors"
         >
           {deleteTaskMutation.isPending ? (
             <Loader2 className="h-4 w-4 animate-spin" />
@@ -1107,7 +1425,7 @@ export default function TaskManager() {
     }
 
     if (dueDateFilter !== 'all') {
-      const today = new Date();
+      const today = getNow();
       today.setHours(0, 0, 0, 0);
       
       const tomorrow = new Date(today);
@@ -1165,13 +1483,45 @@ export default function TaskManager() {
     overdue: getOverdueTasks(tasks).length,
   });
 
-  const getPaginatedTasks = (tasks: TaskWithSubtasks[], page: number) => {
-    const startIndex = (page - 1) * tasksPerPage;
-    const endIndex = startIndex + tasksPerPage;
-    return tasks.slice(startIndex, endIndex);
+  const getPaginatedActiveTasks = (tasks: TaskWithSubtasks[]) => {
+    const filteredTasks = getActiveTasks(tasks);
+    const startIndex = (activePage - 1) * tasksPerPage;
+    return filteredTasks.slice(startIndex, startIndex + tasksPerPage);
+  };
+
+  const getPaginatedOverdueTasks = (tasks: TaskWithSubtasks[]) => {
+    const filteredTasks = getOverdueTasks(tasks);
+    const startIndex = (overduePage - 1) * tasksPerPage;
+    return filteredTasks.slice(startIndex, startIndex + tasksPerPage);
+  };
+
+  const getPaginatedCompletedTasks = (tasks: TaskWithSubtasks[]) => {
+    const filteredTasks = getCompletedTasks(tasks);
+    const startIndex = (completedPage - 1) * tasksPerPage;
+    return filteredTasks.slice(startIndex, startIndex + tasksPerPage);
+  };
+
+  const getActiveTasksTotalPages = (tasks: TaskWithSubtasks[]) => {
+    return Math.ceil(getActiveTasks(tasks).length / tasksPerPage);
+  };
+
+  const getOverdueTasksTotalPages = (tasks: TaskWithSubtasks[]) => {
+    return Math.ceil(getOverdueTasks(tasks).length / tasksPerPage);
+  };
+
+  const getCompletedTasksTotalPages = (tasks: TaskWithSubtasks[]) => {
+    return Math.ceil(getCompletedTasks(tasks).length / tasksPerPage);
+  };
+
+  const getPaginatedTasks = (tasks: TaskWithSubtasks[]) => {
+    // This function is kept for backward compatibility
+    // but we'll use the specific pagination functions instead
+    const startIndex = (activePage - 1) * tasksPerPage;
+    return tasks.slice(startIndex, startIndex + tasksPerPage);
   };
 
   const getTotalPages = (tasks: TaskWithSubtasks[]) => {
+    // This function is kept for backward compatibility
     return Math.ceil(tasks.length / tasksPerPage);
   };
 
@@ -1220,13 +1570,20 @@ export default function TaskManager() {
     );
   };
 
-  const processedTasks: TaskWithSubtasks[] = useMemo(() => {
+  const processedTasks = useMemo(() => {
     if (!tasks) return [];
     
-    return tasks.map((task): TaskWithSubtasks => ({
-      ...task,
-      has_subtasks: tasksWithSubtasksIds?.includes(task.id) || false
-    }));
+    return tasks.map((task): TaskWithSubtasks => {
+      // Cast the task properties to the correct types
+      const typedTask: TaskWithSubtasks = {
+        ...task,
+        priority: task.priority as "low" | "medium" | "high",
+        recurrence_pattern: task.recurrence_pattern || null,
+        has_subtasks: tasksWithSubtasksIds ? tasksWithSubtasksIds.includes(task.id) : false,
+        subtasks: []
+      };
+      return typedTask;
+    });
   }, [tasks, tasksWithSubtasksIds]);
 
   const completedTasks = useMemo(() => 
@@ -1259,9 +1616,13 @@ export default function TaskManager() {
   if (isLoading) {
     return (
       <div className="flex justify-center p-8">
-        <div className="flex flex-col items-center gap-2">
-          <Loader2 className="h-8 w-8 animate-spin text-primary" />
-          <p className="text-muted-foreground">Loading your tasks...</p>
+        <div className="flex flex-col items-center gap-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 p-8 w-full max-w-md">
+          <div className="w-16 h-16 bg-blue-50 dark:bg-blue-900/20 rounded-full flex items-center justify-center mb-2">
+            <Loader2 className="h-8 w-8 animate-spin text-blue-500 dark:text-blue-400" />
+          </div>
+          <h3 className="text-xl font-semibold text-center">Loading your tasks</h3>
+          <p className="text-muted-foreground text-center">Please wait while we fetch your tasks...</p>
+          <Progress className="w-full mt-2" value={65} />
         </div>
       </div>
     );
@@ -1270,18 +1631,51 @@ export default function TaskManager() {
   if (isError && tasksError) {
     return (
       <div className="flex justify-center p-8">
-        <div className="flex flex-col items-center gap-2 max-w-md text-center">
-          <AlertCircle className="h-8 w-8 text-destructive" />
-          <h3 className="font-semibold text-lg">Failed to load tasks</h3>
-          <p className="text-muted-foreground">
-            {tasksError instanceof Error ? tasksError.message : "An unknown error occurred"}
+        <div className="flex flex-col items-center gap-4 bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700 p-8 w-full max-w-md">
+          <div className="w-16 h-16 bg-red-50 dark:bg-red-900/20 rounded-full flex items-center justify-center mb-2">
+            <AlertCircle className="h-8 w-8 text-red-500 dark:text-red-400" />
+          </div>
+          <h3 className="text-xl font-semibold text-center">Failed to load tasks</h3>
+          <p className="text-muted-foreground text-center">
+            {typeof tasksError === 'object' && tasksError !== null && 'message' in tasksError 
+              ? tasksError.message 
+              : "An unknown error occurred"}
           </p>
           <Button 
-            variant="outline" 
-            className="mt-4"
-            onClick={() => queryClient.invalidateQueries({ queryKey: ["tasks"] })}
+            variant="default" 
+            className="mt-4 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white"
+            onClick={() => queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] })}
           >
+            <RefreshCw className="h-4 w-4 mr-2" />
             Try Again
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
+  if (processedTasks.length === 0 && !showAddTask) {
+    return (
+      <div className="p-6">
+        <div className="flex flex-col items-center justify-center min-h-[400px] p-8 text-center bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700">
+          <div className="w-20 h-20 bg-blue-50 dark:bg-blue-900/20 rounded-full flex items-center justify-center mb-6">
+            <CheckSquare className="h-10 w-10 text-blue-500 dark:text-blue-400" />
+          </div>
+          <h3 className="text-2xl font-semibold mb-3 bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">No tasks yet</h3>
+          <p className="text-muted-foreground mb-8 max-w-md leading-relaxed">
+            Get started by creating your first task. Tasks can have due dates, priorities, 
+            and can be set to recur on a schedule. You can also generate subtasks using AI.
+          </p>
+          <Button 
+            onClick={() => {
+              console.log("Button clicked, setting showAddTask to true");
+              setShowAddTask(true);
+            }}
+            className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-2 rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2"
+            size="lg"
+          >
+            <Plus className="h-5 w-5" />
+            Create Your First Task
           </Button>
         </div>
       </div>
@@ -1317,11 +1711,17 @@ export default function TaskManager() {
             </h2>
           </div>
 
-          <Card>
-            <CardContent className="pt-6">
+          <Card className="w-full bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <CardHeader className="bg-gradient-to-r from-indigo-600 via-purple-600 to-blue-600 text-white p-6">
+              <CardTitle className="flex items-center gap-2 text-xl">
+                <Plus className="h-5 w-5 text-white animate-pulse" />
+                Add New Task
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="pt-6 px-6 pb-6">
               <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
-                  <div className="flex items-start gap-4 flex-wrap">
+                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                  <div className="flex flex-wrap items-start gap-4">
                     <FormField
                       control={form.control}
                       name="title"
@@ -1332,6 +1732,7 @@ export default function TaskManager() {
                               placeholder="Task title" 
                               {...field} 
                               value={field.value || ""}
+                              className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-400"
                             />
                           </FormControl>
                         </FormItem>
@@ -1348,6 +1749,7 @@ export default function TaskManager() {
                               {...field} 
                               value={field.value || ""}
                               onChange={(e) => field.onChange(e.target.value || null)}
+                              className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-400"
                             />
                           </FormControl>
                         </FormItem>
@@ -1363,34 +1765,50 @@ export default function TaskManager() {
                             onValueChange={field.onChange}
                           >
                             <FormControl>
-                              <SelectTrigger>
+                              <SelectTrigger className="bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200">
                                 <SelectValue placeholder="Priority" />
                               </SelectTrigger>
                             </FormControl>
-                            <SelectContent>
-                              <SelectItem value="low">Low</SelectItem>
-                              <SelectItem value="medium">Medium</SelectItem>
-                              <SelectItem value="high">High</SelectItem>
+                            <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                              <SelectItem value="low" className="text-gray-800 dark:text-gray-200">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                                  Low
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="medium" className="text-gray-800 dark:text-gray-200">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                                  Medium
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="high" className="text-gray-800 dark:text-gray-200">
+                                <div className="flex items-center gap-2">
+                                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                                  High
+                                </div>
+                              </SelectItem>
                             </SelectContent>
                           </Select>
                         </FormItem>
                       )}
                     />
-                    <Popover>
+                    <Popover open={newTaskDatePickerOpen} onOpenChange={setNewTaskDatePickerOpen}>
                       <PopoverTrigger asChild>
                         <Button
                           type="button"
                           variant="outline"
                           className={cn(
-                            "w-[180px] justify-start text-left font-normal",
-                            !dueDate && "text-muted-foreground"
+                            "w-[180px] justify-start text-left font-normal bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors",
+                            !dueDate && "text-gray-500 dark:text-gray-400",
+                            dueDate && "text-gray-800 dark:text-gray-200 border-indigo-200 dark:border-indigo-700"
                           )}
                         >
-                          <CalendarIcon className="mr-2 h-4 w-4" />
-                          {dueDate ? format(dueDate, "PPP") : "Due date (optional)"}
+                          <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
+                          {dueDate ? formatDate(dueDate, "PPP") : "Due date (optional)"}
                         </Button>
                       </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0" align="start">
+                      <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[300px]">
                         <div>
                           <Calendar
                             mode="single"
@@ -1401,9 +1819,11 @@ export default function TaskManager() {
                                 form.setValue("due_date", date);
                               } else {
                                 form.setValue("due_date", null);
+                                setNewTaskDatePickerOpen(false);
                               }
                             }}
                             initialFocus
+                            className="rounded-lg border-0"
                           />
                           {dueDate && (
                             <TimeSelect
@@ -1411,13 +1831,16 @@ export default function TaskManager() {
                               onChange={(newDate) => {
                                 form.setValue("due_date", newDate);
                               }}
-                              timeFormat="12h"
+                              onComplete={() => {
+                                setNewTaskDatePickerOpen(false);
+                              }}
+                              compact={true}
                             />
                           )}
                         </div>
                       </PopoverContent>
                     </Popover>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 self-center">
                       <Switch
                         checked={isRecurring}
                         onCheckedChange={(checked) => {
@@ -1431,9 +1854,10 @@ export default function TaskManager() {
                             form.setValue("recurrence_interval", 1);
                           }
                         }}
+                        className="data-[state=checked]:bg-indigo-600 dark:data-[state=checked]:bg-indigo-400 data-[state=unchecked]:bg-gray-300 dark:data-[state=unchecked]:bg-gray-600 border-2 border-transparent dark:border-gray-400"
                       >
-                        <Repeat className="h-4 w-4 mr-2" />
-                        Recurring Task
+                        <Repeat className="h-4 w-4 mr-2 text-indigo-600 dark:text-indigo-400" />
+                        <span className="text-gray-800 dark:text-gray-200">Recurring Task</span>
                       </Switch>
                     </div>
                     <Button 
@@ -1444,81 +1868,48 @@ export default function TaskManager() {
                           const formData = form.getValues();
                           console.log("Form data:", formData);
                           
-                          // Create task with all required fields
                           const taskData = {
                             title: formData.title || "",
                             description: formData.description || null,
                             priority: formData.priority || "medium",
                             completed: false,
-                            due_date: (() => {
-                              if (!formData.due_date) return null;
-                              if (!(formData.due_date instanceof Date) || isNaN(formData.due_date.getTime())) {
-                                console.warn("Invalid due_date in form submission:", formData.due_date);
-                                return null;
-                              }
-                              const timestamp = Math.floor(formData.due_date.getTime() / 1000);
-                              console.log("Converted due_date to timestamp for new task:", timestamp, "from", formData.due_date);
-                              return timestamp;
-                            })(),
+                            due_date: ensureUnixTimestamp(formData.due_date),
                             all_day: true,
                             parent_task_id: null,
-                            user_id: user?.id || 8,
+                            user_id: user.id,
                             is_recurring: Boolean(formData.is_recurring),
                             recurrence_pattern: formData.is_recurring ? String(formData.recurrence_pattern || "weekly") : null,
                             recurrence_interval: formData.is_recurring ? 1 : null,
-                            recurrence_end_date: (() => {
-                              if (!formData.recurrence_end_date) return null;
-                              if (!(formData.recurrence_end_date instanceof Date) || isNaN(formData.recurrence_end_date.getTime())) {
-                                console.warn("Invalid recurrence_end_date in form submission:", formData.recurrence_end_date);
-                                return null;
-                              }
-                              const timestamp = Math.floor(formData.recurrence_end_date.getTime() / 1000);
-                              console.log("Converted recurrence_end_date to timestamp for new task:", timestamp, "from", formData.recurrence_end_date);
-                              return timestamp;
-                            })(),
-                            // Remove created_at and updated_at, let the server handle these
+                            recurrence_end_date: ensureUnixTimestamp(formData.recurrence_end_date),
                           };
 
-                          // Log the data for debugging
-                          console.log("Calling API with task data:", taskData);
+                          console.log('Sending task data to API:', JSON.stringify(taskData));
+                          await createTaskMutation.mutateAsync(taskData as any);
                           
-                          // Call the API directly
-                          const result = await createTask(taskData as any);
-                          console.log('Task created successfully:', result);
-                          
-                          // Success handling
-                          toast({
-                            title: "Task created",
-                            description: "Your task has been created successfully.",
-                          });
-                          
-                          // Reset the form
-                          form.reset();
-                          
-                          // Refresh the task list
-                          queryClient.invalidateQueries({ queryKey: ["tasks"] });
+                          setShowAddTask(false);
                         } catch (error) {
-                          console.error("Error creating task:", error);
+                          console.error('Submit error:', error);
                           toast({
                             variant: "destructive",
                             title: "Error creating task",
-                            description: error instanceof Error ? error.message : "An unknown error occurred"
+                            description: error instanceof Error ? error.message : "An unknown error occurred",
                           });
                         }
                       }}
-                      className="min-w-[100px]"
+                      className="min-w-[140px] bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 dark:from-indigo-500 dark:to-violet-500 dark:hover:from-indigo-400 dark:hover:to-violet-400 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2 h-11 px-4 font-medium"
                     >
-                      Add Task
+                      <Plus className="h-4 w-4" />
+                      Create Task
                     </Button>
                   </div>
                   {isRecurring && (
-                    <div className="mt-4 p-4 border rounded-lg bg-accent/5">
-                      <div className="mb-3 text-sm text-muted-foreground">
+                    <div className="mt-6 p-4 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900/50 transition-all duration-200 shadow-inner">
+                      <div className="mb-3 text-sm text-gray-600 dark:text-indigo-300 font-medium">
                         Configure how often this task should repeat
                       </div>
                       <div className="flex flex-wrap gap-4">
                         <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm font-medium mb-1.5 block">
+                          <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
                             Repeat Every
                           </label>
                           <div className="flex gap-2">
@@ -1528,50 +1919,84 @@ export default function TaskManager() {
                               placeholder="1"
                               value={recurrenceInterval || ""}
                               onChange={(e) => form.setValue("recurrence_interval", parseInt(e.target.value) || 1)}
-                              className="w-[80px]"
+                              className="w-[80px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200"
                             />
                             <Select
                               value={recurrencePattern || ""}
                               onValueChange={(value) => form.setValue("recurrence_pattern", value as "daily" | "weekly" | "monthly" | "yearly" | null)}
                             >
-                              <SelectTrigger className="flex-1">
+                              <SelectTrigger className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200">
                                 <SelectValue placeholder="Select period" />
                               </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="daily">Day(s)</SelectItem>
-                                <SelectItem value="weekly">Week(s)</SelectItem>
-                                <SelectItem value="monthly">Month(s)</SelectItem>
-                                <SelectItem value="yearly">Year(s)</SelectItem>
+                              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                                <SelectItem value="daily" className="text-gray-800 dark:text-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full bg-blue-500"></span>
+                                    Day(s)
+                                  </div>
+                                </SelectItem>
+                                <SelectItem value="weekly" className="text-gray-800 dark:text-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+                                    Week(s)
+                                  </div>
+                                </SelectItem>
+                                <SelectItem value="monthly" className="text-gray-800 dark:text-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full bg-purple-500"></span>
+                                    Month(s)
+                                  </div>
+                                </SelectItem>
+                                <SelectItem value="yearly" className="text-gray-800 dark:text-gray-200">
+                                  <div className="flex items-center gap-2">
+                                    <span className="h-2 w-2 rounded-full bg-pink-500"></span>
+                                    Year(s)
+                                  </div>
+                                </SelectItem>
                               </SelectContent>
                             </Select>
                           </div>
                         </div>
                         <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm font-medium mb-1.5 block">
+                          <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
                             Ends (Optional)
                           </label>
-                          <Popover>
+                          <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
                             <PopoverTrigger asChild>
                               <Button
                                 variant="outline"
                                 className={cn(
-                                  "w-full justify-start text-left font-normal",
-                                  !recurrenceEndDate && "text-muted-foreground"
+                                  "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700",
+                                  !recurrenceEndDate && "text-gray-500 dark:text-gray-400",
+                                  recurrenceEndDate && "text-gray-800 dark:text-gray-200"
                                 )}
                               >
-                                <CalendarIcon className="mr-2 h-4 w-4" />
+                                <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
                                 {recurrenceEndDate
-                                  ? format(recurrenceEndDate, "PPP")
+                                  ? formatDate(recurrenceEndDate, "PPP")
                                   : "Select end date"}
                               </Button>
                             </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0" align="start">
+                            <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
                               <Calendar
                                 mode="single"
                                 selected={recurrenceEndDate ? recurrenceEndDate : undefined}
                                 onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
                                 initialFocus
+                                className="rounded-lg border-0"
                               />
+                              {recurrenceEndDate && (
+                                <TimeSelect
+                                  value={recurrenceEndDate}
+                                  onChange={(newDate) => {
+                                    form.setValue("recurrence_end_date", newDate);
+                                  }}
+                                  onComplete={() => {
+                                    setRecurrenceEndDatePickerOpen(false);
+                                  }}
+                                  compact={true}
+                                />
+                              )}
                             </PopoverContent>
                           </Popover>
                         </div>
@@ -1583,165 +2008,173 @@ export default function TaskManager() {
             </CardContent>
           </Card>
 
-          <div className="flex gap-4 items-center flex-wrap">
+          <div className="flex gap-4 items-center flex-wrap bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
             <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder="Search tasks..."
-                className="pl-8"
+                className="pl-9 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <Select
-              value={filterType}
-              onValueChange={(value: FilterType) => {
-                setFilterType(value);
-              }}
-            >
-              <SelectTrigger className="w-[140px]">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {Object.entries({
-                  all: { label: 'All Tasks', icon: null },
-                  active: { label: 'Active', icon: Clock },
-                  completed: { label: 'Completed', icon: CheckCircle2 },
-                  overdue: { label: 'Overdue', icon: AlertCircle }
-                }).map(([value, { label, icon: Icon }]) => {
-                  const count = getTaskCounts(processedTasks)[value as FilterType];
-                  if (count === 0 && value !== 'all') return null;
-                  
-                  return (
-                    <SelectItem key={value} value={value}>
-                      <div className="flex items-center">
-                        {Icon && <Icon className="mr-2 h-4 w-4" />}
-                        <span>{label}</span>
-                      </div>
-                    </SelectItem>
-                  );
-                })}
-              </SelectContent>
-            </Select>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Select
+                value={filterType}
+                onValueChange={(value: FilterType) => {
+                  setFilterType(value);
+                }}
+              >
+                <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                  {Object.entries({
+                    all: { label: 'All Tasks', icon: null },
+                    active: { label: 'Active', icon: Clock },
+                    completed: { label: 'Completed', icon: CheckCircle2 },
+                    overdue: { label: 'Overdue', icon: AlertCircle }
+                  }).map(([value, { label, icon: Icon }]) => {
+                    const count = getTaskCounts(processedTasks)[value as FilterType];
+                    if (count === 0 && value !== 'all') return null;
+                    
+                    return (
+                      <SelectItem key={value} value={value}>
+                        <div className="flex items-center">
+                          {Icon && <Icon className="mr-2 h-4 w-4" />}
+                          <span>{label}</span>
+                          <Badge variant="outline" className="ml-2 px-1.5 py-0 text-xs">
+                            {count}
+                          </Badge>
+                        </div>
+                      </SelectItem>
+                    );
+                  })}
+                </SelectContent>
+              </Select>
 
-            <Select
-              value={priorityFilter}
-              onValueChange={(value: PriorityFilter) => setPriorityFilter(value)}
-            >
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Priority" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Priorities</SelectItem>
-                <SelectItem value="high">
-                  <div className="flex items-center">
-                    <span className="h-2 w-2 rounded-full bg-[hsl(var(--task-high))] mr-2" />
-                    High Priority
-                  </div>
-                </SelectItem>
-                <SelectItem value="medium">
-                  <div className="flex items-center">
-                    <span className="h-2 w-2 rounded-full bg-[hsl(var(--task-medium))] mr-2" />
-                    Medium Priority
-                  </div>
-                </SelectItem>
-                <SelectItem value="low">
-                  <div className="flex items-center">
-                    <span className="h-2 w-2 rounded-full bg-[hsl(var(--task-low))] mr-2" />
-                    Low Priority
-                  </div>
-                </SelectItem>
-              </SelectContent>
-            </Select>
+              <Select
+                value={priorityFilter}
+                onValueChange={(value: PriorityFilter) => setPriorityFilter(value)}
+              >
+                <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
+                  <SelectValue placeholder="Priority" />
+                </SelectTrigger>
+                <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                  <SelectItem value="all">All Priorities</SelectItem>
+                  <SelectItem value="high">
+                    <div className="flex items-center">
+                      <span className="h-2 w-2 rounded-full bg-red-500 mr-2" />
+                      High Priority
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="medium">
+                    <div className="flex items-center">
+                      <span className="h-2 w-2 rounded-full bg-yellow-500 mr-2" />
+                      Medium Priority
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="low">
+                    <div className="flex items-center">
+                      <span className="h-2 w-2 rounded-full bg-green-500 mr-2" />
+                      Low Priority
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
 
-            <Select
-              value={dueDateFilter}
-              onValueChange={(value: DueDateFilter) => setDueDateFilter(value)}
-            >
-              <SelectTrigger className="w-[140px]">
-                <SelectValue placeholder="Due Date" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All Due Dates</SelectItem>
-                <SelectItem value="today">Due Today</SelectItem>
-                <SelectItem value="tomorrow">Due Tomorrow</SelectItem>
-                <SelectItem value="week">Due This Week</SelectItem>
-                <SelectItem value="month">Due This Month</SelectItem>
-              </SelectContent>
-            </Select>
+              <Select
+                value={dueDateFilter}
+                onValueChange={(value: DueDateFilter) => setDueDateFilter(value)}
+              >
+                <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
+                  <SelectValue placeholder="Due Date" />
+                </SelectTrigger>
+                <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                  <SelectItem value="all">All Due Dates</SelectItem>
+                  <SelectItem value="today">Due Today</SelectItem>
+                  <SelectItem value="tomorrow">Due Tomorrow</SelectItem>
+                  <SelectItem value="week">Due This Week</SelectItem>
+                  <SelectItem value="month">Due This Month</SelectItem>
+                </SelectContent>
+              </Select>
 
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    variant="outline"
-                    size="icon"
-                    onClick={() => setSortOrder(order => {
-                      switch (order) {
-                        case 'none': return 'asc';
-                        case 'asc': return 'desc';
-                        case 'desc': return 'none';
-                      }
-                    })}
-                    className="w-[40px] shrink-0"
-                  >
-                    {sortOrder === 'none' ? (
-                      <CalendarIcon className="h-4 w-4 text-muted-foreground" />
-                    ) : sortOrder === 'asc' ? (
-                      <CalendarIcon className="h-4 w-4 text-primary" />
-                    ) : (
-                      <CalendarIcon className="h-4 w-4 text-primary rotate-180" />
-                    )}
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {sortOrder === 'none' 
-                    ? "Sort by due date" 
-                    : sortOrder === 'asc' 
-                      ? "Sorted by due date (earliest first)" 
-                      : "Sorted by due date (latest first)"}
-                </TooltipContent>
-              </Tooltip>
-            </TooltipProvider>
-
-            {(filterType !== 'all' || priorityFilter !== 'all' || dueDateFilter !== 'all' || sortOrder !== 'none' || searchTerm) && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={clearFilters}
-                      className="w-[40px] shrink-0"
+                      onClick={() => setSortOrder(order => {
+                        switch (order) {
+                          case 'none': return 'asc';
+                          case 'asc': return 'desc';
+                          case 'desc': return 'none';
+                        }
+                      })}
+                      className="w-[40px] h-[40px] shrink-0 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg"
                     >
-                      <X className="h-4 w-4" />
+                      {sortOrder === 'none' ? (
+                        <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+                      ) : sortOrder === 'asc' ? (
+                        <SortAsc className="h-4 w-4 text-primary" />
+                      ) : (
+                        <SortDesc className="h-4 w-4 text-primary" />
+                      )}
                     </Button>
                   </TooltipTrigger>
-                  <TooltipContent>
-                    Clear all filters
+                  <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
+                    {sortOrder === 'none' 
+                      ? "Sort by due date" 
+                      : sortOrder === 'asc' 
+                        ? "Sorted by due date (earliest first)" 
+                        : "Sorted by due date (latest first)"}
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-            )}
+
+              {(filterType !== 'all' || priorityFilter !== 'all' || dueDateFilter !== 'all' || sortOrder !== 'none' || searchTerm) && (
+                <TooltipProvider>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        onClick={clearFilters}
+                        className="w-[40px] h-[40px] shrink-0 bg-red-50 dark:bg-red-900/20 text-red-500 border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg"
+                      >
+                        <X className="h-4 w-4" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
+                      Clear all filters
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              )}
+            </div>
           </div>
 
           <div className={cn(
             "grid gap-6",
             getOverdueTasks(filterTasks(processedTasks)).length > 0 ? "md:grid-cols-3" : "md:grid-cols-2"
           )}>
-            <Card className="border-t-4 border-t-blue-500">
+            <Card className="border-t-4 border-t-blue-500 shadow-md hover:shadow-lg transition-shadow duration-200">
               <CardContent className="pt-6">
                 <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                  Active Tasks
-                  <span className="text-sm text-muted-foreground">
-                    {getActiveTasks(filterTasks(processedTasks)).length} tasks
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-blue-500" />
+                    Active Tasks
+                  </div>
+                  <Badge variant="outline" className="bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800">
+                    {getActiveTasks(filterTasks(processedTasks)).length}
+                  </Badge>
                 </h2>
                 <div className="space-y-4">
-                  {getPaginatedTasks(getActiveTasks(filterTasks(processedTasks)), currentPage).map((task) => (
+                  {getPaginatedActiveTasks(filterTasks(processedTasks)).map((task) => (
                     <div
                       key={task.id}
-                      className="group p-4 rounded-lg border hover:bg-accent/5 transition-colors"
+                      className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-accent/5 hover:border-primary/30 transition-all duration-200 shadow-sm hover:shadow"
                     >
                       <div className="flex items-center gap-4">
                         <Checkbox
@@ -1752,6 +2185,7 @@ export default function TaskManager() {
                               completed: checked,
                             })
                           }
+                          className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
                         />
                         {renderTaskContent(task, false)}
                       </div>
@@ -1765,28 +2199,41 @@ export default function TaskManager() {
                     </div>
                   ))}
                   {getActiveTasks(filterTasks(processedTasks)).length === 0 && (
-                    <div className="text-center py-8 text-muted-foreground">
+                    <div className="text-center py-8 text-muted-foreground bg-gray-50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
+                      <Clock className="h-8 w-8 mx-auto mb-2 text-gray-400" />
                       {searchTerm ? 'No matching active tasks' : 'No active tasks'}
                     </div>
                   )}
                 </div>
               </CardContent>
+              {getActiveTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+                <CardFooter className="flex justify-center border-t pt-4">
+                  <PaginationControls 
+                    currentPage={activePage}
+                    totalPages={getActiveTasksTotalPages(filterTasks(processedTasks))}
+                    onPageChange={setActivePage}
+                  />
+                </CardFooter>
+              )}
             </Card>
             
             {getOverdueTasks(filterTasks(processedTasks)).length > 0 && (
-              <Card className="border-t-4 border-t-red-500">
+              <Card className="border-t-4 border-t-red-500 shadow-md hover:shadow-lg transition-shadow duration-200">
                 <CardContent className="pt-6">
                   <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                    Overdue Tasks
-                    <span className="text-sm text-muted-foreground">
-                      {getOverdueTasks(filterTasks(processedTasks)).length} tasks
-                    </span>
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="h-5 w-5 text-red-500" />
+                      Overdue Tasks
+                    </div>
+                    <Badge variant="outline" className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800">
+                      {getOverdueTasks(filterTasks(processedTasks)).length}
+                    </Badge>
                   </h2>
                   <div className="space-y-4">
-                    {getPaginatedTasks(getOverdueTasks(filterTasks(processedTasks)), currentPage).map((task) => (
+                    {getPaginatedOverdueTasks(filterTasks(processedTasks)).map((task) => (
                       <div
                         key={task.id}
-                        className="group p-4 rounded-lg border hover:bg-accent/5 transition-colors"
+                        className="group p-4 rounded-lg border border-red-200 dark:border-red-800/50 hover:bg-red-50/30 dark:hover:bg-red-900/10 transition-all duration-200 shadow-sm hover:shadow"
                       >
                         <div className="flex items-center gap-4">
                           <TooltipProvider>
@@ -1796,11 +2243,11 @@ export default function TaskManager() {
                                   <Checkbox
                                     checked={task.completed}
                                     disabled={true}
-                                    className="cursor-not-allowed"
+                                    className="cursor-not-allowed h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
                                   />
                                 </div>
                               </TooltipTrigger>
-                              <TooltipContent>
+                              <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
                                 <p>Update the due date before marking as complete</p>
                               </TooltipContent>
                             </Tooltip>
@@ -1812,22 +2259,34 @@ export default function TaskManager() {
                     ))}
                   </div>
                 </CardContent>
+                {getOverdueTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+                  <CardFooter className="flex justify-center border-t pt-4">
+                    <PaginationControls 
+                      currentPage={overduePage}
+                      totalPages={getOverdueTasksTotalPages(filterTasks(processedTasks))}
+                      onPageChange={setOverduePage}
+                    />
+                  </CardFooter>
+                )}
               </Card>
             )}
 
-            <Card className="border-t-4 border-t-green-500">
+            <Card className="border-t-4 border-t-green-500 shadow-md hover:shadow-lg transition-shadow duration-200">
               <CardContent className="pt-6">
                 <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                  Completed Tasks
-                  <span className="text-sm text-muted-foreground">
-                    {getCompletedTasks(filterTasks(processedTasks)).length} tasks
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-5 w-5 text-green-500" />
+                    Completed Tasks
+                  </div>
+                  <Badge variant="outline" className="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800">
+                    {getCompletedTasks(filterTasks(processedTasks)).length}
+                  </Badge>
                 </h2>
                 <div className="space-y-4">
-                  {getPaginatedTasks(getCompletedTasks(filterTasks(processedTasks)), currentPage).map((task) => (
+                  {getPaginatedCompletedTasks(filterTasks(processedTasks)).map((task) => (
                     <div
                       key={task.id}
-                      className="group p-4 rounded-lg border bg-muted/50"
+                      className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-muted/30 hover:bg-muted/50 transition-all duration-200"
                     >
                       <div className="flex items-center gap-4">
                         <Checkbox
@@ -1838,6 +2297,7 @@ export default function TaskManager() {
                               completed: checked,
                             })
                           }
+                          className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
                         />
                         {renderTaskContent(task, true)}
                       </div>
@@ -1845,134 +2305,146 @@ export default function TaskManager() {
                     </div>
                   ))}
                   {getCompletedTasks(filterTasks(processedTasks)).length === 0 && (
-                    <div className="text-center py-8 text-muted-foreground">
+                    <div className="text-center py-8 text-muted-foreground bg-gray-50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
+                      <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-gray-400" />
                       {searchTerm ? 'No matching completed tasks' : 'No completed tasks'}
                     </div>
                   )}
                 </div>
               </CardContent>
+              {getCompletedTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+                <CardFooter className="flex justify-center border-t pt-4">
+                  <PaginationControls 
+                    currentPage={completedPage}
+                    totalPages={getCompletedTasksTotalPages(filterTasks(processedTasks))}
+                    onPageChange={setCompletedPage}
+                  />
+                </CardFooter>
+              )}
             </Card>
           </div>
 
-          <PaginationControls 
-            currentPage={currentPage}
-            totalPages={getTotalPages(filterTasks(processedTasks))}
-            onPageChange={setCurrentPage}
-          />
-        </div>
-      )}
-
-      {showSubtasks && selectedTask && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4">
-          <Card className="w-full max-w-2xl">
-            <CardContent className="pt-6">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-xl font-semibold">
-                  Subtasks for "{selectedTask.title}"
-                </h2>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  onClick={() => setShowSubtasks(false)}
-                >
-                  <X className="h-4 w-4" />
-                </Button>
-              </div>
-              
-              <DragDropContext onDragEnd={onDragEnd}>
-                <Droppable droppableId="subtasks">
-                  {(provided) => (
-                    <div
-                      {...provided.droppableProps}
-                      ref={provided.innerRef}
-                      className="space-y-2"
-                    >
-                      {editedSubtasks.map((subtask, index) => (
-                        <Draggable
-                          key={index}
-                          draggableId={`subtask-${index}`}
-                          index={index}
-                        >
-                          {(provided) => (
-                            <div
-                              ref={provided.innerRef}
-                              {...provided.draggableProps}
-                              className="flex items-center gap-2 p-2 bg-muted rounded"
-                            >
-                              <div {...provided.dragHandleProps}>
-                                <GripVertical className="h-4 w-4 text-muted-foreground" />
-                              </div>
-                              <Checkbox
-                                checked={subtask.completed}
-                                onCheckedChange={(checked) => {
-                                  const newSubtasks = [...editedSubtasks];
-                                  newSubtasks[index].completed = checked as boolean;
-                                  setEditedSubtasks(newSubtasks);
-                                }}
-                              />
-                              <Input
-                                value={subtask.title}
-                                onChange={(e) => {
-                                  const newSubtasks = [...editedSubtasks];
-                                  newSubtasks[index].title = e.target.value;
-                                  setEditedSubtasks(newSubtasks);
-                                }}
-                                className="flex-1"
-                              />
-                              <Button
-                                variant="ghost"
-                                size="icon"
-                                onClick={() => {
-                                  const newSubtasks = editedSubtasks.filter((_, i) => i !== index);
-                                  setEditedSubtasks(newSubtasks);
-                                }}
-                              >
-                                <Trash2 className="h-4 w-4" />
-                              </Button>
-                            </div>
-                          )}
-                        </Draggable>
-                      ))}
-                      {provided.placeholder}
+          {showSubtasks && selectedTask && (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+              <Card className="w-full max-w-2xl bg-white dark:bg-gray-800 shadow-2xl rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+                <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <List className="h-5 w-5" />
+                    Subtasks for "{selectedTask.title}"
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-6">
+                  <div className="mb-4">
+                    <div className="text-sm text-muted-foreground mb-4">
+                      Break down your task into smaller, manageable steps. Drag to reorder.
                     </div>
-                  )}
-                </Droppable>
-              </DragDropContext>
+                    
+                    <DragDropContext onDragEnd={onDragEnd}>
+                      <Droppable droppableId="subtasks">
+                        {(provided) => (
+                          <div
+                            {...provided.droppableProps}
+                            ref={provided.innerRef}
+                            className="space-y-2 max-h-[400px] overflow-y-auto pr-2"
+                          >
+                            {editedSubtasks.map((subtask, index) => (
+                              <Draggable
+                                key={index}
+                                draggableId={`subtask-${index}`}
+                                index={index}
+                              >
+                                {(provided) => (
+                                  <div
+                                    ref={provided.innerRef}
+                                    {...provided.draggableProps}
+                                    className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 transition-colors group"
+                                  >
+                                    <div 
+                                      {...provided.dragHandleProps}
+                                      className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                                    >
+                                      <GripVertical className="h-4 w-4" />
+                                    </div>
+                                    <Checkbox
+                                      checked={subtask.completed}
+                                      onCheckedChange={(checked) => {
+                                        const newSubtasks = [...editedSubtasks];
+                                        newSubtasks[index].completed = checked as boolean;
+                                        setEditedSubtasks(newSubtasks);
+                                      }}
+                                      className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
+                                    />
+                                    <Input
+                                      value={subtask.title}
+                                      onChange={(e) => {
+                                        const newSubtasks = [...editedSubtasks];
+                                        newSubtasks[index].title = e.target.value;
+                                        setEditedSubtasks(newSubtasks);
+                                      }}
+                                      className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
+                                      placeholder="Enter subtask..."
+                                    />
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => {
+                                        const newSubtasks = editedSubtasks.filter((_, i) => i !== index);
+                                        setEditedSubtasks(newSubtasks);
+                                      }}
+                                      className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 rounded-full hover:bg-red-100 dark:hover:bg-red-900/20 text-red-500"
+                                    >
+                                      <Trash2 className="h-4 w-4" />
+                                    </Button>
+                                  </div>
+                                )}
+                              </Draggable>
+                            ))}
+                            {provided.placeholder}
+                          </div>
+                        )}
+                      </Droppable>
+                    </DragDropContext>
 
-              <div className="mt-4 space-y-2">
-                <Button
-                  variant="outline"
-                  className="w-full"
-                  onClick={() => {
-                    setEditedSubtasks([...editedSubtasks, { title: "", completed: false }]);
-                  }}
-                >
-                  <Plus className="mr-2 h-4 w-4" />
-                  Add Subtask
-                </Button>
-                <div className="flex gap-2">
-                  <Button
-                    className="flex-1"
-                    onClick={saveSubtasks}
-                    disabled={saveSubtasksMutation.isPending}
-                  >
-                    {saveSubtasksMutation.isPending ? (
-                      <Loader2 className="h-4 w-4 animate-spin" />
-                    ) : (
-                      "Save Subtasks"
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    className="flex-1"
-                    onClick={() => setShowSubtasks(false)}
-                  >
-                    Cancel
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
+                    <div className="mt-4 space-y-3">
+                      <Button
+                        variant="outline"
+                        className="w-full flex items-center justify-center gap-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
+                        onClick={() => {
+                          setEditedSubtasks([...editedSubtasks, { title: "", completed: false }]);
+                        }}
+                      >
+                        <Plus className="h-4 w-4" />
+                        Add Subtask
+                      </Button>
+                      <div className="flex gap-2">
+                        <Button
+                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                          onClick={saveSubtasks}
+                          disabled={saveSubtasksMutation.isPending}
+                        >
+                          {saveSubtasksMutation.isPending ? (
+                            <>
+                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                              Saving...
+                            </>
+                          ) : (
+                            "Save Subtasks"
+                          )}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          className="flex-1"
+                          onClick={() => setShowSubtasks(false)}
+                        >
+                          Cancel
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            </div>
+          )}
         </div>
       )}
     </div>

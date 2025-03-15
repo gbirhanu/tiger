@@ -130,13 +130,14 @@ router.put("/pomodoro", async (req: Request, res: Response) => {
     if (existingSettings) {
       // Update existing settings
       const settingsData = {
-        ...validationResult.data,
-        updated_at: new Date()
+        ...validationResult.data
       };
 
       const updatedSettings = await db
         .update(pomodoroSettings)
-        .set(settingsData)
+        .set({
+          ...settingsData,
+        })
         .where(eq(pomodoroSettings.user_id, req.userId!))
         .returning()
         .get();
@@ -193,12 +194,13 @@ router.patch("/pomodoro", async (req: Request, res: Response) => {
       // Update existing settings with just the fields provided
       const settingsData = {
         ...validationResult.data,
-        updated_at: new Date()
       };
 
       const updatedSettings = await db
         .update(pomodoroSettings)
-        .set(settingsData)
+        .set({
+          ...validationResult.data,
+        })
         .where(eq(pomodoroSettings.user_id, req.userId!))
         .returning()
         .get();

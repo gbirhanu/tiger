@@ -95,10 +95,9 @@ export async function apiRequest(
 }
 
 type UnauthorizedBehavior = "returnNull" | "throw";
-export const getQueryFn: <T>(options: {
+export const getQueryFn = <T>(options: {
   on401: UnauthorizedBehavior;
-}) => QueryFunction<T> =
-  ({ on401: unauthorizedBehavior }) =>
+}): QueryFunction<T> =>
   async ({ queryKey }: { queryKey: QueryKey }) => {
     try {
       const token = getAuthToken();
@@ -121,7 +120,7 @@ export const getQueryFn: <T>(options: {
         console.error(`Authentication failed for query to ${url} - clearing token`);
         setAuthToken(null);
         
-        if (unauthorizedBehavior === "returnNull") {
+        if (options.on401 === "returnNull") {
           return null;
         }
         
@@ -136,13 +135,28 @@ export const getQueryFn: <T>(options: {
     }
   };
 
+// Define standardized query keys as constants for consistent usage across components
+export const QUERY_KEYS = {
+  TASKS: "tasks",
+  TASK: (id: number) => ["task", id],
+  TASKS_WITH_SUBTASKS: "tasks-with-subtasks",
+  TASK_SUBTASKS: (taskId: number) => ["task-subtasks", taskId],
+  NOTES: "notes",
+  NOTE: (id: number) => ["note", id],
+  SETTINGS: "user-settings",
+  MEETINGS: "meetings",
+  MEETING: (id: number) => ["meeting", id]
+};
+
 export const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
-      refetchOnWindowFocus: false,
-      staleTime: Infinity,
+      refetchOnWindowFocus: true,
+      staleTime: 0, // Set to 0 to ensure immediate updates
+      gcTime: 1000 * 60 * 10, // 10 minutes garbage collection time (formerly cacheTime)
+      refetchOnMount: true, // Refetch when component mounts
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors up to 2 times
         if (error?.message?.includes('401')) {
@@ -162,9 +176,19 @@ export const queryClient = new QueryClient({
           return false;
         }
         return failureCount < 1;
-      }
+      },
     },
   },
+});
+
+// Add global focus refetching for critical data
+// This ensures data is refreshed when the user returns to the tab
+window.addEventListener('focus', () => {
+  console.log('Window focused - refreshing critical data');
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
 });
 
 // Add a global error handler for unhandled errors

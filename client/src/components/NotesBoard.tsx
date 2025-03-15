@@ -2,7 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
 import { type Note } from "@shared/schema";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -10,30 +10,49 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { getNotes, createNote as createNoteApi, updateNote as updateNoteApi, deleteNote as deleteNoteApi } from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
-import { Plus, X, GripVertical } from "lucide-react";
+import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
+import { Plus, X, GripVertical, StickyNote, Clock, Sparkles, Star, Heart, Pencil, Trash2 } from "lucide-react";
+import { format } from "date-fns";
+import { cn } from "@/lib/utils";
+import { NoteCard } from "@/components/NoteCard";
+import { ColorPicker } from "@/components/ColorPicker";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
 
+// Enhanced color palette with vibrant, pleasing colors
 const COLORS = [
-  "#FFD700", // Yellow
-  "#FF9999", // Pink
-  "#98FB98", // Green
-  "#87CEEB", // Blue
-  "#DDA0DD", // Purple
+  "#FCE7F3", // Pink
+  "#DBEAFE", // Light Blue
+  "#ECFDF5", // Light Green
+  "#FEF3C7", // Light Yellow
+  "#F3E8FF", // Lavender
+  "#FFEDD5", // Light Orange
+  "#E0F2FE", // Sky Blue
+  "#FEE2E2", // Light Red
 ];
 
 export default function NotesBoard() {
   const { toast } = useToast();
   const [newNoteContent, setNewNoteContent] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [selectedColor, setSelectedColor] = useState(COLORS[0]);
+  const [isDragging, setIsDragging] = useState(false);
 
   const { data: notes, isLoading, error } = useQuery({
-    queryKey: ["notes"],
+    queryKey: [QUERY_KEYS.NOTES],
     queryFn: getNotes,
   });
+
+  // Sort notes by position
+  const sortedNotes = React.useMemo(() => {
+    if (!notes) return [];
+    return [...notes].sort((a, b) => a.position - b.position);
+  }, [notes]);
 
   // Log error if there is one
   useEffect(() => {
@@ -49,19 +68,64 @@ export default function NotesBoard() {
 
   const createNoteMutation = useMutation({
     mutationFn: (content: string) => {
+      // Find the highest position value to ensure new note is added at the end
+      const highestPosition = notes?.length 
+        ? Math.max(...notes.map(note => note.position))
+        : 0;
+        
       const note = {
         title: "Note", // Add required fields
         content,
-        color: COLORS[Math.floor(Math.random() * COLORS.length)],
-        position: (notes?.length || 0) + 1,
-        user_id: 0, // This will be set by the server
-        created_at: Date.now(),
-        updated_at: Date.now()
+        color: selectedColor,
+        position: highestPosition + 1, // Use highest position + 1 instead of length
+        // Convert timestamps to seconds (integer) for SQLite storage
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
       };
       return createNoteApi(note);
     },
+    onMutate: async (content) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
+      // Snapshot the previous value
+      const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
+      
+      // Find the highest position value
+      const highestPosition = previousNotes.length 
+        ? Math.max(...previousNotes.map(note => note.position))
+        : 0;
+      
+      // Optimistically add the new note
+      const optimisticNote = {
+        id: Date.now(), // Temporary ID
+        user_id: 1, // Temporary user ID
+        title: "Note",
+        content,
+        color: selectedColor,
+        position: highestPosition + 1, // Use highest position + 1
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      };
+      
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], [...previousNotes, optimisticNote]);
+      
+      // Return the snapshot
+      return { previousNotes };
+    },
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousNotes) {
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
+      }
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: `Failed to create note: ${error.message}`,
+      });
+    },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
       setNewNoteContent("");
       setDialogOpen(false);
       toast({
@@ -69,145 +133,305 @@ export default function NotesBoard() {
         description: "Your note has been created successfully.",
       });
     },
-    onError: (error: Error) => {
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Failed to create note: ${error.message}`,
-      });
-    },
   });
 
   const updateNoteMutation = useMutation({
     mutationFn: ({ id, ...data }: Partial<Note> & { id: number }) => 
       updateNoteApi(id, data),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
+    onMutate: async ({ id, ...updatedData }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
+      // Snapshot the previous value
+      const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
+      
+      // Optimistically update the note
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], 
+        previousNotes.map(note => 
+          note.id === id ? { ...note, ...updatedData } : note
+        )
+      );
+      
+      // Return the snapshot
+      return { previousNotes };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousNotes) {
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
+      }
       toast({
         variant: "destructive",
         title: "Error",
         description: `Failed to update note: ${error.message}`,
       });
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      toast({
+        title: "Note updated",
+        description: "Your note has been updated successfully.",
+      });
+    },
   });
 
   const deleteNoteMutation = useMutation({
     mutationFn: deleteNoteApi,
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["notes"] });
-      toast({
-        title: "Note deleted",
-        description: "Your note has been deleted successfully.",
-      });
+    onMutate: async (noteId) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
+      // Snapshot the previous value
+      const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
+      
+      // Optimistically remove the note
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], 
+        previousNotes.filter(note => note.id !== noteId)
+      );
+      
+      // Return the snapshot
+      return { previousNotes };
     },
-    onError: (error: Error) => {
+    onError: (error: Error, _variables, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousNotes) {
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
+      }
       toast({
         variant: "destructive",
         title: "Error",
         description: `Failed to delete note: ${error.message}`,
       });
     },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      toast({
+        title: "Note deleted",
+        description: "Your note has been deleted successfully.",
+      });
+    },
   });
 
+  const handleDragStart = () => {
+    setIsDragging(true);
+  };
+
   const handleDragEnd = (result: any) => {
-    if (!result.destination || !notes) return;
+    setIsDragging(false);
+    
+    if (!result.destination || !sortedNotes.length) return;
 
-    const items = Array.from(notes);
-    const [reorderedItem] = items.splice(result.source.index, 1);
-    items.splice(result.destination.index, 0, reorderedItem);
+    // Don't do anything if dropped in the same position
+    if (result.destination.index === result.source.index) return;
 
-    // Update positions
-    items.forEach((note, index) => {
-      updateNoteMutation.mutate({ id: note.id, position: index + 1 });
-    });
+    try {
+      // Create a new array with the updated order
+      const reorderedNotes = Array.from(sortedNotes);
+      const [movedNote] = reorderedNotes.splice(result.source.index, 1);
+      reorderedNotes.splice(result.destination.index, 0, movedNote);
+
+      // Keep track of original positions
+      const originalPositions = sortedNotes.reduce((acc, note) => {
+        acc[note.id] = note.position;
+        return acc;
+      }, {} as Record<number, number>);
+      
+      // Update positions for all notes based on their new index
+      // Ensure positions are sequential integers starting from 1
+      const updatedNotes = reorderedNotes.map((note, index) => ({
+        ...note,
+        position: index + 1
+      }));
+
+      // Immediately update the UI with the new order
+      queryClient.setQueryData([QUERY_KEYS.NOTES], updatedNotes);
+
+      // Only update the notes that actually changed position
+      const changedNotes = updatedNotes.filter(note => 
+        originalPositions[note.id] !== note.position
+      );
+
+      // Batch update all changed notes
+      // Use Promise.all to ensure all updates are processed together
+      Promise.all(
+        changedNotes.map(note => 
+          updateNoteApi(note.id, { position: note.position })
+        )
+      )
+        .then(() => {
+          // After all updates are complete, refresh the data
+          queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+          
+          // Only show toast if multiple notes were changed
+          if (changedNotes.length > 1) {
+            toast({
+              title: "Notes reordered",
+              description: "Your notes have been reordered successfully.",
+            });
+          }
+        })
+        .catch(error => {
+          console.error("Error updating note positions:", error);
+          toast({
+            variant: "destructive",
+            title: "Error",
+            description: "Failed to update note positions. Please try again."
+          });
+        });
+    } catch (error) {
+      console.error("Error during drag and drop:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to update note positions. Please try again."
+      });
+    }
+  };
+
+  const handleUpdateNote = (id: number, data: Partial<Note>) => {
+    updateNoteMutation.mutate({ id, ...data });
   };
 
   if (isLoading) {
-    return <div>Loading notes...</div>;
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="flex flex-col items-center space-y-3">
+          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
+          <p className="text-sm text-muted-foreground font-medium animate-pulse">Loading your notes...</p>
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="space-y-4">
-      <div className="flex justify-between items-center">
-        <h2 className="text-2xl font-bold">Sticky Notes</h2>
+    <div className="space-y-8 p-6 max-w-7xl mx-auto">
+      <div className="flex justify-between items-center bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg shadow-sm border border-indigo-100">
+        <div className="flex items-center space-x-3">
+          <StickyNote className="h-8 w-8 text-indigo-500" />
+          <div>
+            <h2 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600">
+              Your Notes Board
+            </h2>
+            <p className="text-sm text-gray-500">Organize your thoughts with drag-and-drop simplicity</p>
+          </div>
+        </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button>
+            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5">
               <Plus className="h-4 w-4 mr-2" />
               Add Note
             </Button>
           </DialogTrigger>
-          <DialogContent>
+          <DialogContent className="sm:max-w-md bg-white rounded-xl border border-indigo-100 shadow-xl">
             <DialogHeader>
-              <DialogTitle>Create New Note</DialogTitle>
+              <DialogTitle className="text-xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600">Create New Note</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 pt-4">
               <Textarea
                 value={newNoteContent}
                 onChange={(e) => setNewNoteContent(e.target.value)}
                 placeholder="Write your note here..."
-                className="min-h-[150px]"
+                className="min-h-[150px] text-blue-800  italic  resize-none focus:ring-2 focus:ring-indigo-300 border-gray-200 rounded-xl shadow-inner bg-gray-50 transition-all duration-200"
               />
+              <div className="space-y-2">
+                <label className="text-sm font-medium text-gray-700">Choose a color</label>
+                <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
+                  <ColorPicker colors={COLORS} selectedColor={selectedColor} onChange={setSelectedColor} />
+                </div>
+              </div>
+            </div>
+            <DialogFooter className="sm:justify-end">
               <Button
-                className="w-full"
+                variant="outline"
+                onClick={() => setDialogOpen(false)}
+                className="rounded-full border-indigo-200 text-gray-600 hover:bg-gray-50"
+              >
+                Cancel
+              </Button>
+              <Button
+                className="ml-2 bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white rounded-full"
                 onClick={() => createNoteMutation.mutate(newNoteContent)}
                 disabled={!newNoteContent || createNoteMutation.isPending}
               >
-                Save Note
+                {createNoteMutation.isPending ? (
+                  <>
+                    <div className="mr-2 h-4 w-4 animate-spin rounded-full border-2 border-b-transparent"></div>
+                    Saving...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="h-4 w-4 mr-2" />
+                    Save Note
+                  </>
+                )}
               </Button>
-            </div>
+            </DialogFooter>
           </DialogContent>
         </Dialog>
       </div>
 
-      <DragDropContext onDragEnd={handleDragEnd}>
-        <Droppable droppableId="notes">
-          {(provided) => (
+      <DragDropContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <Droppable 
+          droppableId="notes" 
+          type="NOTES"
+          direction="horizontal"
+          ignoreContainerClipping={true}
+        >
+          {(provided, snapshot) => (
             <div
               {...provided.droppableProps}
               ref={provided.innerRef}
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4"
+              className={cn(
+                "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6",
+                isDragging && "cursor-grabbing"
+              )}
             >
-              {notes?.map((note, index) => (
-                <Draggable
-                  key={note.id}
-                  draggableId={String(note.id)}
-                  index={index}
-                >
-                  {(provided) => (
-                    <div
-                      ref={provided.innerRef}
-                      {...provided.draggableProps}
-                      className="group relative"
-                    >
-                      <Card
-                        style={{ backgroundColor: note.color }}
-                        className="transform transition-transform hover:-translate-y-1"
+              {sortedNotes.length === 0 ? (
+                <div className="col-span-full flex flex-col items-center justify-center h-72 border border-dashed rounded-xl border-indigo-200 p-8 bg-gradient-to-b from-white to-indigo-50">
+                  <div className="relative mb-6">
+                    <StickyNote className="h-16 w-16 text-indigo-200" />
+                    <Plus className="h-6 w-6 text-indigo-500 absolute -right-1 -top-1 bg-white rounded-full p-1 shadow-sm" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-indigo-700 mb-2">No notes yet</h3>
+                  <p className="text-gray-500 text-center mb-6">Click "Add Note" to create your first note and start organizing your thoughts.</p>
+                  <Button 
+                    onClick={() => setDialogOpen(true)}
+                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5 animate-pulse"
+                  >
+                    <Plus className="h-4 w-4 mr-2" />
+                    Add Your First Note
+                  </Button>
+                </div>
+              ) : (
+                sortedNotes.map((note, index) => (
+                  <Draggable
+                    key={note.id}
+                    draggableId={String(note.id)}
+                    index={index}
+                    disableInteractiveElementBlocking={true}
+                  >
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.draggableProps}
+                        style={provided.draggableProps.style}
+                        className="h-full"
                       >
-                        <CardContent className="p-4">
-                          <div
-                            {...provided.dragHandleProps}
-                            className="absolute top-2 left-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                          >
-                            <GripVertical className="h-4 w-4 text-gray-500" />
-                          </div>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                            onClick={() => deleteNoteMutation.mutate(note.id)}
-                          >
-                            <X className="h-4 w-4" />
-                          </Button>
-                          <p className="whitespace-pre-wrap pt-6">{note.content}</p>
-                        </CardContent>
-                      </Card>
-                    </div>
-                  )}
-                </Draggable>
-              ))}
+                        <NoteCard
+                          note={note}
+                          provided={{
+                            ...provided,
+                            draggableProps: {}, // We've already applied these to the parent div
+                            innerRef: () => {}, // We've already applied this to the parent div
+                          }}
+                          onDelete={() => deleteNoteMutation.mutate(note.id)}
+                          onUpdate={handleUpdateNote}
+                        />
+                      </div>
+                    )}
+                  </Draggable>
+                ))
+              )}
               {provided.placeholder}
             </div>
           )}

@@ -59,6 +59,7 @@ export const getCurrentUser = () => api.get<{ id: number; email: string; name: s
 
 // Tasks API endpoints
 export const getTasks = () => api.get<Task[]>("/tasks").then((res: AxiosResponse<Task[]>) => res.data);
+
 export const getTask = (id: number) => api.get<Task>(`/tasks/${id}`).then((res: AxiosResponse<Task>) => res.data);
 export const createTask = (task: Omit<Task, "id">) => {
   // Allow user_id to be passed through instead of relying on the token
@@ -71,7 +72,13 @@ export const deleteTask = (id: number) => api.delete(`/tasks/${id}`).then((res: 
 // Subtasks API endpoints
 export const getSubtasks = (taskId: number) => api.get<Subtask[]>(`/tasks/${taskId}/subtasks`).then((res: AxiosResponse<Subtask[]>) => res.data);
 export const createSubtasks = (taskId: number, subtasks: Array<{ title: string; completed: boolean }>) => 
-  api.post<Subtask[]>(`/tasks/${taskId}/subtasks`, { subtasks }).then((res: AxiosResponse<Subtask[]>) => res.data);
+  api.post<Subtask[]>(`/tasks/${taskId}/subtasks`, { 
+    subtasks: subtasks.map(subtask => ({
+      ...subtask,
+      task_id: taskId,
+      user_id: 2, // Explicitly set user_id to match authenticated user ID
+    }))
+  }).then((res: AxiosResponse<Subtask[]>) => res.data);
 export const updateSubtask = (taskId: number, subtaskId: number, data: Partial<Subtask>) => 
   api.patch<Subtask>(`/tasks/${taskId}/subtasks/${subtaskId}`, data).then((res: AxiosResponse<Subtask>) => res.data);
 export const deleteSubtask = (taskId: number, subtaskId: number) => 
@@ -106,8 +113,19 @@ export const createMeeting = (meeting: Omit<Meeting, "id" | "user_id">) => {
   // The server will set the user_id based on the authentication token
   return api.post<Meeting>("/meetings", meeting).then((res: AxiosResponse<Meeting>) => res.data);
 };
-export const updateMeeting = (id: number, meeting: Partial<Meeting>) => 
-  api.patch<Meeting>(`/meetings/${id}`, meeting).then((res: AxiosResponse<Meeting>) => res.data);
+export const updateMeeting = async (meetingId: number, meetingData: Partial<Meeting>): Promise<Meeting> => {
+  console.log(`Updating meeting ${meetingId} with data:`, meetingData);
+  
+  try {
+    const response = await api.patch<Meeting>(`/meetings/${meetingId}`, meetingData);
+    const updatedMeeting = await response.data;
+    console.log('Meeting updated successfully:', updatedMeeting);
+    return updatedMeeting;
+  } catch (error) {
+    console.error('Error updating meeting:', error);
+    throw error;
+  }
+};
 export const deleteMeeting = (id: number) => api.delete(`/meetings/${id}`).then((res: AxiosResponse<any>) => res.data);
 
 // Settings API endpoints
@@ -115,17 +133,66 @@ export const getPomodoroSettings = () =>
   api.get<PomodoroSettings>("/settings/pomodoro")
     .then((res: AxiosResponse<PomodoroSettings>) => res.data);
 
-export const updatePomodoroSettings = (settings: Partial<PomodoroSettings>) => 
-  api.patch<PomodoroSettings>("/settings/pomodoro", settings)
+export const updatePomodoroSettings = (settings: Partial<PomodoroSettings>) => {
+  // Create a completely new object with ONLY the fields we need
+  // Explicitly convert to primitive numbers and omit any other properties
+  const sanitizedSettings = {
+    work_duration: Math.floor(Number(settings.work_duration)),
+    break_duration: Math.floor(Number(settings.break_duration)),
+    long_break_duration: Math.floor(Number(settings.long_break_duration)),
+    sessions_before_long_break: Math.floor(Number(settings.sessions_before_long_break))
+  };
+  
+  // Using PATCH as the server expects
+  return api.patch<PomodoroSettings>("/settings/pomodoro", sanitizedSettings)
     .then((res: AxiosResponse<PomodoroSettings>) => res.data);
+}
 
 export const getUserSettings = () => 
   api.get<UserSettings>("/user-settings")
     .then((res: AxiosResponse<UserSettings>) => res.data);
 
-export const updateUserSettings = (settings: Partial<UserSettings>) => 
-  api.patch<UserSettings>("/user-settings", settings)
-    .then((res: AxiosResponse<UserSettings>) => res.data);
+export const updateUserSettings = async (settings: any): Promise<UserSettings> => {
+  console.log('Updating user settings:', settings);
+  
+  // Process work hours to ensure they're in the correct format for the server
+  const formattedSettings = { ...settings };
+  
+  // Convert time objects to decimal hours (e.g., 9:30 becomes 9.5)
+  if (formattedSettings.work_start_hour && 
+      typeof formattedSettings.work_start_hour === 'object' && 
+      'hour' in formattedSettings.work_start_hour) {
+    // Convert hour and minute to decimal value
+    const hour = formattedSettings.work_start_hour.hour;
+    const minute = formattedSettings.work_start_hour.minute || 0;
+    formattedSettings.work_start_hour = hour + (minute / 60);
+    console.log('Converted time object to decimal hours for work_start_hour:', formattedSettings.work_start_hour);
+  } else if (typeof formattedSettings.work_start_hour === 'number' && formattedSettings.work_start_hour > 1000000) {
+    // If it's a Unix timestamp, convert to decimal hours
+    const date = new Date(formattedSettings.work_start_hour * 1000);
+    formattedSettings.work_start_hour = date.getHours() + (date.getMinutes() / 60);
+    console.log('Converted timestamp to decimal hours for work_start_hour:', formattedSettings.work_start_hour);
+  }
+  
+  if (formattedSettings.work_end_hour && 
+      typeof formattedSettings.work_end_hour === 'object' && 
+      'hour' in formattedSettings.work_end_hour) {
+    // Convert hour and minute to decimal value
+    const hour = formattedSettings.work_end_hour.hour;
+    const minute = formattedSettings.work_end_hour.minute || 0;
+    formattedSettings.work_end_hour = hour + (minute / 60);
+    console.log('Converted time object to decimal hours for work_end_hour:', formattedSettings.work_end_hour);
+  } else if (typeof formattedSettings.work_end_hour === 'number' && formattedSettings.work_end_hour > 1000000) {
+    // If it's a Unix timestamp, convert to decimal hours
+    const date = new Date(formattedSettings.work_end_hour * 1000);
+    formattedSettings.work_end_hour = date.getHours() + (date.getMinutes() / 60);
+    console.log('Converted timestamp to decimal hours for work_end_hour:', formattedSettings.work_end_hour);
+  }
+  
+  // Use the existing api object instead of fetch
+  const response = await api.patch<UserSettings>("/user-settings", formattedSettings);
+  return response.data;
+};
 
 // Auth-related API endpoints
 export const validateToken = () => api.get<{ valid: boolean; user: any }>("/auth/validate-token")

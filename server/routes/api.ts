@@ -23,9 +23,9 @@ const taskSchema = z.object({
   description: z.string().nullable(),
   priority: z.enum(["low", "medium", "high"]),
   completed: z.boolean(),
-  due_date: z.coerce.date().nullable(),
+  due_date: z.number().nullable(),
   all_day: z.boolean(),
-  recurrence_end_date: z.coerce.date().nullable(),
+  recurrence_end_date: z.number().nullable(),
   recurrence_pattern: z.enum(["daily", "weekly", "monthly", "yearly"]).nullable(),
   recurrence_interval: z.number().nullable(),
   is_recurring: z.boolean(),
@@ -99,11 +99,11 @@ router.post("/generate-subtasks", async (req: Request, res: Response) => {
 router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
   try {
     // Get all tasks for the current user
+    
     const allTasks = await db
       .select()
       .from(tasks)
       .where(eq(tasks.user_id, req.userId!));
-    
     // Get all tasks that have subtasks and their completion counts
     const tasksWithSubtasks = await db
       .select({
@@ -127,9 +127,6 @@ router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
     
     // Map the tasks to include the has_subtasks property and handle dates
     const tasksWithSubtasksInfo = allTasks.map(task => {
-      const due_date = task.due_date ? new Date(task.due_date) : null;
-      const recurrence_end_date = task.recurrence_end_date ? new Date(task.recurrence_end_date) : null;
-
       const subtaskInfo = subtasksMap.get(task.id) || { 
         has_subtasks: false,
         total_subtasks: 0,
@@ -138,8 +135,8 @@ router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
 
       return {
         ...task,
-        due_date,
-        recurrence_end_date,
+        due_date: task.due_date ? Number(task.due_date) : null,
+        recurrence_end_date: task.recurrence_end_date ? Number(task.recurrence_end_date) : null,
         ...subtaskInfo,
       };
     });
@@ -195,22 +192,28 @@ router.post("/tasks", requireAuth, async (req: Request, res: Response) => {
     // Log incoming data for debugging
     console.log("Received task data:", JSON.stringify(req.body));
     
-    // Extract and sanitize all task fields explicitly to ensure proper types
-    const taskValues = {
-      title: req.body.title || "",
-      description: req.body.description || null,
-      priority: req.body.priority || "medium",
-      // Boolean fields are stored as integers in SQLite (0 or 1)
-      completed: req.body.completed === true ? 1 : 0,
-      due_date: req.body.due_date ? Number(req.body.due_date) : null,
-      all_day: req.body.all_day === true ? 1 : 0,
-      parent_task_id: req.body.parent_task_id ? Number(req.body.parent_task_id) : null,
+    // Validate and parse the task data
+    const result = taskSchema.safeParse({
+      ...req.body,
       user_id: req.userId!,
-      is_recurring: req.body.is_recurring === true ? 1 : 0,
-      recurrence_pattern: req.body.recurrence_pattern || null,
-      recurrence_interval: req.body.recurrence_interval ? Number(req.body.recurrence_interval) : null,
-      recurrence_end_date: req.body.recurrence_end_date ? Number(req.body.recurrence_end_date) : null,
-      // Let SQLite handle timestamps via the default values
+      // Ensure timestamps are in Unix format (seconds)
+      due_date: req.body.due_date ? Math.floor(Number(req.body.due_date)) : null,
+      recurrence_end_date: req.body.recurrence_end_date ? Math.floor(Number(req.body.recurrence_end_date)) : null
+    });
+
+    if (!result.success) {
+      return res.status(400).json({ 
+        error: "Invalid task data", 
+        details: result.error.errors 
+      });
+    }
+
+    // Convert boolean values to SQLite integers and prepare task values
+    const taskValues = {
+      ...result.data,
+      completed: result.data.completed ? 1 : 0,
+      all_day: result.data.all_day ? 1 : 0,
+      is_recurring: result.data.is_recurring ? 1 : 0
     };
     
     console.log("Sanitized task values:", JSON.stringify(taskValues));
@@ -239,16 +242,16 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
     
     // Only include properties that are explicitly provided
     if ('completed' in req.body) {
-      updateData.completed = req.body.completed === true ? 1 : 0;
+      updateData.completed = Boolean(req.body.completed);
     }
     if ('title' in req.body) updateData.title = req.body.title;
     if ('description' in req.body) updateData.description = req.body.description;
     if ('priority' in req.body) updateData.priority = req.body.priority;
     if ('due_date' in req.body) {
-      updateData.due_date = req.body.due_date ? Math.floor(new Date(req.body.due_date).getTime() / 1000) : null;
+      updateData.due_date = req.body.due_date ? Math.floor(Number(req.body.due_date)) : null;
     }
     if ('is_recurring' in req.body) {
-      updateData.is_recurring = req.body.is_recurring === true ? 1 : 0;
+      updateData.is_recurring = Boolean(req.body.is_recurring);
       // If turning off recurring, clear related fields
       if (!req.body.is_recurring) {
         updateData.recurrence_pattern = null;
@@ -263,8 +266,8 @@ router.put("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
       updateData.recurrence_interval = req.body.is_recurring === true ? req.body.recurrence_interval : null;
     }
     if ('recurrence_end_date' in req.body) {
-      updateData.recurrence_end_date = req.body.is_recurring === true ? 
-        (req.body.recurrence_end_date ? Math.floor(new Date(req.body.recurrence_end_date).getTime() / 1000) : null) : 
+      updateData.recurrence_end_date = req.body.is_recurring === true && req.body.recurrence_end_date ? 
+        Math.floor(Number(req.body.recurrence_end_date)) : 
         null;
     }
 
@@ -351,7 +354,7 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
     if ('description' in req.body) updateData.description = req.body.description;
     if ('priority' in req.body) updateData.priority = req.body.priority;
     if ('due_date' in req.body) {
-      updateData.due_date = req.body.due_date ? Math.floor(new Date(req.body.due_date).getTime() / 1000) : null;
+      updateData.due_date = req.body.due_date ? Math.floor(Number(req.body.due_date)) : null;
     }
     if ('is_recurring' in req.body) {
       updateData.is_recurring = req.body.is_recurring === true ? 1 : 0;
@@ -369,8 +372,8 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
       updateData.recurrence_interval = req.body.is_recurring === true ? req.body.recurrence_interval : null;
     }
     if ('recurrence_end_date' in req.body) {
-      updateData.recurrence_end_date = req.body.is_recurring === true ? 
-        (req.body.recurrence_end_date ? Math.floor(new Date(req.body.recurrence_end_date).getTime() / 1000) : null) : 
+      updateData.recurrence_end_date = req.body.is_recurring === true && req.body.recurrence_end_date ? 
+        Math.floor(Number(req.body.recurrence_end_date)) : 
         null;
     }
 
@@ -491,8 +494,11 @@ router.post("/notes", requireAuth, async (req: Request, res: Response) => {
       });
     }
 
-    const noteData: Task = result.data;
-    const newNote = await db.insert(notes).values(noteData).returning();
+const noteData = result.data;
+    const newNote = await db.insert(notes).values({
+      ...noteData,
+      user_id: req.userId!
+    }).returning();
     res.json(newNote[0]);
   } catch (error) {
     console.error("Error creating note:", error);
@@ -692,7 +698,6 @@ router.patch("/meetings/:id", requireAuth, async (req: Request, res: Response) =
     
     const updateData = {
       ...req.body,
-      updated_at: Math.floor(Date.now() / 1000)
     };
     
     const updatedMeeting = await db
@@ -799,9 +804,31 @@ router.patch("/pomodoro-settings", requireAuth, async (req, res) => {
 
 router.get("/user-settings", requireAuth, async (req, res) => {
   try {
-    const settings = await db.select().from(userSettings).limit(1);
-    res.json(settings[0] || {});
+    console.log('Fetching settings for user_id:', req.userId);
+    const settings = await db.select().from(userSettings).where(eq(userSettings.user_id, req.userId!));
+    
+    if (settings.length === 0) {
+      console.log('No settings found for user, returning default values');
+      // Return default values if no settings exist
+      return res.json({
+        id: null,
+        user_id: req.userId,
+        timezone: "UTC",
+        work_start_hour: 9,
+        work_end_hour: 17,
+        theme: "light",
+        default_calendar_view: "month",
+        show_notifications: true,
+        notifications_enabled: true,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      });
+    }
+    
+    console.log('Found settings for user:', settings[0]);
+    res.json(settings[0]);
   } catch (error) {
+    console.error("Error fetching user settings:", error);
     res.status(500).json({ error: "Failed to fetch user settings" });
   }
 });
@@ -810,18 +837,21 @@ router.put("/user-settings", requireAuth, async (req, res) => {
   try {
     console.log('Received user settings update:', req.body);
     
-    const settings = await db.select().from(userSettings).limit(1);
+    const settings = await db.select().from(userSettings).where(eq(userSettings.user_id, req.userId!));
     if (settings.length === 0) {
-      console.log('No existing settings found, creating new settings');
-      const newSettings = await db.insert(userSettings).values(req.body).returning();
+      console.log('No existing settings found, creating new settings with user_id:', req.userId);
+      const newSettings = await db.insert(userSettings).values({
+        ...req.body,
+        user_id: req.userId!
+      }).returning();
       console.log('Created new settings:', newSettings[0]);
       res.json(newSettings[0]);
     } else {
-      console.log('Updating existing settings:', settings[0]);
+      console.log('Updating existing settings for user_id:', req.userId);
       const updatedSettings = await db
         .update(userSettings)
         .set(req.body)
-        .where(eq(userSettings.id, settings[0].id))
+        .where(eq(userSettings.user_id, req.userId!))
         .returning();
       console.log('Updated settings:', updatedSettings[0]);
       res.json(updatedSettings[0]);
@@ -834,21 +864,113 @@ router.put("/user-settings", requireAuth, async (req, res) => {
 
 router.patch("/user-settings", requireAuth, async (req, res) => {
   try {
-    const settings = await db.select().from(userSettings).limit(1);
-    if (settings.length === 0) {
-      const newSettings = await db.insert(userSettings).values(req.body).returning();
+    console.log('Received settings update request:', JSON.stringify(req.body));
+    
+    // Check if settings exist for this user
+    const existingSettings = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.user_id, req.userId!));
+    
+    // Process work hours - ensure they are valid hour values (0-24)
+    let workStartHour = undefined;
+    let workEndHour = undefined;
+    
+    // Handle work_start_hour specially
+    if ('work_start_hour' in req.body) {
+      console.log('Processing work_start_hour:', JSON.stringify(req.body.work_start_hour));
+      if (req.body.work_start_hour !== null && typeof req.body.work_start_hour === 'number') {
+        // Store the decimal value to preserve minutes (e.g., 9.5 for 9:30)
+        // Just ensure it's within valid range
+        workStartHour = Math.min(Math.max(0, Number(req.body.work_start_hour)), 23.99);
+        console.log('Using work_start_hour:', workStartHour);
+      }
+    }
+    
+    // Handle work_end_hour specially
+    if ('work_end_hour' in req.body) {
+      console.log('Processing work_end_hour:', JSON.stringify(req.body.work_end_hour));
+      if (req.body.work_end_hour !== null && typeof req.body.work_end_hour === 'number') {
+        // Store the decimal value to preserve minutes (e.g., 17.5 for 17:30)
+        // Just ensure it's within valid range
+        workEndHour = Math.min(Math.max(1, Number(req.body.work_end_hour)), 24);
+        console.log('Using work_end_hour:', workEndHour);
+      }
+    }
+    
+    // If no settings exist, create new settings
+    if (existingSettings.length === 0) {
+      console.log('No existing settings found, creating new settings');
+      
+      // Create default hour values for work hours if not provided
+      if (workStartHour === undefined) {
+        workStartHour = 9; // Default start hour: 9 AM
+      }
+      
+      if (workEndHour === undefined) {
+        workEndHour = 17; // Default end hour: 5 PM
+      }
+      
+      // Create a new settings object with only the fields we need
+      const newSettingsData = {
+        user_id: req.userId!,
+        timezone: 'timezone' in req.body ? req.body.timezone : "UTC",
+        theme: 'theme' in req.body ? req.body.theme : "light",
+        default_calendar_view: 'default_calendar_view' in req.body ? req.body.default_calendar_view : "month",
+        show_notifications: 'show_notifications' in req.body ? req.body.show_notifications : true,
+        notifications_enabled: 'notifications_enabled' in req.body ? req.body.notifications_enabled : true,
+        work_start_hour: workStartHour,
+        work_end_hour: workEndHour
+      };
+      
+      console.log('Creating new settings with data:', JSON.stringify(newSettingsData));
+      
+      const newSettings = await db
+        .insert(userSettings)
+        .values(newSettingsData)
+        .returning();
+      
+      console.log('Created new settings:', newSettings[0]);
       return res.json(newSettings[0]);
     }
     
-    const updatedSettings = await db
+    // Update existing settings
+    console.log('Updating existing settings for user_id:', req.userId);
+    
+    // Create update object with only the fields that are provided
+    const updateData: Record<string, any> = {};
+    
+    if ('timezone' in req.body) updateData.timezone = req.body.timezone;
+    if ('theme' in req.body) updateData.theme = req.body.theme;
+    if ('default_calendar_view' in req.body) updateData.default_calendar_view = req.body.default_calendar_view;
+    if ('show_notifications' in req.body) updateData.show_notifications = req.body.show_notifications;
+    if ('notifications_enabled' in req.body) updateData.notifications_enabled = req.body.notifications_enabled;
+    if (workStartHour !== undefined) updateData.work_start_hour = workStartHour;
+    if (workEndHour !== undefined) updateData.work_end_hour = workEndHour;
+    
+    console.log('Final update data:', JSON.stringify(updateData));
+    
+    // Only update if there are fields to update
+    if (Object.keys(updateData).length === 0) {
+      console.log('No fields to update');
+      return res.json(existingSettings[0]);
+    }
+    
+    const result = await db
       .update(userSettings)
-      .set(req.body)
-      .where(eq(userSettings.id, settings[0].id))
+      .set(updateData)
+      .where(eq(userSettings.user_id, req.userId!))
       .returning();
-    res.json(updatedSettings[0]);
+    
+    console.log('Updated settings:', result[0]);
+    res.json(result[0]);
+    
   } catch (error) {
     console.error("Error updating user settings:", error);
-    res.status(500).json({ error: "Failed to update user settings" });
+    res.status(500).json({ 
+      error: "Failed to update user settings",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
   }
 });
 
@@ -866,8 +988,10 @@ router.post("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Respon
       task_id: taskId,
       position: index,
       completed: Boolean(subtask.completed),
+      user_id: req.userId, // Add user_id from the auth middleware
     }));
 
+    console.log("Creating subtasks with values:", subtaskValues);
     const savedSubtasks = await db.insert(subtasks).values(subtaskValues).returning();
     res.json(savedSubtasks);
 
@@ -918,4 +1042,4 @@ router.patch("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Requ
   }
 });
 
-export default router; 
+export default router;

@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { getUserSettings } from '@/lib/api';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { getUserSettings, updateUserSettings } from '@/lib/api';
 import { type UserSettings } from '@shared/schema';
+import { QUERY_KEYS } from '@/lib/queryClient';
 
 type Theme = 'light' | 'dark' | 'system';
 
@@ -9,26 +10,75 @@ interface ThemeContextType {
   theme: Theme;
   setTheme: (theme: Theme) => void;
   resolvedTheme: 'light' | 'dark';
+  isLoading: boolean;
 }
 
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [theme, setTheme] = useState<Theme>('system');
+  const [theme, setThemeState] = useState<Theme>(() => {
+    // Initialize from localStorage if available
+    const savedTheme = localStorage.getItem('theme') as Theme | null;
+    return savedTheme && ['light', 'dark', 'system'].includes(savedTheme) 
+      ? savedTheme as Theme 
+      : 'system';
+  });
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
+  const queryClient = useQueryClient();
 
   // Fetch user settings from the server
-  const { data: settings } = useQuery<UserSettings>({
-    queryKey: ['user-settings'],
+  const { data: settings, isLoading } = useQuery<UserSettings>({
+    queryKey: [QUERY_KEYS.SETTINGS],
     queryFn: getUserSettings,
   });
 
   // Apply theme from settings when they load
   useEffect(() => {
     if (settings?.theme && ['light', 'dark', 'system'].includes(settings.theme)) {
-      setTheme(settings.theme as Theme);
+      setThemeState(settings.theme as Theme);
     }
   }, [settings]);
+
+  // Mutation to update theme in settings
+  const updateThemeMutation = useMutation({
+    mutationFn: (newTheme: Theme) => {
+      return updateUserSettings({ theme: newTheme });
+    },
+    onMutate: async (newTheme) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+      
+      // Snapshot the previous value
+      const previousSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.SETTINGS]);
+      
+      // Optimistically update to the new value
+      if (previousSettings) {
+        queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], {
+          ...previousSettings,
+          theme: newTheme
+        });
+      }
+      
+      return { previousSettings };
+    },
+    onError: (_error, _newTheme, context) => {
+      // If the mutation fails, use the context returned from onMutate to roll back
+      if (context?.previousSettings) {
+        queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], context.previousSettings);
+      }
+    }
+  });
+
+  // Function to set theme and update settings
+  const setTheme = (newTheme: Theme) => {
+    setThemeState(newTheme);
+    localStorage.setItem('theme', newTheme);
+    
+    // Only update settings if we're authenticated and have settings
+    if (settings) {
+      updateThemeMutation.mutate(newTheme);
+    }
+  };
 
   useEffect(() => {
     // Function to set the theme based on user preference or system setting
@@ -50,9 +100,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       // Remove both classes and add the correct one
       root.classList.remove('light', 'dark');
       root.classList.add(newResolvedTheme);
-      
-      // Save to localStorage as well
-      localStorage.setItem('theme', theme);
     };
 
     applyTheme();
@@ -73,6 +120,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     theme,
     setTheme,
     resolvedTheme,
+    isLoading
   };
 
   return (
