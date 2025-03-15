@@ -1,5 +1,5 @@
 import { sql } from "drizzle-orm";
-import { sqliteTable, text, integer } from "drizzle-orm/sqlite-core";
+import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
 import { createInsertSchema, createSelectSchema } from 'drizzle-zod';
 import { z } from "zod";
 
@@ -121,8 +121,8 @@ export const userSettings = sqliteTable("user_settings", {
     .unique()
     .references(() => users.id, { onDelete: "cascade" }),
   timezone: text("timezone").notNull().default("UTC"),
-  work_start_hour: integer("work_start_hour").notNull().default(9),
-  work_end_hour: integer("work_end_hour").notNull().default(17),
+  work_start_hour: real("work_start_hour").notNull().default(9),
+  work_end_hour: real("work_end_hour").notNull().default(17),
   theme: text("theme").notNull().default("light"),
   default_calendar_view: text("default_calendar_view").notNull().default("month"),
   show_notifications: integer("show_notifications", { mode: "boolean" }).notNull().default(true),
@@ -203,14 +203,14 @@ export const insertPomodoroSettingsSchema = z.object({
 export const insertUserSettingsSchema = z.object({
   timezone: z.string().default("UTC"),
   work_start_hour: z.union([
-    z.number().min(0).max(23).default(9),
+    z.number().min(0).max(23.99).default(9),
     z.object({
       hour: z.number().min(0).max(23),
       minute: z.number().min(0).max(59)
     })
   ]).default(9),
   work_end_hour: z.union([
-    z.number().min(0).max(23).default(17),
+    z.number().min(0).max(24).default(17),
     z.object({
       hour: z.number().min(0).max(23),
       minute: z.number().min(0).max(59)

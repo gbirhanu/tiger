@@ -41,11 +41,18 @@ export default function NotesBoard() {
   const [newNoteContent, setNewNoteContent] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedColor, setSelectedColor] = useState(COLORS[0]);
+  const [isDragging, setIsDragging] = useState(false);
 
   const { data: notes, isLoading, error } = useQuery({
     queryKey: [QUERY_KEYS.NOTES],
     queryFn: getNotes,
   });
+
+  // Sort notes by position
+  const sortedNotes = React.useMemo(() => {
+    if (!notes) return [];
+    return [...notes].sort((a, b) => a.position - b.position);
+  }, [notes]);
 
   // Log error if there is one
   useEffect(() => {
@@ -59,15 +66,18 @@ export default function NotesBoard() {
     }
   }, [error, toast]);
 
-;
-
   const createNoteMutation = useMutation({
     mutationFn: (content: string) => {
+      // Find the highest position value to ensure new note is added at the end
+      const highestPosition = notes?.length 
+        ? Math.max(...notes.map(note => note.position))
+        : 0;
+        
       const note = {
         title: "Note", // Add required fields
         content,
         color: selectedColor,
-        position: (notes?.length || 0) + 1,
+        position: highestPosition + 1, // Use highest position + 1 instead of length
         // Convert timestamps to seconds (integer) for SQLite storage
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
@@ -81,6 +91,11 @@ export default function NotesBoard() {
       // Snapshot the previous value
       const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
       
+      // Find the highest position value
+      const highestPosition = previousNotes.length 
+        ? Math.max(...previousNotes.map(note => note.position))
+        : 0;
+      
       // Optimistically add the new note
       const optimisticNote = {
         id: Date.now(), // Temporary ID
@@ -88,7 +103,7 @@ export default function NotesBoard() {
         title: "Note",
         content,
         color: selectedColor,
-        position: (previousNotes?.length || 0) + 1,
+        position: highestPosition + 1, // Use highest position + 1
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
       };
@@ -153,6 +168,10 @@ export default function NotesBoard() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      toast({
+        title: "Note updated",
+        description: "Your note has been updated successfully.",
+      });
     },
   });
 
@@ -193,53 +212,72 @@ export default function NotesBoard() {
     },
   });
 
+  const handleDragStart = () => {
+    setIsDragging(true);
+  };
+
   const handleDragEnd = (result: any) => {
-    if (!result.destination || !notes) return;
+    setIsDragging(false);
+    
+    if (!result.destination || !sortedNotes.length) return;
 
     // Don't do anything if dropped in the same position
     if (result.destination.index === result.source.index) return;
 
-    console.log(`Moving note from position ${result.source.index} to ${result.destination.index}`);
-
     try {
       // Create a new array with the updated order
-      const reorderedNotes = Array.from(notes);
+      const reorderedNotes = Array.from(sortedNotes);
       const [movedNote] = reorderedNotes.splice(result.source.index, 1);
       reorderedNotes.splice(result.destination.index, 0, movedNote);
 
-      // Update positions for all notes
+      // Keep track of original positions
+      const originalPositions = sortedNotes.reduce((acc, note) => {
+        acc[note.id] = note.position;
+        return acc;
+      }, {} as Record<number, number>);
+      
+      // Update positions for all notes based on their new index
+      // Ensure positions are sequential integers starting from 1
       const updatedNotes = reorderedNotes.map((note, index) => ({
         ...note,
         position: index + 1
       }));
 
-      // CRITICAL FIX: Immediately update the UI with the new order BEFORE any server calls
+      // Immediately update the UI with the new order
       queryClient.setQueryData([QUERY_KEYS.NOTES], updatedNotes);
 
-      // Get the moved note's new position
-      const movedNoteWithNewPosition = updatedNotes[result.destination.index];
-      
-      console.log(`Updating note ${movedNoteWithNewPosition.id} to position ${movedNoteWithNewPosition.position}`);
-      
-      // First update the moved note with proper optimistic update
-      updateNoteMutation.mutate({
-        id: movedNoteWithNewPosition.id,
-        position: movedNoteWithNewPosition.position
-      });
-      
-      // Queue up other position updates with a slight delay to prevent race conditions
-      const otherNotes = updatedNotes.filter(n => n.id !== movedNoteWithNewPosition.id);
-      
-      // Wait 100ms before updating other positions to ensure main note update completes first
-      setTimeout(() => {
-        otherNotes.forEach((note) => {
-          console.log(`Updating note ${note.id} to position ${note.position}`);
-          updateNoteMutation.mutate({
-            id: note.id,
-            position: note.position
+      // Only update the notes that actually changed position
+      const changedNotes = updatedNotes.filter(note => 
+        originalPositions[note.id] !== note.position
+      );
+
+      // Batch update all changed notes
+      // Use Promise.all to ensure all updates are processed together
+      Promise.all(
+        changedNotes.map(note => 
+          updateNoteApi(note.id, { position: note.position })
+        )
+      )
+        .then(() => {
+          // After all updates are complete, refresh the data
+          queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+          
+          // Only show toast if multiple notes were changed
+          if (changedNotes.length > 1) {
+            toast({
+              title: "Notes reordered",
+              description: "Your notes have been reordered successfully.",
+            });
+          }
+        })
+        .catch(error => {
+          console.error("Error updating note positions:", error);
+          toast({
+            variant: "destructive",
+            title: "Error",
+            description: "Failed to update note positions. Please try again."
           });
         });
-      }, 100);
     } catch (error) {
       console.error("Error during drag and drop:", error);
       toast({
@@ -248,6 +286,10 @@ export default function NotesBoard() {
         description: "Failed to update note positions. Please try again."
       });
     }
+  };
+
+  const handleUpdateNote = (id: number, data: Partial<Note>) => {
+    updateNoteMutation.mutate({ id, ...data });
   };
 
   if (isLoading) {
@@ -280,7 +322,7 @@ export default function NotesBoard() {
               Add Note
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-md bg-white backdrop-blur-sm bg-opacity-90 rounded-xl border border-indigo-100 shadow-xl">
+          <DialogContent className="sm:max-w-md bg-white rounded-xl border border-indigo-100 shadow-xl">
             <DialogHeader>
               <DialogTitle className="text-xl font-bold text-center bg-clip-text text-transparent bg-gradient-to-r from-indigo-500 to-purple-600">Create New Note</DialogTitle>
             </DialogHeader>
@@ -289,11 +331,13 @@ export default function NotesBoard() {
                 value={newNoteContent}
                 onChange={(e) => setNewNoteContent(e.target.value)}
                 placeholder="Write your note here..."
-                className="min-h-[150px] resize-none focus:ring-2 focus:ring-indigo-300 border-indigo-100 rounded-xl shadow-inner bg-white transition-all duration-200"
+                className="min-h-[150px] text-blue-800  italic  resize-none focus:ring-2 focus:ring-indigo-300 border-gray-200 rounded-xl shadow-inner bg-gray-50 transition-all duration-200"
               />
               <div className="space-y-2">
                 <label className="text-sm font-medium text-gray-700">Choose a color</label>
-                <ColorPicker colors={COLORS} selectedColor={selectedColor} onChange={setSelectedColor} />
+                <div className="p-3 bg-gray-50 rounded-xl border border-gray-200">
+                  <ColorPicker colors={COLORS} selectedColor={selectedColor} onChange={setSelectedColor} />
+                </div>
               </div>
             </div>
             <DialogFooter className="sm:justify-end">
@@ -326,15 +370,23 @@ export default function NotesBoard() {
         </Dialog>
       </div>
 
-      <DragDropContext onDragEnd={handleDragEnd}>
-        <Droppable droppableId="notes">
-          {(provided) => (
+      <DragDropContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+        <Droppable 
+          droppableId="notes" 
+          type="NOTES"
+          direction="horizontal"
+          ignoreContainerClipping={true}
+        >
+          {(provided, snapshot) => (
             <div
               {...provided.droppableProps}
               ref={provided.innerRef}
-              className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6"
+              className={cn(
+                "grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6",
+                isDragging && "cursor-grabbing"
+              )}
             >
-              {notes?.length === 0 ? (
+              {sortedNotes.length === 0 ? (
                 <div className="col-span-full flex flex-col items-center justify-center h-72 border border-dashed rounded-xl border-indigo-200 p-8 bg-gradient-to-b from-white to-indigo-50">
                   <div className="relative mb-6">
                     <StickyNote className="h-16 w-16 text-indigo-200" />
@@ -351,18 +403,31 @@ export default function NotesBoard() {
                   </Button>
                 </div>
               ) : (
-                notes?.map((note, index) => (
+                sortedNotes.map((note, index) => (
                   <Draggable
                     key={note.id}
                     draggableId={String(note.id)}
                     index={index}
+                    disableInteractiveElementBlocking={true}
                   >
-                    {(provided) => (
-                      <NoteCard
-                        note={note}
-                        provided={provided}
-                        onDelete={() => deleteNoteMutation.mutate(note.id)}
-                      />
+                    {(provided, snapshot) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.draggableProps}
+                        style={provided.draggableProps.style}
+                        className="h-full"
+                      >
+                        <NoteCard
+                          note={note}
+                          provided={{
+                            ...provided,
+                            draggableProps: {}, // We've already applied these to the parent div
+                            innerRef: () => {}, // We've already applied this to the parent div
+                          }}
+                          onDelete={() => deleteNoteMutation.mutate(note.id)}
+                          onUpdate={handleUpdateNote}
+                        />
+                      </div>
                     )}
                   </Draggable>
                 ))

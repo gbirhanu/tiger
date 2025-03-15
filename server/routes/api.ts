@@ -880,8 +880,9 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
     if ('work_start_hour' in req.body) {
       console.log('Processing work_start_hour:', JSON.stringify(req.body.work_start_hour));
       if (req.body.work_start_hour !== null && typeof req.body.work_start_hour === 'number') {
-        // Ensure it's a valid hour value (0-24)
-        workStartHour = Math.min(Math.max(0, Math.floor(Number(req.body.work_start_hour))), 23);
+        // Store the decimal value to preserve minutes (e.g., 9.5 for 9:30)
+        // Just ensure it's within valid range
+        workStartHour = Math.min(Math.max(0, Number(req.body.work_start_hour)), 23.99);
         console.log('Using work_start_hour:', workStartHour);
       }
     }
@@ -890,8 +891,9 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
     if ('work_end_hour' in req.body) {
       console.log('Processing work_end_hour:', JSON.stringify(req.body.work_end_hour));
       if (req.body.work_end_hour !== null && typeof req.body.work_end_hour === 'number') {
-        // Ensure it's a valid hour value (0-24)
-        workEndHour = Math.min(Math.max(1, Math.floor(Number(req.body.work_end_hour))), 24);
+        // Store the decimal value to preserve minutes (e.g., 17.5 for 17:30)
+        // Just ensure it's within valid range
+        workEndHour = Math.min(Math.max(1, Number(req.body.work_end_hour)), 24);
         console.log('Using work_end_hour:', workEndHour);
       }
     }

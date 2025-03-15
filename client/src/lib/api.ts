@@ -113,8 +113,19 @@ export const createMeeting = (meeting: Omit<Meeting, "id" | "user_id">) => {
   // The server will set the user_id based on the authentication token
   return api.post<Meeting>("/meetings", meeting).then((res: AxiosResponse<Meeting>) => res.data);
 };
-export const updateMeeting = (id: number, meeting: Partial<Meeting>) => 
-  api.patch<Meeting>(`/meetings/${id}`, meeting).then((res: AxiosResponse<Meeting>) => res.data);
+export const updateMeeting = async (meetingId: number, meetingData: Partial<Meeting>): Promise<Meeting> => {
+  console.log(`Updating meeting ${meetingId} with data:`, meetingData);
+  
+  try {
+    const response = await api.patch<Meeting>(`/meetings/${meetingId}`, meetingData);
+    const updatedMeeting = await response.data;
+    console.log('Meeting updated successfully:', updatedMeeting);
+    return updatedMeeting;
+  } catch (error) {
+    console.error('Error updating meeting:', error);
+    throw error;
+  }
+};
 export const deleteMeeting = (id: number) => api.delete(`/meetings/${id}`).then((res: AxiosResponse<any>) => res.data);
 
 // Settings API endpoints
@@ -147,31 +158,35 @@ export const updateUserSettings = async (settings: any): Promise<UserSettings> =
   // Process work hours to ensure they're in the correct format for the server
   const formattedSettings = { ...settings };
   
-  // Extract just the hour values (0-24) for work hours
+  // Convert time objects to decimal hours (e.g., 9:30 becomes 9.5)
   if (formattedSettings.work_start_hour && 
       typeof formattedSettings.work_start_hour === 'object' && 
       'hour' in formattedSettings.work_start_hour) {
-    // Extract just the hour value (0-24)
-    formattedSettings.work_start_hour = formattedSettings.work_start_hour.hour;
-    console.log('Extracted hour value for work_start_hour:', formattedSettings.work_start_hour);
+    // Convert hour and minute to decimal value
+    const hour = formattedSettings.work_start_hour.hour;
+    const minute = formattedSettings.work_start_hour.minute || 0;
+    formattedSettings.work_start_hour = hour + (minute / 60);
+    console.log('Converted time object to decimal hours for work_start_hour:', formattedSettings.work_start_hour);
   } else if (typeof formattedSettings.work_start_hour === 'number' && formattedSettings.work_start_hour > 1000000) {
-    // If it's a Unix timestamp, convert to hour
+    // If it's a Unix timestamp, convert to decimal hours
     const date = new Date(formattedSettings.work_start_hour * 1000);
-    formattedSettings.work_start_hour = date.getHours();
-    console.log('Converted timestamp to hour for work_start_hour:', formattedSettings.work_start_hour);
+    formattedSettings.work_start_hour = date.getHours() + (date.getMinutes() / 60);
+    console.log('Converted timestamp to decimal hours for work_start_hour:', formattedSettings.work_start_hour);
   }
   
   if (formattedSettings.work_end_hour && 
       typeof formattedSettings.work_end_hour === 'object' && 
       'hour' in formattedSettings.work_end_hour) {
-    // Extract just the hour value (0-24)
-    formattedSettings.work_end_hour = formattedSettings.work_end_hour.hour;
-    console.log('Extracted hour value for work_end_hour:', formattedSettings.work_end_hour);
+    // Convert hour and minute to decimal value
+    const hour = formattedSettings.work_end_hour.hour;
+    const minute = formattedSettings.work_end_hour.minute || 0;
+    formattedSettings.work_end_hour = hour + (minute / 60);
+    console.log('Converted time object to decimal hours for work_end_hour:', formattedSettings.work_end_hour);
   } else if (typeof formattedSettings.work_end_hour === 'number' && formattedSettings.work_end_hour > 1000000) {
-    // If it's a Unix timestamp, convert to hour
+    // If it's a Unix timestamp, convert to decimal hours
     const date = new Date(formattedSettings.work_end_hour * 1000);
-    formattedSettings.work_end_hour = date.getHours();
-    console.log('Converted timestamp to hour for work_end_hour:', formattedSettings.work_end_hour);
+    formattedSettings.work_end_hour = date.getHours() + (date.getMinutes() / 60);
+    console.log('Converted timestamp to decimal hours for work_end_hour:', formattedSettings.work_end_hour);
   }
   
   // Use the existing api object instead of fetch

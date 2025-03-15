@@ -154,6 +154,14 @@ export default function Settings() {
 
   // Helper function to convert a Unix timestamp to a time object
   const unixTimestampToTimeObject = (timestamp: number): { hour: number, minute: number } => {
+    // Check if it's a decimal hour value (e.g., 9.5 for 9:30)
+    if (timestamp < 100) { // Small numbers are likely hour values, not timestamps
+      const hour = Math.floor(timestamp);
+      const minute = Math.round((timestamp - hour) * 60);
+      return { hour, minute };
+    }
+    
+    // Otherwise treat as a Unix timestamp
     const date = new Date(timestamp * 1000); // Convert seconds to milliseconds
     return {
       hour: date.getHours(),
@@ -195,17 +203,21 @@ export default function Settings() {
       // Convert work hours to hour values for the optimistic update
       const optimisticSettings = { ...newSettings };
       
-      // Ensure work hours are hour values (0-24) for the cache update
+      // Convert time objects to decimal hours for the cache update
       if (optimisticSettings.work_start_hour && 
           typeof optimisticSettings.work_start_hour === 'object' && 
           'hour' in optimisticSettings.work_start_hour) {
-        optimisticSettings.work_start_hour = optimisticSettings.work_start_hour.hour;
+        const hour = optimisticSettings.work_start_hour.hour;
+        const minute = optimisticSettings.work_start_hour.minute || 0;
+        optimisticSettings.work_start_hour = hour + (minute / 60);
       }
       
       if (optimisticSettings.work_end_hour && 
           typeof optimisticSettings.work_end_hour === 'object' && 
           'hour' in optimisticSettings.work_end_hour) {
-        optimisticSettings.work_end_hour = optimisticSettings.work_end_hour.hour;
+        const hour = optimisticSettings.work_end_hour.hour;
+        const minute = optimisticSettings.work_end_hour.minute || 0;
+        optimisticSettings.work_end_hour = hour + (minute / 60);
       }
       
       // Optimistically update to the new value
@@ -317,31 +329,8 @@ export default function Settings() {
                 // Create a copy of the data that we can modify
                 const formattedData: FormattedUserSettings = { ...data };
                 
-                // Extract just the hour values for work hours
-                if (formattedData.work_start_hour && 
-                    typeof formattedData.work_start_hour === 'object' && 
-                    'hour' in formattedData.work_start_hour) {
-                  // Extract just the hour value (0-24)
-                  formattedData.work_start_hour = formattedData.work_start_hour.hour;
-                  console.log('Extracted hour value for work_start_hour:', formattedData.work_start_hour);
-                }
-                
-                if (formattedData.work_end_hour && 
-                    typeof formattedData.work_end_hour === 'object' && 
-                    'hour' in formattedData.work_end_hour) {
-                  // Extract just the hour value (0-24)
-                  formattedData.work_end_hour = formattedData.work_end_hour.hour;
-                  console.log('Extracted hour value for work_end_hour:', formattedData.work_end_hour);
-                }
-                
-                // Ensure hour values are within valid range (0-24)
-                if (typeof formattedData.work_start_hour === 'number') {
-                  formattedData.work_start_hour = Math.min(Math.max(0, formattedData.work_start_hour), 23);
-                }
-                
-                if (typeof formattedData.work_end_hour === 'number') {
-                  formattedData.work_end_hour = Math.min(Math.max(1, formattedData.work_end_hour), 24);
-                }
+                // We'll let the API handle the conversion of time objects to decimal hours
+                // No need to extract just the hour value here
                 
                 // Ensure boolean values are handled correctly for SQLite
                 formattedData.show_notifications = Boolean(formattedData.show_notifications);

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -37,6 +37,12 @@ import { formatDate, getNow } from "@/lib/timezone";
 import { TimeSelect } from "./TimeSelect";
 import { cn } from "@/lib/utils";
 
+interface MeetingsProps {
+  isDialogOpen?: boolean;
+  setIsDialogOpen?: (open: boolean) => void;
+  initialDate?: Date | null;
+}
+
 // Create a schema that matches the form fields
 const meetingFormSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -48,14 +54,14 @@ const meetingFormSchema = z.object({
 
 type MeetingFormValues = z.infer<typeof meetingFormSchema>;
 
-export default function Meetings() {
+export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }: MeetingsProps = {}) {
   const { toast } = useToast();
   const [dialogOpen, setDialogOpen] = useState(false);
   const [startDatePickerOpen, setStartDatePickerOpen] = useState(false);
   const [endDatePickerOpen, setEndDatePickerOpen] = useState(false);
   
   // Create default start and end times
-  const defaultStartTime = getNow();
+  const defaultStartTime = initialDate || getNow();
   const defaultEndTime = new Date(defaultStartTime.getTime() + 60 * 60 * 1000); // 1 hour later
 
   const form = useForm<MeetingFormValues>({
@@ -69,6 +75,33 @@ export default function Meetings() {
     },
   });
 
+  // Reset form when initialDate changes
+  useEffect(() => {
+    if (initialDate) {
+      const endDate = new Date(initialDate.getTime() + 60 * 60 * 1000); // 1 hour later
+      form.reset({
+        ...form.getValues(),
+        startDate: initialDate,
+        endDate: endDate
+      });
+    }
+  }, [initialDate, form]);
+
+  // Sync internal and external dialog state
+  useEffect(() => {
+    if (isDialogOpen !== undefined) {
+      setDialogOpen(isDialogOpen);
+    }
+  }, [isDialogOpen]);
+
+  // Update external dialog state when internal state changes
+  const handleDialogChange = (open: boolean) => {
+    setDialogOpen(open);
+    if (setIsDialogOpen) {
+      setIsDialogOpen(open);
+    }
+  };
+
   const { data: meetings, isLoading, error } = useQuery<Meeting[]>({
     queryKey: [QUERY_KEYS.MEETINGS],
     queryFn: getMeetings,
@@ -80,6 +113,19 @@ export default function Meetings() {
       console.error("Error fetching meetings:", error);
     }
   }, [error]);
+
+  // Add event listener for opening the meeting dialog from Calendar
+  React.useEffect(() => {
+    const handleOpenMeetingDialog = () => {
+      setDialogOpen(true);
+    };
+    
+    document.addEventListener('open-meeting-dialog', handleOpenMeetingDialog);
+    
+    return () => {
+      document.removeEventListener('open-meeting-dialog', handleOpenMeetingDialog);
+    };
+  }, []);
 
   const createMeetingMutation = useMutation({
     mutationFn: async (data: MeetingFormValues) => {
@@ -100,9 +146,11 @@ export default function Meetings() {
         title: data.title,
         description: data.description || null,
         location: data.meetingLink || null,
-        start_time: Math.floor(data.startDate.getTime() / 1000),
-        end_time: Math.floor(data.endDate.getTime() / 1000),
+        start_time: Math.floor(data.startDate!.getTime() / 1000),
+        end_time: Math.floor(data.endDate!.getTime() / 1000),
         attendees: null, // Required by the type
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
       };
       
       console.log("Formatted meeting data:", meeting);
@@ -122,8 +170,8 @@ export default function Meetings() {
         title: data.title,
         description: data.description || null,
         location: data.meetingLink || null,
-        start_time: Math.floor(data.startDate.getTime() / 1000),
-        end_time: Math.floor(data.endDate.getTime() / 1000),
+        start_time: Math.floor(data.startDate!.getTime() / 1000),
+        end_time: Math.floor(data.endDate!.getTime() / 1000),
         attendees: null,
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
@@ -212,7 +260,7 @@ export default function Meetings() {
     <div className="space-y-4">
       <div className="flex justify-between items-center">
         <h2 className="text-2xl font-bold">Meetings</h2>
-        <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+        <Dialog open={dialogOpen} onOpenChange={handleDialogChange}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="h-4 w-4 mr-2" />
