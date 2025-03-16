@@ -189,14 +189,16 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
       return createMeeting(meeting);
     },
     onMutate: async (data) => {
+      console.log("Optimistically creating meeting:", data);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
       
-      // Snapshot the previous value
+      // Get a snapshot of the current meetings
       const previousMeetings = queryClient.getQueryData<Meeting[]>([QUERY_KEYS.MEETINGS]) || [];
       
       // Create an optimistic meeting with a temporary ID
-      const optimisticMeeting: Meeting = {
+      const optimisticMeeting = {
         id: Date.now(), // Temporary ID
         user_id: 1, // Temporary user ID
         title: data.title,
@@ -207,31 +209,41 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
         attendees: null,
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
-      } as Meeting;
+      };
       
       console.log("Adding optimistic meeting:", optimisticMeeting);
       
-      // Optimistically update the meetings list
-      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], [...previousMeetings, optimisticMeeting]);
+      // Create a proper deep copy to avoid reference issues
+      const updatedMeetings = JSON.parse(JSON.stringify(previousMeetings));
+      updatedMeetings.push(optimisticMeeting);
       
-      // Return the context
+      console.log(`Total meetings after optimistic update: ${updatedMeetings.length}`);
+      
+      // Update the cache with the new array that includes all previous meetings plus the new one
+      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
+      
       return { previousMeetings };
     },
     onError: (error: Error, _variables, context) => {
-      // If the mutation fails, use the context to roll back
+      console.error("Error creating meeting:", error);
+      
+      // Rollback to previous state if available
       if (context?.previousMeetings) {
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], context.previousMeetings);
       }
       
-      console.error("Error creating meeting:", error);
       toast({
         variant: "destructive",
         title: "Failed to create meeting",
         description: error.message || "An error occurred while creating the meeting.",
       });
     },
-    onSuccess: () => {
+    onSuccess: (newMeeting) => {
+      console.log("Meeting created successfully:", newMeeting);
+      
+      // Simply fetch the meetings again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+      
       form.reset();
       setDialogOpen(false);
       toast({
@@ -244,35 +256,46 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
   const deleteMeetingMutation = useMutation({
     mutationFn: deleteMeeting,
     onMutate: async (id) => {
+      console.log("Deleting meeting:", id);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
       
       // Snapshot the previous value
       const previousMeetings = queryClient.getQueryData<Meeting[]>([QUERY_KEYS.MEETINGS]) || [];
       
-      // Optimistically remove the meeting from the list
-      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], 
-        previousMeetings.filter(meeting => meeting.id !== id)
-      );
+      // Create a proper deep copy to avoid reference issues
+      const updatedMeetings = JSON.parse(JSON.stringify(previousMeetings))
+        .filter((meeting: Meeting) => meeting.id !== id);
+      
+      console.log(`Optimistically removed meeting. Remaining meetings: ${updatedMeetings.length}`);
+      
+      // Update the cache with the filtered list
+      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
       
       // Return the context
       return { previousMeetings };
     },
     onError: (error: Error, _variables, context) => {
+      console.error("Error deleting meeting:", error);
+      
       // If the mutation fails, use the context to roll back
       if (context?.previousMeetings) {
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], context.previousMeetings);
       }
       
-      console.error("Error deleting meeting:", error);
       toast({
         variant: "destructive",
         title: "Failed to delete meeting",
         description: error.message || "An error occurred while deleting the meeting.",
       });
     },
-    onSuccess: () => {
+    onSuccess: (_, deletedMeetingId) => {
+      console.log("Meeting deleted successfully:", deletedMeetingId);
+      
+      // Simply fetch the meetings again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+      
       toast({
         title: "Meeting deleted",
         description: "Your meeting has been deleted successfully.",

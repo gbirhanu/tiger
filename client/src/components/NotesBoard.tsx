@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { DragDropContext, Droppable, Draggable } from "@hello-pangea/dnd";
+import { DragDropContext, Droppable, Draggable, DropResult } from "@hello-pangea/dnd";
 import { type Note } from "@shared/schema";
 import { Card, CardContent, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -85,10 +85,12 @@ export default function NotesBoard() {
       return createNoteApi(note);
     },
     onMutate: async (content) => {
+      console.log("Creating note with content:", content);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
       
-      // Snapshot the previous value
+      // Get a snapshot of the current notes
       const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
       
       // Find the highest position value
@@ -96,7 +98,7 @@ export default function NotesBoard() {
         ? Math.max(...previousNotes.map(note => note.position))
         : 0;
       
-      // Optimistically add the new note
+      // Create an optimistic note with a temporary ID
       const optimisticNote = {
         id: Date.now(), // Temporary ID
         user_id: 1, // Temporary user ID
@@ -108,24 +110,37 @@ export default function NotesBoard() {
         updated_at: Math.floor(Date.now() / 1000)
       };
       
-      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], [...previousNotes, optimisticNote]);
+      // Create a proper deep copy to avoid reference issues
+      const updatedNotes = JSON.parse(JSON.stringify(previousNotes));
+      updatedNotes.push(optimisticNote);
       
-      // Return the snapshot
+      console.log(`Adding optimistic note. Total notes: ${updatedNotes.length}`);
+      
+      // Update the cache with the new array that includes all previous notes plus the new one
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
+      
       return { previousNotes };
     },
     onError: (error: Error, _variables, context) => {
-      // If the mutation fails, use the context returned from onMutate to roll back
+      console.error("Error creating note:", error);
+      
+      // Rollback to previous state if available
       if (context?.previousNotes) {
         queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
       }
+      
       toast({
         variant: "destructive",
         title: "Error",
         description: `Failed to create note: ${error.message}`,
       });
     },
-    onSuccess: () => {
+    onSuccess: (newNote) => {
+      console.log("Note created successfully:", newNote);
+      
+      // Simply fetch the notes again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
       setNewNoteContent("");
       setDialogOpen(false);
       toast({
@@ -139,23 +154,42 @@ export default function NotesBoard() {
     mutationFn: ({ id, ...data }: Partial<Note> & { id: number }) => 
       updateNoteApi(id, data),
     onMutate: async ({ id, ...updatedData }) => {
+      console.log("Updating note:", id, updatedData);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
       
       // Snapshot the previous value
       const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
       
-      // Optimistically update the note
-      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], 
-        previousNotes.map(note => 
-          note.id === id ? { ...note, ...updatedData } : note
-        )
-      );
+      // Create a proper deep copy to avoid reference issues
+      const updatedNotes = JSON.parse(JSON.stringify(previousNotes));
+      
+      // Find the note to update
+      const noteIndex = updatedNotes.findIndex((note: Note) => note.id === id);
+      
+      if (noteIndex !== -1) {
+        // Create updated note by merging objects
+        updatedNotes[noteIndex] = {
+          ...updatedNotes[noteIndex],  // Keep ALL existing fields
+          ...updatedData,              // Apply updates
+          updated_at: Math.floor(Date.now() / 1000) // Update the timestamp
+        };
+        
+        console.log(`Optimistically updated note at index ${noteIndex}`);
+        
+        // Update the cache with the new array
+        queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
+      } else {
+        console.warn(`Note with id ${id} not found in cache`);
+      }
       
       // Return the snapshot
       return { previousNotes };
     },
     onError: (error: Error, _variables, context) => {
+      console.error("Error updating note:", error);
+      
       // If the mutation fails, use the context returned from onMutate to roll back
       if (context?.previousNotes) {
         queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
@@ -166,8 +200,12 @@ export default function NotesBoard() {
         description: `Failed to update note: ${error.message}`,
       });
     },
-    onSuccess: () => {
+    onSuccess: (updatedNote) => {
+      console.log("Note updated successfully:", updatedNote);
+      
+      // Simply fetch the notes again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
       toast({
         title: "Note updated",
         description: "Your note has been updated successfully.",
@@ -178,21 +216,29 @@ export default function NotesBoard() {
   const deleteNoteMutation = useMutation({
     mutationFn: deleteNoteApi,
     onMutate: async (noteId) => {
+      console.log("Deleting note:", noteId);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
       
       // Snapshot the previous value
       const previousNotes = queryClient.getQueryData<Note[]>([QUERY_KEYS.NOTES]) || [];
       
-      // Optimistically remove the note
-      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], 
-        previousNotes.filter(note => note.id !== noteId)
-      );
+      // Create a proper deep copy to avoid reference issues
+      const updatedNotes = JSON.parse(JSON.stringify(previousNotes))
+        .filter((note: Note) => note.id !== noteId);
+      
+      console.log(`Optimistically removed note. Remaining notes: ${updatedNotes.length}`);
+      
+      // Update the cache with the filtered array
+      queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
       
       // Return the snapshot
       return { previousNotes };
     },
     onError: (error: Error, _variables, context) => {
+      console.error("Error deleting note:", error);
+      
       // If the mutation fails, use the context returned from onMutate to roll back
       if (context?.previousNotes) {
         queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
@@ -203,8 +249,12 @@ export default function NotesBoard() {
         description: `Failed to delete note: ${error.message}`,
       });
     },
-    onSuccess: () => {
+    onSuccess: (_, deletedNoteId) => {
+      console.log("Note deleted successfully:", deletedNoteId);
+      
+      // Simply fetch the notes again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+      
       toast({
         title: "Note deleted",
         description: "Your note has been deleted successfully.",
@@ -216,17 +266,21 @@ export default function NotesBoard() {
     setIsDragging(true);
   };
 
-  const handleDragEnd = (result: any) => {
+  const handleDragEnd = (result: DropResult) => {
     setIsDragging(false);
     
     if (!result.destination || !sortedNotes.length) return;
-
-    // Don't do anything if dropped in the same position
-    if (result.destination.index === result.source.index) return;
-
+    
     try {
-      // Create a new array with the updated order
-      const reorderedNotes = Array.from(sortedNotes);
+      // If position didn't change
+      if (result.destination.index === result.source.index) {
+        return;
+      }
+
+      // Create a copy of the current notes
+      const reorderedNotes = [...sortedNotes];
+      
+      // Remove the dragged item and insert it at the new position
       const [movedNote] = reorderedNotes.splice(result.source.index, 1);
       reorderedNotes.splice(result.destination.index, 0, movedNote);
 
@@ -251,33 +305,21 @@ export default function NotesBoard() {
         originalPositions[note.id] !== note.position
       );
 
-      // Batch update all changed notes
-      // Use Promise.all to ensure all updates are processed together
-      Promise.all(
-        changedNotes.map(note => 
-          updateNoteApi(note.id, { position: note.position })
-        )
-      )
-        .then(() => {
-          // After all updates are complete, refresh the data
-          queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
-          
-          // Only show toast if multiple notes were changed
-          if (changedNotes.length > 1) {
-            toast({
-              title: "Notes reordered",
-              description: "Your notes have been reordered successfully.",
-            });
-          }
-        })
-        .catch(error => {
-          console.error("Error updating note positions:", error);
-          toast({
-            variant: "destructive",
-            title: "Error",
-            description: "Failed to update note positions. Please try again."
-          });
+      // Use updateNoteMutation for each changed note instead of direct API calls
+      changedNotes.forEach(note => {
+        updateNoteMutation.mutate({ 
+          id: note.id, 
+          position: note.position 
         });
+      });
+      
+      // Only show toast if multiple notes were changed
+      if (changedNotes.length > 1) {
+        toast({
+          title: "Notes reordered",
+          description: "Your notes have been reordered successfully.",
+        });
+      }
     } catch (error) {
       console.error("Error during drag and drop:", error);
       toast({

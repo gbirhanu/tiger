@@ -198,25 +198,7 @@ export default function CalendarView() {
           return updatedMeeting;
         } catch (error) {
           console.error("Error updating meeting via API:", error);
-          
-          // Fallback to local update if API fails
-          console.log("Falling back to local update");
-          
-          const updatedMeeting = {
-            ...meeting,
-            id: selectedMeetingId,
-            user_id: meetings.find(m => m.id === selectedMeetingId)?.user_id || 1,
-          };
-          
-          // Update the meeting in the local state
-          const updatedMeetings = meetings.map(m => 
-            m.id === selectedMeetingId ? updatedMeeting : m
-          );
-          
-          // Update the query cache
-          queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
-          
-          return updatedMeeting;
+          throw error;
         }
       }
       
@@ -225,68 +207,72 @@ export default function CalendarView() {
       return createMeeting(meeting);
     },
     onMutate: async (data) => {
-      console.log("onMutate called with data:", data);
+      console.log("Optimistically updating meetings cache");
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
       
-      // Snapshot the previous value
+      // Get a snapshot of the current meetings
       const previousMeetings = queryClient.getQueryData<Meeting[]>([QUERY_KEYS.MEETINGS]) || [];
-      console.log("Previous meetings:", previousMeetings);
       
+      // Create a proper deep copy to avoid reference issues
+      const previousMeetingsCopy = JSON.parse(JSON.stringify(previousMeetings));
+      
+      // If we're editing an existing meeting
       if (isEditingMeeting && selectedMeetingId) {
-        console.log("Optimistically updating meeting with ID:", selectedMeetingId);
-        
-        // If editing, we'll handle the optimistic update here
+        // Create an optimistic updated meeting
         const updatedMeeting = {
           id: selectedMeetingId,
-          user_id: meetings.find(m => m.id === selectedMeetingId)?.user_id || 1,
           title: data.title,
           description: data.description || null,
           location: data.meetingLink || null,
           start_time: Math.floor(data.startDate!.getTime() / 1000),
           end_time: Math.floor(data.endDate!.getTime() / 1000),
           attendees: null,
-          created_at: meetings.find(m => m.id === selectedMeetingId)?.created_at || Math.floor(Date.now() / 1000),
+          created_at: Math.floor(Date.now() / 1000),
           updated_at: Math.floor(Date.now() / 1000)
-        } as Meeting;
+        };
         
-        console.log("Updated meeting object:", updatedMeeting);
+        // Create a deep copy of the meetings array
+        const updatedMeetings = JSON.parse(JSON.stringify(previousMeetings));
         
-        // Update the meetings list optimistically
-        const updatedMeetings = previousMeetings.map(m => 
-          m.id === selectedMeetingId ? updatedMeeting : m
-        );
+        // Find the meeting to update
+        const meetingIndex = updatedMeetings.findIndex((meeting: Meeting) => meeting.id === selectedMeetingId);
         
-        console.log("Updated meetings list:", updatedMeetings);
+        if (meetingIndex !== -1) {
+          // Update the meeting in the array
+          updatedMeetings[meetingIndex] = {
+            ...updatedMeetings[meetingIndex],
+            ...updatedMeeting
+          };
+          
+          // Update the cache with the new array
+          queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
+        }
+      } else {
+        // Create an optimistic new meeting
+        const optimisticMeeting = {
+          id: Date.now(), // Temporary ID
+          user_id: 1, // Temporary user ID
+          title: data.title,
+          description: data.description || null,
+          location: data.meetingLink || null,
+          start_time: Math.floor(data.startDate!.getTime() / 1000),
+          end_time: Math.floor(data.endDate!.getTime() / 1000),
+          attendees: null,
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000)
+        };
         
+        // Create a deep copy of the meetings array and add the new meeting
+        const updatedMeetings = JSON.parse(JSON.stringify(previousMeetings));
+        updatedMeetings.push(optimisticMeeting);
+        
+        // Update the cache with the new array
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
-        
-        return { previousMeetings };
       }
       
-      // Create an optimistic meeting with a temporary ID
-      console.log("Creating optimistic new meeting");
-      const optimisticMeeting: Meeting = {
-        id: Date.now(), // Temporary ID
-        user_id: 1, // Temporary user ID
-        title: data.title,
-        description: data.description || null,
-        location: data.meetingLink || null,
-        start_time: Math.floor(data.startDate!.getTime() / 1000),
-        end_time: Math.floor(data.endDate!.getTime() / 1000),
-        attendees: null,
-        created_at: Math.floor(Date.now() / 1000),
-        updated_at: Math.floor(Date.now() / 1000)
-      } as Meeting;
-      
-      console.log("Optimistic new meeting:", optimisticMeeting);
-      
-      // Optimistically update the meetings list
-      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], [...previousMeetings, optimisticMeeting]);
-      
-      // Return the context
-      return { previousMeetings };
+      return { previousMeetings: previousMeetingsCopy };
     },
     onError: (error: Error, _variables, context) => {
       console.error("Meeting mutation error:", error);
@@ -343,24 +329,34 @@ export default function CalendarView() {
       }
     },
     onMutate: async (meetingId) => {
+      console.log("Optimistically deleting meeting from cache:", meetingId);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
       
-      // Snapshot the previous value
+      // Get a snapshot of the current meetings
       const previousMeetings = queryClient.getQueryData<Meeting[]>([QUERY_KEYS.MEETINGS]) || [];
       
-      // Optimistically remove the meeting from the list
-      const updatedMeetings = previousMeetings.filter(meeting => meeting.id !== meetingId);
+      // Create a proper deep copy to avoid reference issues
+      const previousMeetingsCopy = JSON.parse(JSON.stringify(previousMeetings));
+      
+      // Create a deep copy of the meetings array and filter out the deleted meeting
+      const updatedMeetings = JSON.parse(JSON.stringify(previousMeetings))
+        .filter((meeting: Meeting) => meeting.id !== meetingId);
+      
+      console.log(`Optimistically removed meeting. Remaining meetings: ${updatedMeetings.length}`);
+      
+      // Update the cache with the filtered array
       queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
       
-      // Return the context
-      return { previousMeetings };
+      return { previousMeetings: previousMeetingsCopy };
     },
     onError: (error: Error, _variables, context) => {
       console.error("Delete meeting error:", error);
       
       // If the mutation fails, use the context to roll back
       if (context?.previousMeetings) {
+        console.log("Rolling back to previous meetings state");
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], context.previousMeetings);
       }
       
@@ -430,6 +426,7 @@ export default function CalendarView() {
   // Create task mutation
   const createTask = useMutation({
     mutationFn: async (taskData: NewTaskForm) => {
+      console.log("Creating task with data:", taskData);
       const res = await apiRequest('POST', '/api/tasks', {
         title: taskData.title,
         description: taskData.description || null,
@@ -440,8 +437,48 @@ export default function CalendarView() {
       });
       return res.json();
     },
-    onSuccess: () => {
+    onMutate: async (taskData) => {
+      console.log("Optimistically creating task in cache");
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['/api/tasks'] });
+      
+      // Get a snapshot of the current tasks
+      const previousTasks = queryClient.getQueryData<Task[]>(['/api/tasks']) || [];
+      
+      // Create a proper deep copy to avoid reference issues
+      const previousTasksCopy = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Create an optimistic task with a temporary ID
+      const optimisticTask = {
+        id: Date.now(), // Temporary ID
+        title: taskData.title,
+        description: taskData.description || null,
+        priority: taskData.priority,
+        completed: false,
+        due_date: taskData.due_date ? Math.floor(taskData.due_date.getTime() / 1000) : null,
+        all_day: taskData.all_day,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      };
+      
+      // Create a deep copy of the tasks array and add the new task
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      updatedTasks.push(optimisticTask);
+      
+      console.log(`Optimistically added task. Total tasks: ${updatedTasks.length}`);
+      
+      // Update the cache with the new array
+      queryClient.setQueryData<Task[]>(['/api/tasks'], updatedTasks);
+      
+      return { previousTasks: previousTasksCopy };
+    },
+    onSuccess: (newTask) => {
+      console.log("Task created successfully:", newTask);
+      
+      // Invalidate queries to refresh data from server
       queryClient.invalidateQueries({ queryKey: ['/api/tasks'] });
+      
       setShowNewTaskDialog(false);
       setNewTask({
         title: '',
@@ -451,16 +488,24 @@ export default function CalendarView() {
         all_day: true,
         eventType: EventType.TASK,
       });
+      
       toast({
         title: 'Task created',
         description: 'Your task has been created successfully.',
       });
     },
-    onError: (error: Error) => {
-      console.error('Calendar error:', error);
+    onError: (error: Error, _variables, context) => {
+      console.error('Task creation error:', error);
+      
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        console.log("Rolling back to previous tasks state");
+        queryClient.setQueryData<Task[]>(['/api/tasks'], context.previousTasks);
+      }
+      
       toast({
         variant: 'destructive',
-        title: 'Failed to complete action',
+        title: 'Failed to create task',
         description: error.message || 'An error occurred. Please try again.',
         className: 'dark:bg-red-950 dark:text-white dark:border-red-800',
       });
@@ -470,23 +515,72 @@ export default function CalendarView() {
   // Update task mutation
   const updateTask = useMutation({
     mutationFn: async (taskData: Partial<Task> & { id: number }) => {
+      console.log("Updating task with data:", taskData);
       const res = await apiRequest('PATCH', `/api/tasks/${taskData.id}`, taskData);
       return res.json();
     },
-    onSuccess: () => {
+    onMutate: async (taskData) => {
+      console.log("Optimistically updating task in cache:", taskData.id);
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['/api/tasks'] });
+      
+      // Get a snapshot of the current tasks
+      const previousTasks = queryClient.getQueryData<Task[]>(['/api/tasks']) || [];
+      
+      // Create a proper deep copy to avoid reference issues
+      const previousTasksCopy = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Create a deep copy of the tasks array
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Find the task to update
+      const taskIndex = updatedTasks.findIndex((task: Task) => task.id === taskData.id);
+      
+      if (taskIndex !== -1) {
+        // Create updated task by merging objects
+        updatedTasks[taskIndex] = {
+          ...updatedTasks[taskIndex],  // Keep ALL existing fields
+          ...taskData,                 // Apply updates
+          updated_at: Math.floor(Date.now() / 1000) // Update the timestamp
+        };
+        
+        console.log(`Optimistically updated task at index ${taskIndex}`);
+        
+        // Update the cache with the new array
+        queryClient.setQueryData<Task[]>(['/api/tasks'], updatedTasks);
+      } else {
+        console.warn(`Task with id ${taskData.id} not found in cache`);
+      }
+      
+      return { previousTasks: previousTasksCopy };
+    },
+    onSuccess: (updatedTask) => {
+      console.log("Task updated successfully:", updatedTask);
+      
+      // Invalidate queries to refresh data from server
       queryClient.invalidateQueries({ queryKey: ['/api/tasks'] });
+      
       setShowTaskDialog(false);
       setIsEditing(false);
+      
       toast({
         title: 'Task updated',
         description: 'Your task has been updated successfully.',
       });
     },
-    onError: (error: Error) => {
-      console.error('Calendar error:', error);
+    onError: (error: Error, _variables, context) => {
+      console.error('Task update error:', error);
+      
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        console.log("Rolling back to previous tasks state");
+        queryClient.setQueryData<Task[]>(['/api/tasks'], context.previousTasks);
+      }
+      
       toast({
         variant: 'destructive',
-        title: 'Failed to complete action',
+        title: 'Failed to update task',
         description: error.message || 'An error occurred. Please try again.',
         className: 'dark:bg-red-950 dark:text-white dark:border-red-800',
       });
@@ -496,21 +590,58 @@ export default function CalendarView() {
   // Delete task mutation
   const deleteTask = useMutation({
     mutationFn: async (taskId: number) => {
+      console.log("Deleting task with ID:", taskId);
       await apiRequest('DELETE', `/api/tasks/${taskId}`);
+      return { success: true, id: taskId };
     },
-    onSuccess: () => {
+    onMutate: async (taskId) => {
+      console.log("Optimistically deleting task from cache:", taskId);
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ['/api/tasks'] });
+      
+      // Get a snapshot of the current tasks
+      const previousTasks = queryClient.getQueryData<Task[]>(['/api/tasks']) || [];
+      
+      // Create a proper deep copy to avoid reference issues
+      const previousTasksCopy = JSON.parse(JSON.stringify(previousTasks));
+      
+      // Create a deep copy of the tasks array and filter out the deleted task
+      const updatedTasks = JSON.parse(JSON.stringify(previousTasks))
+        .filter((task: Task) => task.id !== taskId);
+      
+      console.log(`Optimistically removed task. Remaining tasks: ${updatedTasks.length}`);
+      
+      // Update the cache with the filtered array
+      queryClient.setQueryData<Task[]>(['/api/tasks'], updatedTasks);
+      
+      return { previousTasks: previousTasksCopy };
+    },
+    onSuccess: (result) => {
+      console.log("Task deleted successfully:", result);
+      
+      // Invalidate queries to refresh data from server
       queryClient.invalidateQueries({ queryKey: ['/api/tasks'] });
+      
       setShowTaskDialog(false);
+      
       toast({
         title: 'Task deleted',
         description: 'Your task has been deleted successfully.',
       });
     },
-    onError: (error: Error) => {
-      console.error('Calendar error:', error);
+    onError: (error: Error, _variables, context) => {
+      console.error('Task deletion error:', error);
+      
+      // If the mutation fails, use the context to roll back
+      if (context?.previousTasks) {
+        console.log("Rolling back to previous tasks state");
+        queryClient.setQueryData<Task[]>(['/api/tasks'], context.previousTasks);
+      }
+      
       toast({
         variant: 'destructive',
-        title: 'Failed to complete action',
+        title: 'Failed to delete task',
         description: error.message || 'An error occurred. Please try again.',
         className: 'dark:bg-red-950 dark:text-white dark:border-red-800',
       });

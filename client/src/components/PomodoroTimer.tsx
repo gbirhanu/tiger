@@ -226,6 +226,48 @@ export default function PomodoroTimer() {
       console.log("Calling updatePomodoroSettings with:", cleanData);
       return updatePomodoroSettings(cleanData);
     },
+    onMutate: async (data) => {
+      console.log("Optimistically updating pomodoro settings in cache");
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ["settings", "pomodoro"] });
+      
+      // Snapshot the previous value
+      const previousSettings = queryClient.getQueryData(["settings", "pomodoro"]);
+      
+      // Create a proper deep copy to avoid reference issues
+      const previousSettingsCopy = previousSettings ? JSON.parse(JSON.stringify(previousSettings)) : null;
+      
+      // Create optimistic update with validated numeric values
+      const optimisticSettings = {
+        work_duration: Number(data.work_duration),
+        break_duration: Number(data.break_duration),
+        long_break_duration: Number(data.long_break_duration),
+        sessions_before_long_break: Number(data.sessions_before_long_break)
+      };
+      
+      console.log("Optimistic settings:", optimisticSettings);
+      
+      // Update the cache with the optimistic data
+      queryClient.setQueryData(["settings", "pomodoro"], optimisticSettings);
+      
+      return { previousSettings: previousSettingsCopy };
+    },
+    onError: (error: any, _variables, context) => {
+      console.error("Failed to update pomodoro settings:", error);
+      
+      // Rollback to previous state if available
+      if (context?.previousSettings) {
+        console.log("Rolling back to previous settings state");
+        queryClient.setQueryData(["settings", "pomodoro"], context.previousSettings);
+      }
+      
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: error.message || "An error occurred while updating your settings. Please try again.",
+      });
+    },
     onSuccess: (data) => {
       console.log("Settings update successful:", data);
       
@@ -240,19 +282,13 @@ export default function PomodoroTimer() {
         }
       }
       
+      // Simply fetch the settings again from the server
       queryClient.invalidateQueries({ queryKey: ["settings", "pomodoro"] });
+      
       setIsSettingsDialogOpen(false);
       toast({
         title: "Settings Updated",
         description: "Your Pomodoro timer settings have been updated successfully.",
-      });
-    },
-    onError: (error: any) => {
-      console.error("Failed to update pomodoro settings:", error);
-      toast({
-        variant: "destructive",
-        title: "Update Failed",
-        description: error.message || "An error occurred while updating your settings. Please try again.",
       });
     },
   });
@@ -483,7 +519,7 @@ export default function PomodoroTimer() {
                 <div 
                   key={i} 
                   className={`w-3 h-3 rounded-full transition-all duration-300 ${
-                    i < sessionsCompleted 
+                    i < sessionsCompleted % (settings?.sessions_before_long_break || 4) 
                       ? `bg-opacity-100 ${currentTheme.progress}` 
                       : 'bg-gray-300 dark:bg-gray-700'
                   }`}

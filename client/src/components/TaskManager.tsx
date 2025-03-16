@@ -46,7 +46,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
 import { useNotifications } from "@/hooks/use-notifications";
 import { cn } from "@/lib/utils";
-import { queryClient, QUERY_KEYS, deepCopy } from "@/lib/queryClient";
+import { queryClient, QUERY_KEYS, deepCopy, refreshTasks } from "@/lib/queryClient";
 import {
   getTasks,
   createTask,
@@ -129,6 +129,7 @@ interface TaskWithSubtasks extends Task {
   has_subtasks?: boolean;
   completed_subtasks?: number;
   total_subtasks?: number;
+  position?: number; // Add position field
 }
 
 // TaskProgress component
@@ -453,7 +454,25 @@ export default function TaskManager() {
       }
     }
   }, [tasks, checkTaskReminders]);
-
+  
+  // FIXED: Add a useEffect to force re-render when tasks change
+  useEffect(() => {
+    if (tasks && Array.isArray(tasks)) {
+      console.log("Tasks changed, forcing re-render");
+      // This will trigger a re-render when tasks change
+      setForceUpdate(prev => prev + 1);
+    }
+  }, [tasks]);
+  
+  // FIXED: Add a useEffect to handle forceUpdate changes
+  useEffect(() => {
+    if (forceUpdate > 0) {
+      console.log("Force update triggered:", forceUpdate);
+      // Force a refresh of the tasks data
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+    }
+  }, [forceUpdate]);
+  
   useEffect(() => {
     if (tasksError) {
       console.error("Error fetching tasks:", tasksError);
@@ -490,52 +509,19 @@ export default function TaskManager() {
   const createTaskMutation = useMutation({
     mutationFn: createTask,
     onMutate: async (newTask) => {
-      // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
-      
-      // Snapshot the previous value
-      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
-      
-      // Convert due_date to timestamp if it exists
-      let dueTimestamp: number | null = null;
-      if (newTask.due_date) {
-        // Check if due_date is already a number
-        if (typeof newTask.due_date === 'number') {
-          dueTimestamp = newTask.due_date;
-        } else {
-          // Only call ensureUnixTimestamp if it's a Date object
-          dueTimestamp = ensureUnixTimestamp(newTask.due_date as Date);
-        }
-      }
-      
-      // Create an optimistic task with a temporary ID
-      const optimisticTask = {
-        id: -Date.now(), // Temporary negative ID
-        user_id: -1, // Will be set by the server
-        title: newTask.title,
-        description: newTask.description || null,
-        priority: newTask.priority as "low" | "medium" | "high",
-        completed: false,
-        due_date: dueTimestamp,
-        created_at: Math.floor(Date.now() / 1000),
-        updated_at: Math.floor(Date.now() / 1000),
-        subtasks: [] as Subtask[],
-        has_subtasks: false
-      } as TaskWithSubtasks;
-      
-      // Optimistically update the tasks list - create a deep copy to avoid reference issues
-      const updatedTasks = deepCopy(previousTasks);
-      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], [...updatedTasks, optimisticTask]);
-      
-      // Return the context
+      // Don't do any optimistic updates - they're causing issues
+      // Just return the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData([QUERY_KEYS.TASKS]);
       return { previousTasks };
     },
     onError: (error, _variables, context) => {
-      // If the mutation fails, use the context to roll back
+      console.error("Error creating task:", error);
+      
+      // Rollback to previous state if available
       if (context?.previousTasks) {
-        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+        queryClient.setQueryData([QUERY_KEYS.TASKS], context.previousTasks);
       }
+      
       toast({
         variant: "destructive",
         title: "Error creating task",
@@ -545,29 +531,14 @@ export default function TaskManager() {
     onSuccess: (newTask) => {
       console.log("Task created successfully:", newTask);
       
-      // Get the current tasks from the cache
-      const tasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
-      
-      // Filter out any optimistic tasks with negative IDs
-      const filteredTasks = tasks.filter(task => task.id > 0);
-      
-      // Add the new task from the server
-      const updatedTasks = [...filteredTasks, { ...newTask, subtasks: [] }];
-      
-      // Update the cache with the server data
-      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
-      
-      // Invalidate queries to ensure consistency
+      // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
-      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
-      
-      // Force a re-render
-      setForceUpdate((prev: number) => prev + 1);
       
       toast({
         title: "Task created",
         description: "Your task has been created successfully.",
       });
+      
       form.reset();
     },
   });
@@ -575,74 +546,17 @@ export default function TaskManager() {
   const updateTaskMutation = useMutation({
     mutationFn: updateTask,
     onMutate: async (updatedTask) => {
-      console.log("Optimistically updating task:", updatedTask);
-      
-      // CRITICAL FIX: Cancel ALL related queries to prevent race conditions
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
-      
-      // Snapshot the previous tasks for potential rollback
-      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
-      
-      // Create a deep copy to avoid reference issues - use the deepCopy helper
-      const updatedTasks = deepCopy(previousTasks);
-      
-      // Find the task to update
-      const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === updatedTask.id);
-      
-      if (taskIndex !== -1) {
-        const oldCompleted = updatedTasks[taskIndex].completed;
-        const newCompleted = updatedTask.completed !== undefined ? updatedTask.completed === true : oldCompleted;
-        
-        // Update the task with the new data
-        updatedTasks[taskIndex] = {
-          ...updatedTasks[taskIndex],
-          ...updatedTask,
-          // Ensure completed is properly set as a boolean
-          completed: newCompleted,
-          // Add updated_at timestamp for optimistic update
-          updated_at: Math.floor(Date.now() / 1000)
-        };
-        
-        console.log(`Updated task ${updatedTask.id} completed status: ${oldCompleted} -> ${newCompleted}`);
-        
-        // If the task is being completed or uncompleted, reset the pagination to page 1
-        // This ensures the task appears at the top of the appropriate section
-        if (updatedTask.completed !== undefined && oldCompleted !== newCompleted) {
-          console.log(`Task completion status changed. Resetting pagination.`);
-          if (newCompleted) {
-            // Task is being completed, reset completed tasks pagination
-            setCompletedPage(1);
-          } else {
-            // Task is being uncompleted
-            if (isOverdue(updatedTasks[taskIndex])) {
-              // Task is overdue, reset overdue tasks pagination
-              setOverduePage(1);
-            } else {
-              // Task is active, reset active tasks pagination
-              setActivePage(1);
-            }
-          }
-        }
-        
-        // CRITICAL FIX: Immediately update the UI with optimistic update
-        console.log("Immediately updating UI with optimistic task update");
-        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
-        
-        // ADDED: Force a re-render by setting a state variable
-        setForceUpdate((prev: number) => prev + 1);
-      }
-      
-      // Return the context for potential rollback
+      // Don't do any optimistic updates - they're causing issues
+      // Just return the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData([QUERY_KEYS.TASKS]);
       return { previousTasks };
     },
-    onError: (error, variables, context) => {
+    onError: (error, _variables, context) => {
       console.error("Error updating task:", error);
       
       // Roll back to the previous state if there was an error
       if (context?.previousTasks) {
-        console.log("Rolling back to previous state due to error");
-        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+        queryClient.setQueryData([QUERY_KEYS.TASKS], context.previousTasks);
       }
       
       toast({
@@ -651,38 +565,11 @@ export default function TaskManager() {
         description: error instanceof Error ? error.message : "An unknown error occurred",
       });
     },
-    onSuccess: (data, variables) => {
-      console.log("Task updated successfully:", variables);
+    onSuccess: (updatedTask) => {
+      console.log("Task updated successfully:", updatedTask);
       
-      // Get the current tasks from the cache
-      const tasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
-      const taskIndex = tasks.findIndex(t => t.id === variables.id);
-      
-      if (taskIndex !== -1) {
-        // Create a deep copy to avoid reference issues
-        const updatedTasks = deepCopy(tasks);
-        
-        // Update the task with the server response data
-        updatedTasks[taskIndex] = {
-          ...updatedTasks[taskIndex],
-          // Merge server data with our local data
-          ...data,
-          // Ensure priority and recurrence_pattern are the correct types
-          priority: data.priority as "low" | "medium" | "high",
-          recurrence_pattern: data.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly" | null
-        };
-        
-        // Update with server data
-        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
-        
-        // ADDED: Force a re-render by setting a state variable
-        setForceUpdate((prev: number) => prev + 1);
-      }
-      
-      // ADDED: Invalidate queries to ensure consistency with server
-      // This is important for related data that might have changed
+      // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
-      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       
       toast({
         title: "Task updated",
@@ -694,37 +581,10 @@ export default function TaskManager() {
   const deleteTaskMutation = useMutation({
     mutationFn: deleteTask,
     onMutate: async (taskId) => {
-      console.log("Optimistically deleting task:", taskId);
-      
-      // Cancel any outgoing refetches to prevent them from overwriting our optimistic update
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
-      
-      // Snapshot the previous tasks for potential rollback
-      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
-      const previousTasksWithSubtasks = queryClient.getQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS]) || [];
-      
-      // Create a deep copy to avoid reference issues
-      const updatedTasks = deepCopy(previousTasks);
-      
-      // Filter out the task to be deleted and any child tasks
-      const filteredTasks = updatedTasks.filter((task: TaskWithSubtasks) => {
-        return task.id !== taskId && task.parent_task_id !== taskId;
-      });
-      
-      // Immediately update the UI with the filtered tasks
-      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], filteredTasks);
-      
-      // Also update tasks-with-subtasks if the task had subtasks
-      const tasksWithSubtasks = deepCopy(previousTasksWithSubtasks);
-      if (tasksWithSubtasks.includes(taskId)) {
-        queryClient.setQueryData<number[]>(
-          [QUERY_KEYS.TASKS_WITH_SUBTASKS],
-          tasksWithSubtasks.filter(id => id !== taskId)
-        );
-      }
-      
-      // Return the context for potential rollback
+      // Don't do any optimistic updates - they're causing issues
+      // Just return the previous tasks for potential rollback
+      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]);
+      const previousTasksWithSubtasks = queryClient.getQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS]);
       return { previousTasks, previousTasksWithSubtasks };
     },
     onError: (error, taskId, context) => {
@@ -748,13 +608,9 @@ export default function TaskManager() {
     onSuccess: (_, taskId) => {
       console.log("Task deleted successfully:", taskId);
       
-      // We've already updated the cache optimistically, but we'll still invalidate
-      // to ensure consistency with the server for any related data
+      // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
-      
-      // Force a re-render
-      setForceUpdate((prev: number) => prev + 1);
       
       toast({
         title: "Task deleted",
@@ -767,9 +623,19 @@ export default function TaskManager() {
     try {
       console.log('Form submitted with data:', data);
       
+      // Validate required fields
+      if (!data.title || data.title.trim() === "") {
+        toast({
+          variant: "destructive",
+          title: "Missing title",
+          description: "Please provide a title for the task.",
+        });
+        return;
+      }
+      
       // Create task with all required fields
       const taskData = {
-        title: data.title || "",
+        title: data.title.trim(),
         description: data.description || null,
         priority: data.priority || "medium",
         completed: false,
@@ -789,6 +655,7 @@ export default function TaskManager() {
 
       // Use the mutation with type assertion to bypass the type error
       const newTask = await createTaskMutation.mutateAsync(taskData as any);
+      console.log("Task created result:", newTask);
       
       // Check for task reminders after creating a new task
       if (newTask) {
@@ -805,8 +672,12 @@ export default function TaskManager() {
         }
       }
       
-      // Additional UI cleanup
+      // Reset form and close the add task panel
+      form.reset();
       setShowAddTask(false);
+      
+      // Force a refresh of the tasks data
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
     } catch (error) {
       console.error('Submit error:', error);
       toast({
@@ -858,47 +729,57 @@ export default function TaskManager() {
     if (!editForm) return;
     
     try {
-      const updateData: Partial<NewTask> = {
-        title: editForm!.title || "",
-        description: editForm!.description,
-        priority: editForm!.priority || "medium",
-        due_date: ensureUnixTimestamp(editForm!.due_date),
-        is_recurring: editForm!.is_recurring,
-        recurrence_pattern: editForm!.is_recurring ? editForm!.recurrence_pattern : null,
-        recurrence_interval: editForm!.is_recurring && editForm!.recurrence_interval ? Number(editForm!.recurrence_interval) : null,
-        recurrence_end_date: ensureUnixTimestamp(editForm!.recurrence_end_date),
+      // Find the current task to get its existing data
+      const currentTask = tasks?.find(task => task.id === taskId);
+      if (!currentTask) {
+        console.error(`Task with ID ${taskId} not found`);
+        toast({
+          variant: "destructive",
+          title: "Error updating task",
+          description: "Task not found",
+        });
+        return;
+      }
+      
+      // SIMPLIFIED: Create update data that keeps all existing fields
+      const updateData = {
+        ...currentTask,  // Start with ALL existing task data
+        // Only override fields that have been edited
+        title: editForm.title || currentTask.title,
+        description: editForm.description !== undefined ? editForm.description : currentTask.description,
+        priority: editForm.priority || currentTask.priority,
+        due_date: ensureUnixTimestamp(editForm.due_date),
+        is_recurring: typeof editForm.is_recurring === 'boolean' ? editForm.is_recurring : currentTask.is_recurring,
+        recurrence_pattern: editForm.is_recurring ? editForm.recurrence_pattern : null,
+        recurrence_interval: editForm.is_recurring && editForm.recurrence_interval ? Number(editForm.recurrence_interval) : null,
+        recurrence_end_date: ensureUnixTimestamp(editForm.recurrence_end_date),
+        completed: typeof editForm.completed === 'boolean' ? editForm.completed : currentTask.completed,
       };
 
+      console.log("Updating task with ALL data preserved:", updateData);
+      
+      // Make sure we don't have duplicate id
+      const { id, ...taskDataWithoutId } = updateData;
+      
+      // Update the task with ALL fields
       await updateTaskMutation.mutateAsync({
         id: taskId,
-        ...updateData,
+        ...taskDataWithoutId
       });
 
       // Force a re-render
       setForceUpdate((prev: number) => prev + 1);
-
-      // Check for task reminders after updating a task
-      if (tasks && Array.isArray(tasks)) {
-        // Find the updated task
-        const updatedTask = tasks.find(task => task.id === taskId);
-        if (updatedTask) {
-          // Convert task to the right format for the notification system
-          const formattedTask = convertTaskForNotifications({
-            ...updatedTask,
-            ...updateData,
-            completed: editForm.completed
-          });
-          
-          try {
-            checkTaskReminders([formattedTask]);
-          } catch (error) {
-            console.error("Error checking task reminders:", error);
-          }
-        }
-      }
+      
+      // Use the refreshTasks helper to ensure UI updates
+      refreshTasks();
 
       // Reset the edit form
       setEditForm(null);
+      
+      toast({
+        title: "Task updated",
+        description: "Your task has been updated successfully.",
+      });
     } catch (error) {
       console.error('Error updating task:', error);
       toast({
@@ -1079,15 +960,15 @@ export default function TaskManager() {
       }
       
       // Update the main tasks list to show this task has subtasks
-      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+        const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
       const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === taskId);
-      
-      if (taskIndex !== -1) {
+        
+        if (taskIndex !== -1) {
         // Add the subtasks to the task
         updatedTasks[taskIndex].subtasks = optimisticSubtasks;
         
         // Update the tasks cache
-        queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+          queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
       }
       
       console.log("Optimistically updated subtasks in cache");
@@ -1743,25 +1624,41 @@ export default function TaskManager() {
 
   // Process tasks to add subtask information
   const processedTasks = useMemo(() => {
-    if (!tasks) return [];
+    console.log("Recalculating processedTasks with forceUpdate:", forceUpdate);
     
-    // Create a map of task IDs to their subtasks
-    const taskSubtasksMap = new Map<number, Subtask[]>();
+    // SIMPLIFIED: Safety check for tasks
+    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
+      return [];
+    }
     
-    // Process tasks to include subtask information
-    return tasks.map(task => {
-      const hasSubtasks = tasksWithSubtasksIds?.includes(task.id) || false;
-      const subtasks: Subtask[] = []; // We'll populate this if needed
+    // Try to get fresh tasks from cache
+    const freshTasks = queryClient.getQueryData([QUERY_KEYS.TASKS]) || tasks;
+    
+    // Safety check for fresh tasks
+    if (!freshTasks || !Array.isArray(freshTasks)) {
+      return tasks; // Fall back to original tasks if cache is empty
+    }
+    
+    // SIMPLIFIED: Just add the subtask information without complex type handling
+    return freshTasks.map(task => {
+      if (!task || !task.id) return null;
       
+      // Check if this task has subtasks
+      const hasSubtasks = tasksWithSubtasksIds?.includes(task.id) || false;
+      
+      // Use type assertion to avoid TypeScript errors
+      const taskAny = task as any;
+      
+      // Return task with minimal subtask data added
       return {
         ...task,
-        subtasks,
-        has_subtasks: hasSubtasks,
-        completed_subtasks: 0,
-        total_subtasks: 0
+        subtasks: taskAny.subtasks || [],
+        has_subtasks: taskAny.has_subtasks || hasSubtasks,
+        completed_subtasks: taskAny.completed_subtasks || 0,
+        total_subtasks: taskAny.total_subtasks || 0
       };
-    });
-  }, [tasks, tasksWithSubtasksIds, forceUpdate]); // Add forceUpdate as a dependency
+    }).filter(Boolean); // Remove any null tasks
+  }, [tasks, tasksWithSubtasksIds, forceUpdate]);
 
   const completedTasks = useMemo(() => 
     getCompletedTasks(filterTasks(processedTasks)),
@@ -1872,7 +1769,7 @@ export default function TaskManager() {
       </div>
     );
   }
-
+  
   if (isError && tasksError) {
     return (
       <div className="flex justify-center p-8">
@@ -1899,7 +1796,10 @@ export default function TaskManager() {
     );
   }
 
-  if (processedTasks.length === 0 && !showAddTask) {
+  // FIXED: More robust check for empty tasks
+  const hasNoTasks = !processedTasks || !Array.isArray(processedTasks) || processedTasks.length === 0;
+  
+  if (hasNoTasks && !showAddTask) {
     return (
       <div className="p-6">
         <div className="flex flex-col items-center justify-center min-h-[400px] p-8 text-center bg-white dark:bg-gray-800 rounded-xl shadow-lg border border-gray-200 dark:border-gray-700">
@@ -1929,754 +1829,782 @@ export default function TaskManager() {
 
   return (
     <div className="p-6">
-      {processedTasks.length === 0 && !showAddTask ? (
-        <div className="flex flex-col items-center justify-center min-h-[400px] p-8 text-center">
-          <CheckSquare className="h-12 w-12 text-muted-foreground mb-4" />
-          <h3 className="text-xl font-semibold mb-2">No tasks yet</h3>
-          <p className="text-muted-foreground mb-6 max-w-md">
-            Get started by creating your first task. Tasks can have due dates, priorities, 
-            and can be set to recur on a schedule.
-          </p>
-          <Button 
-            onClick={() => {
-              console.log("Button clicked, setting showAddTask to true");
-              setShowAddTask(true);
-            }}
-          >
-            <Plus className="mr-2 h-4 w-4" />
-            Create Your First Task
-          </Button>
+      <div className="space-y-6">
+        <div className="flex items-center justify-between">
+          <h2 className="text-2xl font-bold flex items-center gap-2">
+            <CheckSquare className="h-6 w-6 text-primary" />
+            Task Manager
+          </h2>
         </div>
-      ) : (
-        <div className="space-y-6">
-          <div className="flex items-center justify-between">
-            <h2 className="text-2xl font-bold flex items-center gap-2">
-              <CheckSquare className="h-6 w-6 text-primary" />
-              Task Manager
-            </h2>
-          </div>
 
-          <Card className="w-full bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-            <CardHeader className="bg-gradient-to-r from-indigo-600 via-purple-600 to-blue-600 text-white p-6">
-              <CardTitle className="flex items-center gap-2 text-xl">
-                <Plus className="h-5 w-5 text-white animate-pulse" />
-                Add New Task
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="pt-6 px-6 pb-6">
-              <Form {...form}>
-                <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-                  <div className="flex flex-wrap items-start gap-4">
-                    <FormField
-                      control={form.control}
-                      name="title"
-                      render={({ field }) => (
-                        <FormItem className="flex-1 min-w-[200px]">
+        <Card className="w-full bg-white dark:bg-gray-800 shadow-lg rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <CardHeader className="bg-gradient-to-r from-indigo-600 via-purple-600 to-blue-600 text-white p-6">
+            <CardTitle className="flex items-center gap-2 text-xl">
+              <Plus className="h-5 w-5 text-white animate-pulse" />
+              Add New Task
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="pt-6 px-6 pb-6">
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                <div className="flex flex-wrap items-start gap-4">
+                  <FormField
+                    control={form.control}
+                    name="title"
+                    render={({ field }) => (
+                      <FormItem className="flex-1 min-w-[200px]">
+                        <FormControl>
+                          <Input 
+                            placeholder="Task title" 
+                            {...field} 
+                            value={field.value || ""}
+                            className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem className="flex-1 min-w-[200px]">
+                        <FormControl>
+                          <Input 
+                            placeholder="Task description" 
+                            {...field} 
+                            value={field.value || ""}
+                            onChange={(e) => field.onChange(e.target.value || null)}
+                            className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-400"
+                          />
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                  <FormField
+                    control={form.control}
+                    name="priority"
+                    render={({ field }) => (
+                      <FormItem className="w-[140px]">
+                        <Select
+                          value={field.value}
+                          onValueChange={field.onChange}
+                        >
                           <FormControl>
-                            <Input 
-                              placeholder="Task title" 
-                              {...field} 
-                              value={field.value || ""}
-                              className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-400"
-                            />
+                            <SelectTrigger className="bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200">
+                              <SelectValue placeholder="Priority" />
+                            </SelectTrigger>
                           </FormControl>
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="description"
-                      render={({ field }) => (
-                        <FormItem className="flex-1 min-w-[200px]">
-                          <FormControl>
-                            <Input 
-                              placeholder="Task description" 
-                              {...field} 
-                              value={field.value || ""}
-                              onChange={(e) => field.onChange(e.target.value || null)}
-                              className="w-full bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200 text-gray-800 dark:text-gray-200 placeholder:text-gray-500 dark:placeholder:text-gray-400"
-                            />
-                          </FormControl>
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={form.control}
-                      name="priority"
-                      render={({ field }) => (
-                        <FormItem className="w-[140px]">
+                          <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                            <SelectItem value="low" className="text-gray-800 dark:text-gray-200">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-green-500"></div>
+                                Low
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="medium" className="text-gray-800 dark:text-gray-200">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
+                                Medium
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="high" className="text-gray-800 dark:text-gray-200">
+                              <div className="flex items-center gap-2">
+                                <div className="w-2 h-2 rounded-full bg-red-500"></div>
+                                High
+                              </div>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </FormItem>
+                    )}
+                  />
+                  <Popover open={newTaskDatePickerOpen} onOpenChange={setNewTaskDatePickerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className={cn(
+                          "w-[180px] justify-start text-left font-normal bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors",
+                          !dueDate && "text-gray-500 dark:text-gray-400",
+                          dueDate && "text-gray-800 dark:text-gray-200 border-indigo-200 dark:border-indigo-700"
+                        )}
+                      >
+                        <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
+                        {dueDate ? formatDate(dueDate, "PPP") : "Due date (optional)"}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[300px]">
+                      <div>
+                        <Calendar
+                          mode="single"
+                          selected={dueDate ? new Date(dueDate) : undefined}
+                          onSelect={(date) => {
+                            if (date) {
+                              const selectedTime = dueDate ? new Date(dueDate) : new Date();
+                              form.setValue("due_date", date);
+                            } else {
+                              form.setValue("due_date", null);
+                              setNewTaskDatePickerOpen(false);
+                            }
+                          }}
+                          initialFocus
+                          className="rounded-lg border-0"
+                        />
+                        {dueDate && (
+                          <TimeSelect
+                            value={new Date(dueDate)}
+                            onChange={(newDate) => {
+                              form.setValue("due_date", newDate);
+                            }}
+                            onComplete={() => {
+                              setNewTaskDatePickerOpen(false);
+                            }}
+                            compact={true}
+                          />
+                        )}
+                      </div>
+                    </PopoverContent>
+                  </Popover>
+                  <div className="flex items-center gap-2 self-center">
+                    <Switch
+                      checked={isRecurring}
+                      onCheckedChange={(checked) => {
+                        form.setValue("is_recurring", checked);
+                        if (!checked) {
+                          form.setValue("recurrence_pattern", null);
+                          form.setValue("recurrence_interval", null);
+                          form.setValue("recurrence_end_date", null);
+                        } else {
+                          form.setValue("recurrence_pattern", "weekly");
+                          form.setValue("recurrence_interval", 1);
+                        }
+                      }}
+                      className="data-[state=checked]:bg-indigo-600 dark:data-[state=checked]:bg-indigo-400 data-[state=unchecked]:bg-gray-300 dark:data-[state=unchecked]:bg-gray-600 border-2 border-transparent dark:border-gray-400"
+                    >
+                      <Repeat className="h-4 w-4 mr-2 text-indigo-600 dark:text-indigo-400" />
+                      <span className="text-gray-800 dark:text-gray-200">Recurring Task</span>
+                    </Switch>
+                  </div>
+                  <Button 
+                    type="button" 
+                    onClick={async () => {
+                      try {
+                        console.log("Add Task button clicked");
+                        
+                        // Validate the form first
+                        const isValid = await form.trigger();
+                        if (!isValid) {
+                          console.log("Form validation failed");
+                          toast({
+                            variant: "destructive",
+                            title: "Invalid form data",
+                            description: "Please check the form for errors and try again.",
+                          });
+                          return;
+                        }
+                        
+                        const formData = form.getValues();
+                        console.log("Form data:", formData);
+                        
+                        // Ensure all required fields are present
+                        if (!formData.title || formData.title.trim() === "") {
+                          toast({
+                            variant: "destructive",
+                            title: "Missing title",
+                            description: "Please provide a title for the task.",
+                          });
+                          return;
+                        }
+                        
+                        const taskData = {
+                          title: formData.title.trim(),
+                          description: formData.description || null,
+                          priority: formData.priority || "medium",
+                          completed: false,
+                          due_date: ensureUnixTimestamp(formData.due_date),
+                          all_day: true,
+                          parent_task_id: null,
+                          user_id: user.id,
+                          is_recurring: Boolean(formData.is_recurring),
+                          recurrence_pattern: formData.is_recurring ? String(formData.recurrence_pattern || "weekly") : null,
+                          recurrence_interval: formData.is_recurring ? 1 : null,
+                          recurrence_end_date: ensureUnixTimestamp(formData.recurrence_end_date),
+                        };
+
+                        console.log('Sending task data to API:', JSON.stringify(taskData));
+                        
+                        // Call the mutation
+                        await createTaskMutation.mutateAsync(taskData as any);
+                        
+                        // Reset form and close the add task panel
+                        form.reset();
+                        setShowAddTask(false);
+                        
+                        // Force a refresh of the tasks data
+                        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+                      } catch (error) {
+                        console.error('Submit error:', error);
+                        toast({
+                          variant: "destructive",
+                          title: "Error creating task",
+                          description: error instanceof Error ? error.message : "An unknown error occurred",
+                        });
+                      }
+                    }}
+                    className="min-w-[140px] bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 dark:from-indigo-500 dark:to-violet-500 dark:hover:from-indigo-400 dark:hover:to-violet-400 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2 h-11 px-4 font-medium"
+                  >
+                    <Plus className="h-4 w-4" />
+                    Create Task
+                  </Button>
+                </div>
+                {isRecurring && (
+                  <div className="mt-6 p-4 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900/50 transition-all duration-200 shadow-inner">
+                    <div className="mb-3 text-sm text-gray-600 dark:text-indigo-300 font-medium">
+                      Configure how often this task should repeat
+                    </div>
+                    <div className="flex flex-wrap gap-4">
+                      <div className="flex-1 min-w-[200px]">
+                        <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
+                          Repeat Every
+                        </label>
+                        <div className="flex gap-2">
+                          <Input
+                            type="number"
+                            min="1"
+                            placeholder="1"
+                            value={recurrenceInterval || ""}
+                            onChange={(e) => form.setValue("recurrence_interval", parseInt(e.target.value) || 1)}
+                            className="w-[80px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200"
+                          />
                           <Select
-                            value={field.value}
-                            onValueChange={field.onChange}
+                            value={recurrencePattern || ""}
+                            onValueChange={(value) => form.setValue("recurrence_pattern", value as "daily" | "weekly" | "monthly" | "yearly" | null)}
                           >
-                            <FormControl>
-                              <SelectTrigger className="bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200">
-                                <SelectValue placeholder="Priority" />
-                              </SelectTrigger>
-                            </FormControl>
+                            <SelectTrigger className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200">
+                              <SelectValue placeholder="Select period" />
+                            </SelectTrigger>
                             <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
-                              <SelectItem value="low" className="text-gray-800 dark:text-gray-200">
+                              <SelectItem value="daily" className="text-gray-800 dark:text-gray-200">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 rounded-full bg-green-500"></div>
-                                  Low
+                                  <span className="h-2 w-2 rounded-full bg-blue-500"></span>
+                                  Day(s)
                                 </div>
                               </SelectItem>
-                              <SelectItem value="medium" className="text-gray-800 dark:text-gray-200">
+                              <SelectItem value="weekly" className="text-gray-800 dark:text-gray-200">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 rounded-full bg-yellow-500"></div>
-                                  Medium
+                                  <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
+                                  Week(s)
                                 </div>
                               </SelectItem>
-                              <SelectItem value="high" className="text-gray-800 dark:text-gray-200">
+                              <SelectItem value="monthly" className="text-gray-800 dark:text-gray-200">
                                 <div className="flex items-center gap-2">
-                                  <div className="w-2 h-2 rounded-full bg-red-500"></div>
-                                  High
+                                  <span className="h-2 w-2 rounded-full bg-purple-500"></span>
+                                  Month(s)
+                                </div>
+                              </SelectItem>
+                              <SelectItem value="yearly" className="text-gray-800 dark:text-gray-200">
+                                <div className="flex items-center gap-2">
+                                  <span className="h-2 w-2 rounded-full bg-pink-500"></span>
+                                  Year(s)
                                 </div>
                               </SelectItem>
                             </SelectContent>
                           </Select>
-                        </FormItem>
-                      )}
-                    />
-                    <Popover open={newTaskDatePickerOpen} onOpenChange={setNewTaskDatePickerOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className={cn(
-                            "w-[180px] justify-start text-left font-normal bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors",
-                            !dueDate && "text-gray-500 dark:text-gray-400",
-                            dueDate && "text-gray-800 dark:text-gray-200 border-indigo-200 dark:border-indigo-700"
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-                          {dueDate ? formatDate(dueDate, "PPP") : "Due date (optional)"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[300px]">
-                        <div>
-                          <Calendar
-                            mode="single"
-                            selected={dueDate ? new Date(dueDate) : undefined}
-                            onSelect={(date) => {
-                              if (date) {
-                                const selectedTime = dueDate ? new Date(dueDate) : new Date();
-                                form.setValue("due_date", date);
-                              } else {
-                                form.setValue("due_date", null);
-                                setNewTaskDatePickerOpen(false);
-                              }
-                            }}
-                            initialFocus
-                            className="rounded-lg border-0"
-                          />
-                          {dueDate && (
-                            <TimeSelect
-                              value={new Date(dueDate)}
-                              onChange={(newDate) => {
-                                form.setValue("due_date", newDate);
-                              }}
-                              onComplete={() => {
-                                setNewTaskDatePickerOpen(false);
-                              }}
-                              compact={true}
-                            />
-                          )}
                         </div>
-                      </PopoverContent>
-                    </Popover>
-                    <div className="flex items-center gap-2 self-center">
-                      <Switch
-                        checked={isRecurring}
-                        onCheckedChange={(checked) => {
-                          form.setValue("is_recurring", checked);
-                          if (!checked) {
-                            form.setValue("recurrence_pattern", null);
-                            form.setValue("recurrence_interval", null);
-                            form.setValue("recurrence_end_date", null);
-                          } else {
-                            form.setValue("recurrence_pattern", "weekly");
-                            form.setValue("recurrence_interval", 1);
-                          }
-                        }}
-                        className="data-[state=checked]:bg-indigo-600 dark:data-[state=checked]:bg-indigo-400 data-[state=unchecked]:bg-gray-300 dark:data-[state=unchecked]:bg-gray-600 border-2 border-transparent dark:border-gray-400"
-                      >
-                        <Repeat className="h-4 w-4 mr-2 text-indigo-600 dark:text-indigo-400" />
-                        <span className="text-gray-800 dark:text-gray-200">Recurring Task</span>
-                      </Switch>
-                    </div>
-                    <Button 
-                      type="button" 
-                      onClick={async () => {
-                        try {
-                          console.log("Add Task button clicked");
-                          const formData = form.getValues();
-                          console.log("Form data:", formData);
-                          
-                          const taskData = {
-                            title: formData.title || "",
-                            description: formData.description || null,
-                            priority: formData.priority || "medium",
-                            completed: false,
-                            due_date: ensureUnixTimestamp(formData.due_date),
-                            all_day: true,
-                            parent_task_id: null,
-                            user_id: user.id,
-                            is_recurring: Boolean(formData.is_recurring),
-                            recurrence_pattern: formData.is_recurring ? String(formData.recurrence_pattern || "weekly") : null,
-                            recurrence_interval: formData.is_recurring ? 1 : null,
-                            recurrence_end_date: ensureUnixTimestamp(formData.recurrence_end_date),
-                          };
-
-                          console.log('Sending task data to API:', JSON.stringify(taskData));
-                          await createTaskMutation.mutateAsync(taskData as any);
-                          
-                          setShowAddTask(false);
-                        } catch (error) {
-                          console.error('Submit error:', error);
-                          toast({
-                            variant: "destructive",
-                            title: "Error creating task",
-                            description: error instanceof Error ? error.message : "An unknown error occurred",
-                          });
-                        }
-                      }}
-                      className="min-w-[140px] bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-700 hover:to-violet-700 dark:from-indigo-500 dark:to-violet-500 dark:hover:from-indigo-400 dark:hover:to-violet-400 text-white rounded-lg transition-all duration-200 shadow-md hover:shadow-lg flex items-center justify-center gap-2 h-11 px-4 font-medium"
-                    >
-                      <Plus className="h-4 w-4" />
-                      Create Task
-                    </Button>
-                  </div>
-                  {isRecurring && (
-                    <div className="mt-6 p-4 border border-gray-200 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-900/50 transition-all duration-200 shadow-inner">
-                      <div className="mb-3 text-sm text-gray-600 dark:text-indigo-300 font-medium">
-                        Configure how often this task should repeat
                       </div>
-                      <div className="flex flex-wrap gap-4">
-                        <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
-                            Repeat Every
-                          </label>
-                          <div className="flex gap-2">
-                            <Input
-                              type="number"
-                              min="1"
-                              placeholder="1"
-                              value={recurrenceInterval || ""}
-                              onChange={(e) => form.setValue("recurrence_interval", parseInt(e.target.value) || 1)}
-                              className="w-[80px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200"
-                            />
-                            <Select
-                              value={recurrencePattern || ""}
-                              onValueChange={(value) => form.setValue("recurrence_pattern", value as "daily" | "weekly" | "monthly" | "yearly" | null)}
-                            >
-                              <SelectTrigger className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 text-gray-800 dark:text-gray-200">
-                                <SelectValue placeholder="Select period" />
-                              </SelectTrigger>
-                              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
-                                <SelectItem value="daily" className="text-gray-800 dark:text-gray-200">
-                                  <div className="flex items-center gap-2">
-                                    <span className="h-2 w-2 rounded-full bg-blue-500"></span>
-                                    Day(s)
-                                  </div>
-                                </SelectItem>
-                                <SelectItem value="weekly" className="text-gray-800 dark:text-gray-200">
-                                  <div className="flex items-center gap-2">
-                                    <span className="h-2 w-2 rounded-full bg-indigo-500"></span>
-                                    Week(s)
-                                  </div>
-                                </SelectItem>
-                                <SelectItem value="monthly" className="text-gray-800 dark:text-gray-200">
-                                  <div className="flex items-center gap-2">
-                                    <span className="h-2 w-2 rounded-full bg-purple-500"></span>
-                                    Month(s)
-                                  </div>
-                                </SelectItem>
-                                <SelectItem value="yearly" className="text-gray-800 dark:text-gray-200">
-                                  <div className="flex items-center gap-2">
-                                    <span className="h-2 w-2 rounded-full bg-pink-500"></span>
-                                    Year(s)
-                                  </div>
-                                </SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                        </div>
-                        <div className="flex-1 min-w-[200px]">
-                          <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
-                            Ends (Optional)
-                          </label>
-                          <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
-                            <PopoverTrigger asChild>
-                              <Button
-                                variant="outline"
-                                className={cn(
-                                  "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700",
-                                  !recurrenceEndDate && "text-gray-500 dark:text-gray-400",
-                                  recurrenceEndDate && "text-gray-800 dark:text-gray-200"
-                                )}
-                              >
-                                <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
-                                {recurrenceEndDate
-                                  ? formatDate(recurrenceEndDate, "PPP")
-                                  : "Select end date"}
-                              </Button>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
-                              <Calendar
-                                mode="single"
-                                selected={recurrenceEndDate ? recurrenceEndDate : undefined}
-                                onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
-                                initialFocus
-                                className="rounded-lg border-0"
-                              />
-                              {recurrenceEndDate && (
-                                <TimeSelect
-                                  value={recurrenceEndDate}
-                                  onChange={(newDate) => {
-                                    form.setValue("recurrence_end_date", newDate);
-                                  }}
-                                  onComplete={() => {
-                                    setRecurrenceEndDatePickerOpen(false);
-                                  }}
-                                  compact={true}
-                                />
+                      <div className="flex-1 min-w-[200px]">
+                        <label className="text-sm font-medium mb-1.5 block text-gray-700 dark:text-gray-200">
+                          Ends (Optional)
+                        </label>
+                        <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
+                          <PopoverTrigger asChild>
+                            <Button
+                              variant="outline"
+                              className={cn(
+                                "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700",
+                                !recurrenceEndDate && "text-gray-500 dark:text-gray-400",
+                                recurrenceEndDate && "text-gray-800 dark:text-gray-200"
                               )}
-                            </PopoverContent>
-                          </Popover>
-                        </div>
+                            >
+                              <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500 dark:text-indigo-400" />
+                              {recurrenceEndDate
+                                ? formatDate(recurrenceEndDate, "PPP")
+                                : "Select end date"}
+                            </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
+                            <Calendar
+                              mode="single"
+                              selected={recurrenceEndDate ? recurrenceEndDate : undefined}
+                              onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
+                              initialFocus
+                              className="rounded-lg border-0"
+                            />
+                            {recurrenceEndDate && (
+                              <TimeSelect
+                                value={recurrenceEndDate}
+                                onChange={(newDate) => {
+                                  form.setValue("recurrence_end_date", newDate);
+                                }}
+                                onComplete={() => {
+                                  setRecurrenceEndDatePickerOpen(false);
+                                }}
+                                compact={true}
+                              />
+                            )}
+                          </PopoverContent>
+                        </Popover>
                       </div>
                     </div>
-                  )}
-                </form>
-              </Form>
-            </CardContent>
-          </Card>
+                  </div>
+                )}
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
 
-          <div className="flex gap-4 items-center flex-wrap bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
-            <div className="relative flex-1 min-w-[200px]">
-              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-              <Input
-                placeholder="Search tasks..."
-                className="pl-9 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-              />
-            </div>
-            <div className="flex items-center gap-2 flex-wrap">
-              <Select
-                value={filterType}
-                onValueChange={(value: FilterType) => {
-                  setFilterType(value);
-                }}
-              >
-                <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
-                  {Object.entries({
-                    all: { label: 'All Tasks', icon: null },
-                    active: { label: 'Active', icon: Clock },
-                    completed: { label: 'Completed', icon: CheckCircle2 },
-                    overdue: { label: 'Overdue', icon: AlertCircle }
-                  }).map(([value, { label, icon: Icon }]) => {
-                    const count = getTaskCounts(processedTasks)[value as FilterType];
-                    if (count === 0 && value !== 'all') return null;
-                    
-                    return (
-                      <SelectItem key={value} value={value}>
-                        <div className="flex items-center">
-                          {Icon && <Icon className="mr-2 h-4 w-4" />}
-                          <span>{label}</span>
-                          <Badge variant="outline" className="ml-2 px-1.5 py-0 text-xs">
-                            {count}
-                          </Badge>
-                        </div>
-                      </SelectItem>
-                    );
-                  })}
-                </SelectContent>
-              </Select>
+        <div className="flex gap-4 items-center flex-wrap bg-white dark:bg-gray-800 p-4 rounded-lg border border-gray-200 dark:border-gray-700 shadow-sm mb-6">
+          <div className="relative flex-1 min-w-[200px]">
+            <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search tasks..."
+              className="pl-9 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg focus:ring-2 focus:ring-indigo-500 dark:focus:ring-indigo-400 transition-all duration-200"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Select
+              value={filterType}
+              onValueChange={(value: FilterType) => {
+                setFilterType(value);
+              }}
+            >
+              <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                {Object.entries({
+                  all: { label: 'All Tasks', icon: null },
+                  active: { label: 'Active', icon: Clock },
+                  completed: { label: 'Completed', icon: CheckCircle2 },
+                  overdue: { label: 'Overdue', icon: AlertCircle }
+                }).map(([value, { label, icon: Icon }]) => {
+                  const count = getTaskCounts(processedTasks)[value as FilterType];
+                  if (count === 0 && value !== 'all') return null;
+                  
+                  return (
+                    <SelectItem key={value} value={value}>
+                      <div className="flex items-center">
+                        {Icon && <Icon className="mr-2 h-4 w-4" />}
+                        <span>{label}</span>
+                        <Badge variant="outline" className="ml-2 px-1.5 py-0 text-xs">
+                          {count}
+                        </Badge>
+                      </div>
+                    </SelectItem>
+                  );
+                })}
+              </SelectContent>
+            </Select>
 
-              <Select
-                value={priorityFilter}
-                onValueChange={(value: PriorityFilter) => setPriorityFilter(value)}
-              >
-                <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
-                  <SelectValue placeholder="Priority" />
-                </SelectTrigger>
-                <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
-                  <SelectItem value="all">All Priorities</SelectItem>
-                  <SelectItem value="high">
-                    <div className="flex items-center">
-                      <span className="h-2 w-2 rounded-full bg-red-500 mr-2" />
-                      High Priority
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="medium">
-                    <div className="flex items-center">
-                      <span className="h-2 w-2 rounded-full bg-yellow-500 mr-2" />
-                      Medium Priority
-                    </div>
-                  </SelectItem>
-                  <SelectItem value="low">
-                    <div className="flex items-center">
-                      <span className="h-2 w-2 rounded-full bg-green-500 mr-2" />
-                      Low Priority
-                    </div>
-                  </SelectItem>
-                </SelectContent>
-              </Select>
+            <Select
+              value={priorityFilter}
+              onValueChange={(value: PriorityFilter) => setPriorityFilter(value)}
+            >
+              <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
+                <SelectValue placeholder="Priority" />
+              </SelectTrigger>
+              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                <SelectItem value="all">All Priorities</SelectItem>
+                <SelectItem value="high">
+                  <div className="flex items-center">
+                    <span className="h-2 w-2 rounded-full bg-red-500 mr-2" />
+                    High Priority
+                  </div>
+                </SelectItem>
+                <SelectItem value="medium">
+                  <div className="flex items-center">
+                    <span className="h-2 w-2 rounded-full bg-yellow-500 mr-2" />
+                    Medium Priority
+                  </div>
+                </SelectItem>
+                <SelectItem value="low">
+                  <div className="flex items-center">
+                    <span className="h-2 w-2 rounded-full bg-green-500 mr-2" />
+                    Low Priority
+                  </div>
+                </SelectItem>
+              </SelectContent>
+            </Select>
 
-              <Select
-                value={dueDateFilter}
-                onValueChange={(value: DueDateFilter) => setDueDateFilter(value)}
-              >
-                <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
-                  <SelectValue placeholder="Due Date" />
-                </SelectTrigger>
-                <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
-                  <SelectItem value="all">All Due Dates</SelectItem>
-                  <SelectItem value="today">Due Today</SelectItem>
-                  <SelectItem value="tomorrow">Due Tomorrow</SelectItem>
-                  <SelectItem value="week">Due This Week</SelectItem>
-                  <SelectItem value="month">Due This Month</SelectItem>
-                </SelectContent>
-              </Select>
+            <Select
+              value={dueDateFilter}
+              onValueChange={(value: DueDateFilter) => setDueDateFilter(value)}
+            >
+              <SelectTrigger className="w-[140px] bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg">
+                <SelectValue placeholder="Due Date" />
+              </SelectTrigger>
+              <SelectContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700">
+                <SelectItem value="all">All Due Dates</SelectItem>
+                <SelectItem value="today">Due Today</SelectItem>
+                <SelectItem value="tomorrow">Due Tomorrow</SelectItem>
+                <SelectItem value="week">Due This Week</SelectItem>
+                <SelectItem value="month">Due This Month</SelectItem>
+              </SelectContent>
+            </Select>
 
+            <TooltipProvider>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    onClick={() => setSortOrder(order => {
+                      switch (order) {
+                        case 'none': return 'asc';
+                        case 'asc': return 'desc';
+                        case 'desc': return 'none';
+                      }
+                    })}
+                    className="w-[40px] h-[40px] shrink-0 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg"
+                  >
+                    {sortOrder === 'none' ? (
+                      <CalendarIcon className="h-4 w-4 text-muted-foreground" />
+                    ) : sortOrder === 'asc' ? (
+                      <SortAsc className="h-4 w-4 text-primary" />
+                    ) : (
+                      <SortDesc className="h-4 w-4 text-primary" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
+                  {sortOrder === 'none' 
+                    ? "Sort by due date" 
+                    : sortOrder === 'asc' 
+                      ? "Sorted by due date (earliest first)" 
+                      : "Sorted by due date (latest first)"}
+                </TooltipContent>
+              </Tooltip>
+            </TooltipProvider>
+
+            {(filterType !== 'all' || priorityFilter !== 'all' || dueDateFilter !== 'all' || sortOrder !== 'none' || searchTerm) && (
               <TooltipProvider>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <Button
                       variant="outline"
                       size="icon"
-                      onClick={() => setSortOrder(order => {
-                        switch (order) {
-                          case 'none': return 'asc';
-                          case 'asc': return 'desc';
-                          case 'desc': return 'none';
-                        }
-                      })}
-                      className="w-[40px] h-[40px] shrink-0 bg-gray-50 dark:bg-gray-900 border-gray-200 dark:border-gray-600 rounded-lg"
+                      onClick={clearFilters}
+                      className="w-[40px] h-[40px] shrink-0 bg-red-50 dark:bg-red-900/20 text-red-500 border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg"
                     >
-                      {sortOrder === 'none' ? (
-                        <CalendarIcon className="h-4 w-4 text-muted-foreground" />
-                      ) : sortOrder === 'asc' ? (
-                        <SortAsc className="h-4 w-4 text-primary" />
-                      ) : (
-                        <SortDesc className="h-4 w-4 text-primary" />
-                      )}
+                      <X className="h-4 w-4" />
                     </Button>
                   </TooltipTrigger>
                   <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
-                    {sortOrder === 'none' 
-                      ? "Sort by due date" 
-                      : sortOrder === 'asc' 
-                        ? "Sorted by due date (earliest first)" 
-                        : "Sorted by due date (latest first)"}
+                    Clear all filters
                   </TooltipContent>
                 </Tooltip>
               </TooltipProvider>
-
-              {(filterType !== 'all' || priorityFilter !== 'all' || dueDateFilter !== 'all' || sortOrder !== 'none' || searchTerm) && (
-                <TooltipProvider>
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="icon"
-                        onClick={clearFilters}
-                        className="w-[40px] h-[40px] shrink-0 bg-red-50 dark:bg-red-900/20 text-red-500 border-red-200 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-900/30 rounded-lg"
-                      >
-                        <X className="h-4 w-4" />
-                      </Button>
-                    </TooltipTrigger>
-                    <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
-                      Clear all filters
-                    </TooltipContent>
-                  </Tooltip>
-                </TooltipProvider>
-              )}
-            </div>
+            )}
           </div>
+        </div>
 
-          <div className={cn(
-            "grid gap-6",
-            getOverdueTasks(filterTasks(processedTasks)).length > 0 ? "md:grid-cols-3" : "md:grid-cols-2"
-          )}>
-            <Card className="border-t-4 border-t-blue-500 shadow-md hover:shadow-lg transition-shadow duration-200">
+        <div className={cn(
+          "grid gap-6",
+          getOverdueTasks(filterTasks(processedTasks)).length > 0 ? "md:grid-cols-3" : "md:grid-cols-2"
+        )}>
+          <Card className="border-t-4 border-t-blue-500 shadow-md hover:shadow-lg transition-shadow duration-200">
+            <CardContent className="pt-6">
+              <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Clock className="h-5 w-5 text-blue-500" />
+                  Active Tasks
+                </div>
+                <Badge variant="outline" className="bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800">
+                  {getActiveTasks(filterTasks(processedTasks)).length}
+                </Badge>
+              </h2>
+              <div className="space-y-4">
+                {getPaginatedActiveTasks(filterTasks(processedTasks)).map((task) => (
+                  <div
+                    key={task.id}
+                    className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-accent/5 hover:border-primary/30 transition-all duration-200 shadow-sm hover:shadow"
+                  >
+                    <div className="flex items-center gap-4">
+                      <Checkbox
+                        checked={task.completed}
+                        onCheckedChange={(checked: boolean) => {
+                          console.log(`Changing task ${task.id} completion to ${checked}`);
+                          // FIXED: Use mutateAsync to ensure we wait for the mutation to complete
+                          updateTaskMutation.mutateAsync({
+                            id: task.id,
+                            completed: checked,
+                          }).then(() => {
+                            // FIXED: Force a re-render after completion status changes
+                            setForceUpdate(prev => prev + 1);
+                            // FIXED: Use the refreshTasks helper to ensure UI updates
+                            refreshTasks();
+                          }).catch(error => {
+                            console.error("Error updating task completion:", error);
+                          });
+                        }}
+                        className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
+                      />
+                      {renderTaskContent(task, false)}
+                    </div>
+                    {task.has_subtasks && (
+                      <TaskProgress
+                        completed={task.completed_subtasks || 0}
+                        total={task.total_subtasks || 0}
+                      />
+                    )}
+                    {renderTaskActions(task)}
+                  </div>
+                ))}
+                {getActiveTasks(filterTasks(processedTasks)).length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground bg-gray-50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
+                    <Clock className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                    {searchTerm ? 'No matching active tasks' : 'No active tasks'}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+            {getActiveTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+              <CardFooter className="flex justify-center border-t pt-4">
+                <PaginationControls 
+                  currentPage={activePage}
+                  totalPages={getActiveTasksTotalPages(filterTasks(processedTasks))}
+                  onPageChange={setActivePage}
+                />
+              </CardFooter>
+            )}
+          </Card>
+          
+          {getOverdueTasks(filterTasks(processedTasks)).length > 0 && (
+            <Card className="border-t-4 border-t-red-500 shadow-md hover:shadow-lg transition-shadow duration-200">
               <CardContent className="pt-6">
                 <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <Clock className="h-5 w-5 text-blue-500" />
-                    Active Tasks
+                    <AlertCircle className="h-5 w-5 text-red-500" />
+                    Overdue Tasks
                   </div>
-                  <Badge variant="outline" className="bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-800">
-                    {getActiveTasks(filterTasks(processedTasks)).length}
+                  <Badge variant="outline" className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800">
+                    {getOverdueTasks(filterTasks(processedTasks)).length}
                   </Badge>
                 </h2>
                 <div className="space-y-4">
-                  {getPaginatedActiveTasks(filterTasks(processedTasks)).map((task) => (
+                  {getPaginatedOverdueTasks(filterTasks(processedTasks)).map((task) => (
                     <div
                       key={task.id}
-                      className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-accent/5 hover:border-primary/30 transition-all duration-200 shadow-sm hover:shadow"
+                      className="group p-4 rounded-lg border border-red-200 dark:border-red-800/50 hover:bg-red-50/30 dark:hover:bg-red-900/10 transition-all duration-200 shadow-sm hover:shadow"
                     >
                       <div className="flex items-center gap-4">
-                        <Checkbox
-                          checked={task.completed}
-                          onCheckedChange={(checked: boolean) =>
-                            updateTaskMutation.mutate({
-                              id: task.id,
-                              completed: checked,
-                            })
-                          }
-                          className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
-                        />
+                        <TooltipProvider>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <div>
+                                <Checkbox
+                                  checked={task.completed}
+                                  disabled={true}
+                                  className="cursor-not-allowed h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
+                                />
+                              </div>
+                            </TooltipTrigger>
+                            <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
+                              <p>Update the due date before marking as complete</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
                         {renderTaskContent(task, false)}
                       </div>
-                      {task.has_subtasks && (
-                        <TaskProgress
-                          completed={task.completed_subtasks || 0}
-                          total={task.total_subtasks || 0}
-                        />
-                      )}
                       {renderTaskActions(task)}
                     </div>
                   ))}
-                  {getActiveTasks(filterTasks(processedTasks)).length === 0 && (
-                    <div className="text-center py-8 text-muted-foreground bg-gray-50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
-                      <Clock className="h-8 w-8 mx-auto mb-2 text-gray-400" />
-                      {searchTerm ? 'No matching active tasks' : 'No active tasks'}
-                    </div>
-                  )}
                 </div>
               </CardContent>
-              {getActiveTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+              {getOverdueTasksTotalPages(filterTasks(processedTasks)) > 1 && (
                 <CardFooter className="flex justify-center border-t pt-4">
                   <PaginationControls 
-                    currentPage={activePage}
-                    totalPages={getActiveTasksTotalPages(filterTasks(processedTasks))}
-                    onPageChange={setActivePage}
+                    currentPage={overduePage}
+                    totalPages={getOverdueTasksTotalPages(filterTasks(processedTasks))}
+                    onPageChange={setOverduePage}
                   />
                 </CardFooter>
               )}
             </Card>
-            
-            {getOverdueTasks(filterTasks(processedTasks)).length > 0 && (
-              <Card className="border-t-4 border-t-red-500 shadow-md hover:shadow-lg transition-shadow duration-200">
-                <CardContent className="pt-6">
-                  <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <AlertCircle className="h-5 w-5 text-red-500" />
-                      Overdue Tasks
+          )}
+
+          <Card className="border-t-4 border-t-green-500 shadow-md hover:shadow-lg transition-shadow duration-200">
+            <CardContent className="pt-6">
+              <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="h-5 w-5 text-green-500" />
+                  Completed Tasks
+                </div>
+                <Badge variant="outline" className="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800">
+                  {getCompletedTasks(filterTasks(processedTasks)).length}
+                </Badge>
+              </h2>
+              <div className="space-y-4">
+                {getPaginatedCompletedTasks(filterTasks(processedTasks)).map((task) => (
+                  <div
+                    key={task.id}
+                    className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-muted/30 hover:bg-muted/50 transition-all duration-200"
+                  >
+                    <div className="flex items-center gap-4">
+                      <Checkbox
+                        checked={task.completed}
+                        onCheckedChange={(checked: boolean) => {
+                          console.log(`Changing task ${task.id} completion to ${checked}`);
+                          // FIXED: Use mutateAsync to ensure we wait for the mutation to complete
+                          updateTaskMutation.mutateAsync({
+                            id: task.id,
+                            completed: checked,
+                          }).then(() => {
+                            // FIXED: Force a re-render after completion status changes
+                            setForceUpdate(prev => prev + 1);
+                            // FIXED: Use the refreshTasks helper to ensure UI updates
+                            refreshTasks();
+                          }).catch(error => {
+                            console.error("Error updating task completion:", error);
+                          });
+                        }}
+                        className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
+                      />
+                      {renderTaskContent(task, true)}
                     </div>
-                    <Badge variant="outline" className="bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-300 border-red-200 dark:border-red-800">
-                      {getOverdueTasks(filterTasks(processedTasks)).length}
-                    </Badge>
-                  </h2>
-                  <div className="space-y-4">
-                    {getPaginatedOverdueTasks(filterTasks(processedTasks)).map((task) => (
-                      <div
-                        key={task.id}
-                        className="group p-4 rounded-lg border border-red-200 dark:border-red-800/50 hover:bg-red-50/30 dark:hover:bg-red-900/10 transition-all duration-200 shadow-sm hover:shadow"
-                      >
-                        <div className="flex items-center gap-4">
-                          <TooltipProvider>
-                            <Tooltip>
-                              <TooltipTrigger asChild>
-                                <div>
-                                  <Checkbox
-                                    checked={task.completed}
-                                    disabled={true}
-                                    className="cursor-not-allowed h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
+                    {renderTaskActions(task)}
+                  </div>
+                ))}
+                {getCompletedTasks(filterTasks(processedTasks)).length === 0 && (
+                  <div className="text-center py-8 text-muted-foreground bg-gray-50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
+                    <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-gray-400" />
+                    {searchTerm ? 'No matching completed tasks' : 'No completed tasks'}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+            {getCompletedTasksTotalPages(filterTasks(processedTasks)) > 1 && (
+              <CardFooter className="flex justify-center border-t pt-4">
+                <PaginationControls 
+                  currentPage={completedPage}
+                  totalPages={getCompletedTasksTotalPages(filterTasks(processedTasks))}
+                  onPageChange={setCompletedPage}
+                />
+              </CardFooter>
+            )}
+          </Card>
+        </div>
+
+        {showSubtasks && selectedTask && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
+            <Card className="w-full max-w-2xl bg-white dark:bg-gray-800 shadow-2xl rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
+                <CardTitle className="flex items-center gap-2 text-xl">
+                  <List className="h-5 w-5" />
+                  Subtasks for "{selectedTask.title}"
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                <div className="mb-4">
+                  <div className="text-sm text-muted-foreground mb-4">
+                    Break down your task into smaller, manageable steps. Drag to reorder.
+                  </div>
+                  
+                  <DragDropContext onDragEnd={onDragEnd}>
+                    <Droppable droppableId="subtasks">
+                      {(provided) => (
+                        <div
+                          {...provided.droppableProps}
+                          ref={provided.innerRef}
+                          className="space-y-2 max-h-[400px] overflow-y-auto pr-2"
+                        >
+                          {editedSubtasks.map((subtask, index) => (
+                            <Draggable
+                              key={subtask.id || `new-${index}`}
+                              draggableId={`subtask-${index}`}
+                              index={index}
+                            >
+                              {(provided) => (
+                                <div
+                                  ref={provided.innerRef}
+                                  {...provided.draggableProps}
+                                  className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 transition-colors group"
+                                >
+                                  <div 
+                                    {...provided.dragHandleProps}
+                                    className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
+                                  >
+                                    <GripVertical className="h-4 w-4" />
+                                  </div>
+                                  <SubtaskItem
+                                    subtask={subtask}
+                                    onToggle={() => handleSubtaskToggle(index)}
+                                    onDelete={() => handleSubtaskDelete(index)}
                                   />
                                 </div>
-                              </TooltipTrigger>
-                              <TooltipContent className="bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 shadow-md">
-                                <p>Update the due date before marking as complete</p>
-                              </TooltipContent>
-                            </Tooltip>
-                          </TooltipProvider>
-                          {renderTaskContent(task, false)}
+                              )}
+                            </Draggable>
+                          ))}
+                          {provided.placeholder}
                         </div>
-                        {renderTaskActions(task)}
-                      </div>
-                    ))}
-                  </div>
-                </CardContent>
-                {getOverdueTasksTotalPages(filterTasks(processedTasks)) > 1 && (
-                  <CardFooter className="flex justify-center border-t pt-4">
-                    <PaginationControls 
-                      currentPage={overduePage}
-                      totalPages={getOverdueTasksTotalPages(filterTasks(processedTasks))}
-                      onPageChange={setOverduePage}
-                    />
-                  </CardFooter>
-                )}
-              </Card>
-            )}
+                      )}
+                    </Droppable>
+                  </DragDropContext>
 
-            <Card className="border-t-4 border-t-green-500 shadow-md hover:shadow-lg transition-shadow duration-200">
-              <CardContent className="pt-6">
-                <h2 className="text-lg font-semibold mb-4 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <CheckCircle2 className="h-5 w-5 text-green-500" />
-                    Completed Tasks
-                  </div>
-                  <Badge variant="outline" className="bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-300 border-green-200 dark:border-green-800">
-                    {getCompletedTasks(filterTasks(processedTasks)).length}
-                  </Badge>
-                </h2>
-                <div className="space-y-4">
-                  {getPaginatedCompletedTasks(filterTasks(processedTasks)).map((task) => (
-                    <div
-                      key={task.id}
-                      className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-muted/30 hover:bg-muted/50 transition-all duration-200"
+                  <div className="mt-4 space-y-3">
+                    <Button
+                      className="w-full flex items-center justify-center gap-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
+                      onClick={() => {
+                        if (selectedTask) {
+                          setEditedSubtasks([...editedSubtasks, {
+                            id: -Date.now() - editedSubtasks.length,
+                            user_id: selectedTask.user_id,
+                            task_id: selectedTask.id,
+                            title: "",
+                            completed: false,
+                            position: editedSubtasks.length,
+                            created_at: Math.floor(Date.now() / 1000),
+                            updated_at: Math.floor(Date.now() / 1000)
+                          }]);
+                        }
+                      }}
                     >
-                      <div className="flex items-center gap-4">
-                        <Checkbox
-                          checked={task.completed}
-                          onCheckedChange={(checked: boolean) =>
-                            updateTaskMutation.mutate({
-                              id: task.id,
-                              completed: checked,
-                            })
-                          }
-                          className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
-                        />
-                        {renderTaskContent(task, true)}
-                      </div>
-                      {renderTaskActions(task)}
+                      <Plus className="h-4 w-4" />
+                      <span>Add Subtask</span>
+                    </Button>
+                    <div className="flex gap-2">
+                      <Button
+                        className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                        onClick={saveSubtasks}
+                        disabled={saveSubtasksMutation.isPending}
+                      >
+                        {saveSubtasksMutation.isPending ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            Saving...
+                          </>
+                        ) : (
+                          "Save Subtasks"
+                        )}
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="flex-1"
+                        onClick={() => setShowSubtasks(false)}
+                      >
+                        Cancel
+                      </Button>
                     </div>
-                  ))}
-                  {getCompletedTasks(filterTasks(processedTasks)).length === 0 && (
-                    <div className="text-center py-8 text-muted-foreground bg-gray-50 dark:bg-gray-900/30 rounded-lg border border-dashed border-gray-200 dark:border-gray-700">
-                      <CheckCircle2 className="h-8 w-8 mx-auto mb-2 text-gray-400" />
-                      {searchTerm ? 'No matching completed tasks' : 'No completed tasks'}
-                    </div>
-                  )}
+                  </div>
                 </div>
               </CardContent>
-              {getCompletedTasksTotalPages(filterTasks(processedTasks)) > 1 && (
-                <CardFooter className="flex justify-center border-t pt-4">
-                  <PaginationControls 
-                    currentPage={completedPage}
-                    totalPages={getCompletedTasksTotalPages(filterTasks(processedTasks))}
-                    onPageChange={setCompletedPage}
-                  />
-                </CardFooter>
-              )}
             </Card>
           </div>
-
-          {showSubtasks && selectedTask && (
-            <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-              <Card className="w-full max-w-2xl bg-white dark:bg-gray-800 shadow-2xl rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
-                  <CardTitle className="flex items-center gap-2 text-xl">
-                    <List className="h-5 w-5" />
-                    Subtasks for "{selectedTask.title}"
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-6">
-                  <div className="mb-4">
-                    <div className="text-sm text-muted-foreground mb-4">
-                      Break down your task into smaller, manageable steps. Drag to reorder.
-                    </div>
-                    
-                    <DragDropContext onDragEnd={onDragEnd}>
-                      <Droppable droppableId="subtasks">
-                        {(provided) => (
-                          <div
-                            {...provided.droppableProps}
-                            ref={provided.innerRef}
-                            className="space-y-2 max-h-[400px] overflow-y-auto pr-2"
-                          >
-                            {editedSubtasks.map((subtask, index) => (
-                              <Draggable
-                                key={subtask.id || `new-${index}`}
-                                draggableId={`subtask-${index}`}
-                                index={index}
-                              >
-                                {(provided) => (
-                                  <div
-                                    ref={provided.innerRef}
-                                    {...provided.draggableProps}
-                                    className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 transition-colors group"
-                                  >
-                                    <div 
-                                      {...provided.dragHandleProps}
-                                      className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors"
-                                    >
-                                      <GripVertical className="h-4 w-4" />
-                                    </div>
-                                    <SubtaskItem
-                                      subtask={subtask}
-                                      onToggle={() => handleSubtaskToggle(index)}
-                                      onDelete={() => handleSubtaskDelete(index)}
-                                    />
-                                  </div>
-                                )}
-                              </Draggable>
-                            ))}
-                            {provided.placeholder}
-                          </div>
-                        )}
-                      </Droppable>
-                    </DragDropContext>
-
-                    <div className="mt-4 space-y-3">
-                      <Button
-                        className="w-full flex items-center justify-center gap-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
-                        onClick={() => {
-                          if (selectedTask) {
-                            setEditedSubtasks([...editedSubtasks, {
-                              id: -Date.now() - editedSubtasks.length,
-                              user_id: selectedTask.user_id,
-                              task_id: selectedTask.id,
-                              title: "",
-                              completed: false,
-                              position: editedSubtasks.length,
-                              created_at: Math.floor(Date.now() / 1000),
-                              updated_at: Math.floor(Date.now() / 1000)
-                            }]);
-                          }
-                        }}
-                      >
-                        <Plus className="h-4 w-4" />
-                        <span>Add Subtask</span>
-                      </Button>
-                      <div className="flex gap-2">
-                        <Button
-                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
-                          onClick={saveSubtasks}
-                          disabled={saveSubtasksMutation.isPending}
-                        >
-                          {saveSubtasksMutation.isPending ? (
-                            <>
-                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                              Saving...
-                            </>
-                          ) : (
-                            "Save Subtasks"
-                          )}
-                        </Button>
-                        <Button
-                          variant="outline"
-                          className="flex-1"
-                          onClick={() => setShowSubtasks(false)}
-                        >
-                          Cancel
-                        </Button>
-                      </div>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

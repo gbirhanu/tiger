@@ -166,19 +166,25 @@ export const queryClient = new QueryClient({
         }
         return failureCount < 2;
       },
-      // ADDED: Force consistent structuring of query data
+      // FIXED: Disable structural sharing to ensure state updates are always detected
       structuralSharing: false
     },
     mutations: {
-      // ADDED: Automatically cancel related queries before mutation
+      // FIXED: Properly handle mutation lifecycle
       onMutate: async (variables) => {
         console.log('Global mutation handler - canceling related queries');
+        // Cancel any in-flight or pending queries that might conflict
+        await queryClient.cancelQueries();
         // This is a fallback - specific mutations should define their own onMutate
         return {};
       },
-      // ADDED: Always invalidate related queries after mutation
+      // FIXED: Always invalidate related queries after mutation
       onSettled: (data, error, variables, context) => {
         console.log('Global mutation settled - invalidating queries');
+        // Force refetch of all critical data
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
         // This is a fallback - specific mutations should handle their own invalidation
       },
       retry: (failureCount: number, error: any) => {
@@ -234,4 +240,34 @@ export function resetQueryCache() {
 // ADDED: Helper function to create deep copies of objects to avoid reference issues
 export function deepCopy<T>(obj: T): T {
   return JSON.parse(JSON.stringify(obj));
+}
+
+// ADDED: Helper function to force a UI refresh for a specific query
+export function forceRefreshQuery(queryKey: unknown[]) {
+  console.log(`Forcing refresh for query: ${JSON.stringify(queryKey)}`);
+  
+  // Get the current data
+  const currentData = queryClient.getQueryData(queryKey);
+  
+  if (currentData) {
+    // Create a deep copy to ensure React detects the change
+    const freshData = deepCopy(currentData);
+    
+    // Set the data back to trigger a re-render
+    queryClient.setQueryData(queryKey, freshData);
+    
+    // Also invalidate to ensure we get fresh data from the server
+    queryClient.invalidateQueries({ queryKey });
+  } else {
+    // If no data exists, just invalidate
+    queryClient.invalidateQueries({ queryKey });
+  }
+}
+
+// Helper function to refresh tasks specifically
+export function refreshTasks() {
+  console.log("Refreshing tasks");
+  
+  // Simply invalidate the query to fetch fresh data from the server
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
 }

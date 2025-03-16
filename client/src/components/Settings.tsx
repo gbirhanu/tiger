@@ -194,11 +194,16 @@ export default function Settings() {
   const updateSettingsMutation = useMutation({
     mutationFn: (data: FormattedUserSettings) => updateUserSettings(data as any),
     onMutate: async (newSettings) => {
+      console.log("Updating settings:", newSettings);
+      
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
       
       // Snapshot the previous value
       const previousSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.SETTINGS]);
+      
+      // Create a deep copy of the previous settings
+      const previousSettingsCopy = previousSettings ? JSON.parse(JSON.stringify(previousSettings)) : null;
       
       // Convert work hours to hour values for the optimistic update
       const optimisticSettings = { ...newSettings };
@@ -220,51 +225,64 @@ export default function Settings() {
         optimisticSettings.work_end_hour = hour + (minute / 60);
       }
       
+      console.log("Optimistic settings after conversion:", optimisticSettings);
+      
       // Optimistically update to the new value
       queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], (old) => {
         if (!old) return old;
         
+        // Create a deep copy of the old settings
+        const oldCopy = JSON.parse(JSON.stringify(old));
+        
         // Ensure work hours are numbers for type compatibility
         const typedOptimisticSettings: UserSettings = {
-          ...old,
+          ...oldCopy,
           ...optimisticSettings,
           // Ensure these are always numbers
           work_start_hour: typeof optimisticSettings.work_start_hour === 'number' 
             ? optimisticSettings.work_start_hour 
-            : old.work_start_hour,
+            : oldCopy.work_start_hour,
           work_end_hour: typeof optimisticSettings.work_end_hour === 'number' 
             ? optimisticSettings.work_end_hour 
-            : old.work_end_hour,
+            : oldCopy.work_end_hour,
           // Preserve the user_id field
-          user_id: old.user_id
+          user_id: oldCopy.user_id
         };
+        
+        console.log("Final optimistic settings:", typedOptimisticSettings);
         
         return typedOptimisticSettings;
       });
       
       // Return a context object with the previous settings
-      return { previousSettings };
+      return { previousSettings: previousSettingsCopy };
     },
-    onError: (error: Error, _variables, context) => {
-      // If the mutation fails, use the context returned from onMutate to roll back
+    onError: (error: any, _variables, context) => {
+      console.error("Failed to update settings:", error);
+      
+      // Rollback to previous state if available
       if (context?.previousSettings) {
         queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], context.previousSettings);
       }
       
-      console.error("Error updating settings:", error);
       toast({
         variant: "destructive",
         title: "Failed to update settings",
-        description: error.message || "An error occurred while saving your settings.",
+        description: error.message || "An error occurred while updating your settings.",
       });
     },
     onSuccess: (data) => {
+      console.log("Settings updated successfully:", data);
+      
       // Update the cache with the server response
       queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], data);
       
+      // Also invalidate the query to ensure we have the latest data
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+      
       toast({
         title: "Settings updated",
-        description: "Your preferences have been saved successfully.",
+        description: "Your settings have been updated successfully.",
       });
     },
   });
