@@ -22,7 +22,7 @@ export default function AuthPage() {
           </p>
         </div>
 
-        <Card className="p-6">
+        <Card className="p-6 w-[450px]">
           <div className="flex space-x-4 mb-6">
             <Button
               variant={isLogin ? "default" : "outline"}

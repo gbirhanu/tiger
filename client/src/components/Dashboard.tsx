@@ -12,15 +12,13 @@ import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
-import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home, Clock, Search, Bell, MapPin } from "lucide-react";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home, Clock, Search, Bell, MapPin, User, HelpCircle } from "lucide-react";
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   BarChart,
-  Bar,
-  PieChart,
-  Pie,
+  Bar, 
   LineChart,
   Line,
   XAxis,
@@ -37,12 +35,18 @@ import {
 } from "recharts";
 import Meetings from "./Meetings";
 import Settings from "./Settings";
+import Profile from "./Profile";
+import Help from "./Help";
 import { useAuth } from "@/contexts/AuthContext";
 import { getAppointments, getNotes, getPomodoroSettings, getTasks, getMeetings, getTasksWithSubtasks } from "@/lib/api";
 import { ProfileDropdown } from "./ui/ProfileDropdown";
 import { formatDate, getNow } from "@/lib/timezone";
 import { useTheme } from "@/contexts/ThemeContext";
 import { toast } from "@/hooks/use-toast";
+import { NotificationsProvider } from "@/contexts/NotificationsContext";
+import { NotificationsDropdown } from "./ui/NotificationsDropdown";
+import { TaskReminderService } from "./TaskReminderService";
+import { QUERY_KEYS } from "@/lib/queryClient";
 
 interface NavItem {
   title: string;
@@ -50,30 +54,6 @@ interface NavItem {
   component: React.ReactNode;
 }
 
-// Sample data for charts
-const taskData = [
-  { name: "Completed", value: 15 },
-  { name: "In Progress", value: 8 },
-  { name: "Not Started", value: 5 },
-];
-
-const pomodoroData = [
-  { name: "Mon", sessions: 4 },
-  { name: "Tue", sessions: 6 },
-  { name: "Wed", sessions: 3 },
-  { name: "Thu", sessions: 7 },
-  { name: "Fri", sessions: 5 },
-];
-
-const noteData = [
-  { date: "Mar 1", count: 3 },
-  { date: "Mar 2", count: 5 },
-  { date: "Mar 3", count: 4 },
-  { date: "Mar 4", count: 7 },
-  { date: "Mar 5", count: 6 },
-];
-
-const COLORS = ["#10B981", "#FBBF24", "#EF4444"];
 const CHART_COLORS = {
   green: "#10B981",
   blue: "#3B82F6",
@@ -86,15 +66,16 @@ const CHART_COLORS = {
 
 const DashboardOverview = () => {
   const { data: tasks = [], error: tasksError, isLoading: tasksLoading } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: [QUERY_KEYS.TASKS],
     queryFn: async () => {
       const response = await getTasks();
+      
       return response;
     },
   });
 
   const { data: notes = [], error: notesError, isLoading: notesLoading } = useQuery({
-    queryKey: ["notes"],
+    queryKey: [QUERY_KEYS.NOTES],
     queryFn: async () => {
       const response = await getNotes();
       return response;
@@ -125,13 +106,7 @@ const DashboardOverview = () => {
     },
   });
 
-  const { data: pomodoroSettings } = useQuery({
-    queryKey: ["pomodoro-settings"],
-    queryFn: async () => {
-      const response = await getPomodoroSettings();
-      return response;
-    },
-  });
+ 
 
   // Calculate task statistics safely
   const taskStats = {
@@ -336,24 +311,6 @@ const DashboardOverview = () => {
     };
   });
 
-  const taskChartData = [
-    { name: "Completed", value: taskStats.completed },
-    { name: "In Progress", value: taskStats.inProgress },
-    { name: "Not Started", value: taskStats.notStarted },
-  ];
-
-  // Create data for subtask progress chart
-  const subtaskProgressData = [
-    { name: "Completed", value: subtaskStats.completed },
-    { name: "Remaining", value: subtaskStats.total - subtaskStats.completed },
-  ];
-
-  // Create data for meetings and appointments chart
-  const eventChartData = [
-    { name: "Meetings", upcoming: meetingStats.upcoming, past: meetingStats.past },
-    { name: "Appointments", upcoming: appointmentStats.upcoming, past: appointmentStats.past },
-  ];
-
   // Calculate task priority distribution
   const taskPriorityStats = {
     high: Array.isArray(tasks) ? tasks.filter((task: any) => task.priority === 'high').length : 0,
@@ -374,12 +331,7 @@ const DashboardOverview = () => {
     return formatDate(date, "MMM d");
   }).reverse();
 
-  const notesByDate = last5Days.map(date => ({
-    date,
-    count: Array.isArray(notes) ? notes.filter((note: any) => 
-      note.createdAt && formatDate(new Date(note.createdAt), "MMM d") === date
-    ).length : 0
-  }));
+ 
 
   // Get upcoming appointments safely
   const upcomingAppointments = Array.isArray(appointments) ? appointments
@@ -416,7 +368,7 @@ const DashboardOverview = () => {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-2xl font-bold tracking-tight">
-              {getGreeting()}, <span className="text-primary">{localStorage.getItem("userName") || "User"}</span>
+              {getGreeting()}, <span className="text-primary">{localStorage.getItem("userName")?.split(" ")[0] || "User"}</span>
             </h2>
             <p className="text-muted-foreground mt-1">
               Here's what's happening with your tasks and schedule today.
@@ -1061,7 +1013,7 @@ const navItems: NavItem[] = [
   {
     title: "Tasks",
     icon: <CheckSquare className="h-4 w-4" />,
-    component: <TaskManager />,
+    component: React.createElement(TaskManager),
   },
   {
     title: "Notes",
@@ -1088,6 +1040,7 @@ const navItems: NavItem[] = [
     icon: <SettingsIcon className="h-4 w-4" />,
     component: <Settings />,
   },
+  
 ];
 
 export default function Dashboard() {
@@ -1107,154 +1060,177 @@ export default function Dashboard() {
   }, [selectedNav]);
 
   return (
-    <ResizablePanelGroup
-      direction="horizontal"
-      className="h-screen items-stretch"
-    >
-      {/* Resizable sidebar with slightly larger initial width */}
-      <ResizablePanel defaultSize={22} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] flex flex-col h-screen shadow-sm">
-        {/* App branding - now clickable */}
-        <div className="px-4 py-4">
-          <div className="flex items-center justify-between">
-            <div 
-              className="flex items-center gap-2.5 cursor-pointer justify-center group" 
-              onClick={() => setSelectedNav("Dashboard")}
-            >
-              <div className="flex items-center justify-center
-                rounded-full
-                bg-gradient-to-br from-yellow-500 to-amber-700
-                p-1.5
-                shadow-lg
-                group-hover:from-yellow-400 group-hover:to-amber-600
-                transition-all
-                duration-300
-                transform group-hover:scale-105
-                border-2 border-yellow-400/40
-              ">
-                <img 
-                  src="/assets/tiger_logo.png" 
-                  alt="Tiger" 
-                  className="h-8 w-8 drop-shadow-md" 
-                />
-              </div>
-              <div className="flex items-center">
-                <h2 className="text-xl
-                  font-extrabold
-                  bg-gradient-to-r from-yellow-500 to-amber-700
-                  bg-clip-text text-transparent
-                  group-hover:from-yellow-400 group-hover:to-amber-600
-                  transition-colors
-                  duration-300
-                  cursor-pointer
-                ">Tiger</h2>
-                <span className="text-xs text-amber-500 ml-0.5">
-                  <sup className="font-semibold">TM</sup>
-                </span>
-              </div>
-            </div>
-            
-            {/* Add a theme toggle button */}
-            <div className="flex items-center">
-              {theme === "dark" ? (
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  onClick={() => setTheme("light")}
-                  className="h-8 w-8 rounded-full hover:bg-yellow-100/10 transition-colors duration-200"
-                >
-                  <Sun className="h-4 w-4 text-yellow-400" />
-                </Button>
-              ) : (
-                <Button 
-                  variant="ghost" 
-                  size="icon" 
-                  onClick={() => setTheme("dark")}
-                  className="h-8 w-8 rounded-full hover:bg-slate-200 transition-colors duration-200"
-                >
-                  <Moon className="h-4 w-4 text-slate-700" />
-                </Button>
-              )}
-            </div>
-          </div>
-        </div>
-
-        {/* User Profile Section */}
-        <div className="px-4 py-3">
-          <ProfileDropdown />
-        </div>
-        
-        {/* Navigation - independently scrollable */}
-        <ScrollArea className="flex-1 thin-scrollbar px-3">
-          <div className="space-y-1.5 py-4">
-            {navItems.map((item) => (
-              <Button
-                key={item.title}
-                variant={selectedNav === item.title ? "default" : "ghost"}
-                size="sm"
-                className={cn(
-                  "w-full justify-start gap-3 mb-1 px-3 py-5 font-medium transition-all duration-300 rounded-lg",
-                  {
-                    "bg-gradient-to-r from-primary/90 to-primary text-primary-foreground shadow-md": selectedNav === item.title,
-                    "hover:bg-[hsl(var(--primary)/0.08)] hover:text-primary hover:translate-x-1": selectedNav !== item.title,
-                  }
-                )}
-                onClick={() => setSelectedNav(item.title)}
+    <NotificationsProvider>
+      <TaskReminderService />
+      <ResizablePanelGroup
+        direction="horizontal"
+        className="h-screen items-stretch"
+      >
+        {/* Resizable sidebar with slightly larger initial width */}
+        <ResizablePanel defaultSize={22} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] flex flex-col h-screen shadow-sm">
+          {/* App branding - now clickable */}
+          <div className="px-4 py-4">
+            <div className="flex items-center justify-between">
+              <div 
+                className="flex items-center gap-2.5 cursor-pointer justify-center group" 
+                onClick={() => setSelectedNav("Dashboard")}
               >
-                <div className={cn(
-                  "w-9 h-9 flex items-center justify-center rounded-md transition-all duration-300",
-                  selectedNav === item.title 
-                    ? "bg-[hsl(var(--primary-foreground)/0.3)] text-primary-foreground shadow-inner" 
-                    : "bg-[hsl(var(--muted)/0.5)] text-muted-foreground"
-                )}>
-                  {item.icon}
+                <div className="flex items-center justify-center
+                  rounded-full
+                  bg-gradient-to-br from-yellow-500 to-amber-700
+                  p-1
+                  shadow-lg
+                  group-hover:from-yellow-400 group-hover:to-amber-600
+                  transition-all
+                  duration-300
+                  transform group-hover:scale-105
+                  border-2 border-yellow-400/40
+                ">
+                  <img 
+                    src="/assets/tiger_logo.png" 
+                    alt="Tiger" 
+                    className="h-8 w-8 drop-shadow-md" 
+                  />
                 </div>
-                <span className="truncate font-medium">{item.title}</span>
-                {selectedNav === item.title && (
-                  <ChevronRight className="ml-auto h-4 w-4 text-primary-foreground/70" />
+                <div className="flex items-center">
+                  <h2 className="text-xl
+                    font-extrabold
+                    bg-gradient-to-r from-yellow-500 to-amber-700
+                    bg-clip-text text-transparent
+                    group-hover:from-yellow-400 group-hover:to-amber-600
+                    transition-colors
+                    duration-300
+                    cursor-pointer
+                  ">Tiger</h2>
+                  <span className="text-xs text-amber-500 ml-0.5">
+                    <sup className="font-semibold">TM</sup>
+                  </span>
+                </div>
+              </div>
+              
+              {/* Add a theme toggle button */}
+              <div className="flex items-center">
+                {theme === "dark" ? (
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => setTheme("light")}
+                    className="h-8 w-8 rounded-full hover:bg-yellow-100/10 transition-colors duration-200"
+                  >
+                    <Sun className="h-4 w-4 text-yellow-400" />
+                  </Button>
+                ) : (
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => setTheme("dark")}
+                    className="h-8 w-8 rounded-full hover:bg-slate-200 transition-colors duration-200"
+                  >
+                    <Moon className="h-4 w-4 text-slate-700" />
+                  </Button>
                 )}
-              </Button>
-            ))}
-          </div>
-        </ScrollArea>
-        
-        {/* Fixed logout button at bottom */}
-        <div className="p-4">
-          <Button
-            variant="outline"
-            size="sm"
-            className="w-full justify-start gap-3 px-3 py-5 font-medium transition-all duration-300 bg-gradient-to-r hover:from-red-500/10 hover:to-red-600/10 hover:text-red-600 hover:border-red-200 rounded-lg group"
-            onClick={() => logout()}
-          >
-            <div className="w-9 h-9 flex items-center justify-center rounded-md bg-red-50 text-red-500 group-hover:bg-red-100 transition-colors duration-300">
-              <LogOut className="h-4 w-4" />
+              </div>
             </div>
-            <span className="font-medium">Logout</span>
-          </Button>
-        </div>
-      </ResizablePanel>
-
-      <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
-
-      {/* Main content area */}
-      <ResizablePanel defaultSize={78} minSize={70} maxSize={85} className="bg-[hsl(var(--background))] h-screen flex flex-col">
-        {/* Main content header with breadcrumb */}
-      
-        
-        {/* Main content with independent scrolling */}
-        <ScrollArea className="flex-1 thin-scrollbar">
-          <div className="p-6">
-            {/* Conditional rendering based on selected navigation item */}
-            {selectedNav === "Dashboard" && <DashboardOverview />}
-            {selectedNav === "Tasks" && <TaskManager />}
-            {selectedNav === "Notes" && <NotesBoard />}
-            {selectedNav === "Pomodoro" && <PomodoroTimer />}
-            {selectedNav === "Calendar" && <Calendar />}
-            {selectedNav === "Meetings" && <Meetings />}
-            {selectedNav === "Settings" && <Settings />}
           </div>
-        </ScrollArea>
-      </ResizablePanel>
-    </ResizablePanelGroup>
+          {/* add divider for light and dark theme */}
+          {theme === "light" ? (
+            <div className="h-[1px] bg-gray-200" />
+          ) : (
+            <div className="h-[1px] bg-gray-700" />
+          )}
+          {/* User Profile Section */}
+          <div className="px-4 py-3">
+            <div className="flex items-center justify-between">
+              <ProfileDropdown />
+              {theme === "light" ? (
+                <div className="w-[1px] h-10 bg-gray-200" /> 
+              ) : (
+                <div className="w-[1px] h-10 bg-gray-700" />
+              )}
+              <NotificationsDropdown />
+            </div>
+          </div>
+          {/* add divider for light and dark theme */}
+          {theme === "light" ? (
+            <div className="h-[1px] bg-gray-200" />
+          ) : (
+            <div className="h-[1px] bg-gray-700" />
+          )}
+          {/* Navigation - independently scrollable */}
+          <ScrollArea className="flex-1 thin-scrollbar px-3">
+            <div className="space-y-1.5 py-4">
+              {navItems.map((item) => (
+                <Button
+                  key={item.title}
+                  variant={selectedNav === item.title ? "default" : "ghost"}
+                  size="sm"
+                  className={cn(
+                    "w-full justify-start gap-3 mb-1 px-3 py-5 font-medium transition-all duration-300 rounded-lg",
+                    {
+                      "bg-gradient-to-r from-primary/90 to-primary text-primary-foreground shadow-md": selectedNav === item.title,
+                      "hover:bg-[hsl(var(--primary)/0.08)] hover:text-primary hover:translate-x-1": selectedNav !== item.title,
+                    }
+                  )}
+                  onClick={() => setSelectedNav(item.title)}
+                >
+                  <div className={cn(
+                    "w-9 h-9 flex items-center justify-center rounded-md transition-all duration-300",
+                    selectedNav === item.title 
+                      ? "bg-[hsl(var(--primary-foreground)/0.3)] text-primary-foreground shadow-inner" 
+                      : "bg-[hsl(var(--muted)/0.5)] text-muted-foreground"
+                  )}>
+                    {item.icon}
+                  </div>
+                  <span className="truncate font-medium">{item.title}</span>
+                  {selectedNav === item.title && (
+                    <ChevronRight className="ml-auto h-4 w-4 text-primary-foreground/70" />
+                  )}
+                </Button>
+              ))}
+            </div>
+          </ScrollArea>
+          
+          {/* Fixed logout button at bottom */}
+          <div className="p-4">
+            <Button
+              variant="outline"
+              size="sm"
+              className="w-full justify-start gap-3 px-3 py-5 font-medium transition-all duration-300 bg-gradient-to-r hover:from-red-500/10 hover:to-red-600/10 hover:text-red-600 hover:border-red-200 rounded-lg group"
+              onClick={() => logout()}
+            >
+              <div className="w-9 h-9 flex items-center justify-center rounded-md bg-red-50 text-red-500 group-hover:bg-red-100 transition-colors duration-300">
+                <LogOut className="h-4 w-4" />
+              </div>
+              <span className="font-medium">Logout</span>
+            </Button>
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
+
+        {/* Main content area */}
+        <ResizablePanel defaultSize={78} minSize={70} maxSize={85} className="bg-[hsl(var(--background))] h-screen flex flex-col">
+          {/* Main content header with breadcrumb */}
+        
+          
+          {/* Main content with independent scrolling */}
+          <ScrollArea className="flex-1 thin-scrollbar">
+            <div className="p-6">
+              {/* Conditional rendering based on selected navigation item */}
+              {selectedNav === "Dashboard" && <DashboardOverview />}
+              {selectedNav === "Tasks" && <TaskManager /> }
+              {selectedNav === "Notes" && <NotesBoard />}
+              {selectedNav === "Pomodoro" && <PomodoroTimer />}
+              {selectedNav === "Calendar" && <Calendar />}
+              {selectedNav === "Meetings" && <Meetings />}
+              {selectedNav === "Settings" && <Settings />}
+              {selectedNav === "Profile" && <Profile />}
+              {selectedNav === "Help" && <Help />}
+            </div>
+          </ScrollArea>
+        </ResizablePanel>
+      </ResizablePanelGroup>
+    </NotificationsProvider>
   );
 }
 

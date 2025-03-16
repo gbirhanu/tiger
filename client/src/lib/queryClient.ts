@@ -154,9 +154,9 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: true,
-      staleTime: 0, // Set to 0 to ensure immediate updates
-      gcTime: 1000 * 60 * 10, // 10 minutes garbage collection time (formerly cacheTime)
-      refetchOnMount: true, // Refetch when component mounts
+      staleTime: 0, // Keep at 0 to ensure immediate updates
+      gcTime: 1000 * 60 * 10, // 10 minutes garbage collection time
+      refetchOnMount: true, // Always refetch when component mounts
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors up to 2 times
         if (error?.message?.includes('401')) {
@@ -165,9 +165,22 @@ export const queryClient = new QueryClient({
           return false;
         }
         return failureCount < 2;
-      }
+      },
+      // ADDED: Force consistent structuring of query data
+      structuralSharing: false
     },
     mutations: {
+      // ADDED: Automatically cancel related queries before mutation
+      onMutate: async (variables) => {
+        console.log('Global mutation handler - canceling related queries');
+        // This is a fallback - specific mutations should define their own onMutate
+        return {};
+      },
+      // ADDED: Always invalidate related queries after mutation
+      onSettled: (data, error, variables, context) => {
+        console.log('Global mutation settled - invalidating queries');
+        // This is a fallback - specific mutations should handle their own invalidation
+      },
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors once
         if (error?.message?.includes('401')) {
@@ -191,6 +204,17 @@ window.addEventListener('focus', () => {
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
 });
 
+// ADDED: Add a global visibility change handler to refresh data when tab becomes visible
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    console.log('Tab became visible - refreshing critical data');
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+  }
+});
+
 // Add a global error handler for unhandled errors
 window.addEventListener('unhandledrejection', (event) => {
   const error = event.reason;
@@ -205,4 +229,9 @@ window.addEventListener('unhandledrejection', (event) => {
 export function resetQueryCache() {
   console.log('Resetting query cache');
   queryClient.clear();
+}
+
+// ADDED: Helper function to create deep copies of objects to avoid reference issues
+export function deepCopy<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj));
 }

@@ -2,11 +2,11 @@ import { useState, useEffect } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card';
+import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '../ui/card';
 import { Label } from '../ui/label';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert';
 import { Separator } from '../ui/separator';
-import { Loader2 } from 'lucide-react';
+import { Loader2, Mail, Lock, AlertCircle } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
 
 declare global {
@@ -129,51 +129,74 @@ export function LoginForm() {
   };
 
   return (
-    <Card className="w-[350px]">
-      <CardHeader>
-        <CardTitle>Login</CardTitle>
-        <CardDescription>Enter your email and password to continue</CardDescription>
+    <Card className="w-[400px] shadow-lg border-muted/30">
+      <CardHeader className="space-y-2 pb-4">
+        
+        <CardTitle className="text-2xl font-bold text-center bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">Welcome Back</CardTitle>
+        <CardDescription className="text-center">Enter your credentials to access your account</CardDescription>
       </CardHeader>
       <CardContent>
         <form onSubmit={handleSubmit} className="space-y-4">
           {(error || localError) && (
-            <Alert variant="destructive">
+            <Alert variant="destructive" className="animate-in fade-in-50">
+              <AlertCircle className="h-4 w-4" />
               <AlertTitle>Login Failed</AlertTitle>
               <AlertDescription>{localError || error}</AlertDescription>
             </Alert>
           )}
           
           {loginStatus === 'success' && (
-            <Alert className="bg-green-50 border-green-500 text-green-700">
+            <Alert className="bg-green-50 border-green-500 text-green-700 animate-in fade-in-50">
               <AlertTitle>Login Successful</AlertTitle>
-              <AlertDescription>You have been logged in successfully. Redirecting you to the dashboard...</AlertDescription>
+              <AlertDescription>You have been logged in successfully. Redirecting...</AlertDescription>
             </Alert>
           )}
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-              required
-              placeholder="Enter your email"
-            />
+            <Label htmlFor="email" className="text-sm font-medium">
+              Email
+            </Label>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+                <Mail className="h-4 w-4" />
+              </div>
+              <Input
+                id="email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                required
+                placeholder="Enter your email"
+                className="pl-10 focus-visible:ring-primary"
+              />
+            </div>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              placeholder="Enter your password"
-            />
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password" className="text-sm font-medium">
+                Password
+              </Label>
+              <a href="#" className="text-xs text-primary hover:underline">
+                Forgot password?
+              </a>
+            </div>
+            <div className="relative">
+              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+                <Lock className="h-4 w-4" />
+              </div>
+              <Input
+                id="password"
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                required
+                placeholder="Enter your password"
+                className="pl-10 focus-visible:ring-primary"
+              />
+            </div>
           </div>
           <Button 
             type="submit" 
-            className="w-full" 
+            className="w-full bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 transition-all duration-300 shadow-md" 
             disabled={isLoading || loginStatus === 'loading'}
           >
             {isLoading || loginStatus === 'loading' ? (
@@ -181,27 +204,29 @@ export function LoginForm() {
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Logging in...
               </>
-            ) : 'Login'}
+            ) : 'Sign In'}
           </Button>
 
-          <div className="relative my-4">
+          <div className="relative my-6">
             <Separator />
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="bg-white px-2 text-gray-500 text-sm">Or continue with</span>
+              <span className="bg-card px-2 text-muted-foreground text-sm">Or continue with</span>
             </div>
           </div>
           
-          <div id="googleButton" className="w-full"></div>
+          <div id="googleButton" className="w-full h-10"></div>
           
-          {/* Debug information - only shown in development */}
-          {import.meta.env.DEV && (
-            <div className="mt-4 p-2 bg-gray-100 rounded text-xs">
-              <p>Login Status: {loginStatus}</p>
-              <p>Is Loading: {isLoading ? 'true' : 'false'}</p>
-            </div>
-          )}
+          
         </form>
       </CardContent>
+      <CardFooter className="flex justify-center border-t p-4">
+        <p className="text-sm text-muted-foreground">
+          Don't have an account?{" "}
+          <a href="#register" className="text-primary hover:underline font-medium">
+            Create account
+          </a>
+        </p>
+      </CardFooter>
     </Card>
   );
 }

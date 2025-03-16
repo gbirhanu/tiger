@@ -44,8 +44,9 @@ import {
 } from "@/components/ui/tooltip";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { useToast } from "@/hooks/use-toast";
+import { useNotifications } from "@/hooks/use-notifications";
 import { cn } from "@/lib/utils";
-import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
+import { queryClient, QUERY_KEYS, deepCopy } from "@/lib/queryClient";
 import {
   getTasks,
   createTask,
@@ -86,7 +87,8 @@ import {
 import { formatDate, getNow } from "@/lib/timezone";
 import { format } from "date-fns";
 import { Task, Subtask, NewTask } from "@shared/schema";
-import { TimeSelect } from "./TimeSelect"
+import { TimeSelect } from "./TimeSelect";
+import { createReminderMessage, TaskForReminder } from "@/lib/taskReminders";
 // Import the schema from shared
 const insertTaskSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -317,17 +319,71 @@ const formatDueDate = (timestamp: number | Date | null): string => {
   }
 };
 
+// Helper function to safely update FormData
+const updateFormData = (prev: FormData | null, updates: Partial<FormData>): FormData | null => {
+  if (!prev) return null;
+  return {
+    title: prev.title,
+    description: prev.description,
+    priority: prev.priority,
+    completed: prev.completed,
+    due_date: prev.due_date,
+    is_recurring: prev.is_recurring,
+    recurrence_pattern: prev.recurrence_pattern,
+    recurrence_interval: prev.recurrence_interval,
+    recurrence_end_date: prev.recurrence_end_date,
+    ...updates
+  };
+};
+
+// Helper function to convert tasks to the right format for the notification system
+const convertTaskForNotifications = (task: any) => {
+  // Ensure due_date is a Unix timestamp (seconds since epoch)
+  let dueDate = null;
+  if (task.due_date) {
+    // If it's a Date object, convert to Unix timestamp
+    if (task.due_date instanceof Date) {
+      dueDate = Math.floor(task.due_date.getTime() / 1000);
+    } 
+    // If it's already a number (timestamp), ensure it's in seconds
+    else if (typeof task.due_date === 'number') {
+      // If timestamp is in milliseconds (13 digits), convert to seconds
+      dueDate = task.due_date > 10000000000 ? Math.floor(task.due_date / 1000) : task.due_date;
+    }
+    // If it's a string, try to parse it
+    else if (typeof task.due_date === 'string') {
+      try {
+        dueDate = Math.floor(new Date(task.due_date).getTime() / 1000);
+      } catch (e) {
+        console.error("Error parsing due_date:", e);
+      }
+    }
+  }
+
+  return {
+    id: String(task.id),
+    title: task.title,
+    description: task.description || null,
+    due_date: dueDate,
+    priority: task.priority,
+    completed: Boolean(task.completed), // Ensure it's a boolean
+    user_id: task.user_id,
+    created_at: task.created_at,
+    updated_at: task.updated_at
+  };
+};
+
 export default function TaskManager() {
   const { toast } = useToast();
-  // Replace useAuth with hardcoded user object
+  const { addNotification, checkTaskReminders } = useNotifications();
   const user = { id: 2 }; // Use the authenticated user ID from the error message
   const [date, setDate] = useState<Date | null>(null);
   const [showAddTask, setShowAddTask] = useState(false);
   const [editingTask, setEditingTask] = useState<number | null>(null);
-  const [editForm, setEditForm] = useState<Partial<FormData> | null>(null);
+  const [editForm, setEditForm] = useState<FormData | null>(null);
   const [showSubtasks, setShowSubtasks] = useState(false);
   const [selectedTask, setSelectedTask] = useState<TaskWithSubtasks | null>(null);
-  const [editedSubtasks, setEditedSubtasks] = useState<Array<{ title: string; completed: boolean }>>([]);
+  const [editedSubtasks, setEditedSubtasks] = useState<Subtask[]>([]);
   const [isGenerating, setIsGenerating] = useState(false);
   const [generatedSubtasks, setGeneratedSubtasks] = useState<string[]>([]);
   const [searchTerm, setSearchTerm] = useState("");
@@ -335,6 +391,12 @@ export default function TaskManager() {
   const [priorityFilter, setPriorityFilter] = useState<PriorityFilter>('all');
   const [dueDateFilter, setDueDateFilter] = useState<DueDateFilter>('all');
   const [sortOrder, setSortOrder] = useState<SortOrder>('none');
+  const [activePage, setActivePage] = useState(1);
+  const [overduePage, setOverduePage] = useState(1);
+  const [completedPage, setCompletedPage] = useState(1);
+  const [tasksPerPage, setTasksPerPage] = useState(5);
+  const [showFilters, setShowFilters] = useState(false);
+  const [forceUpdate, setForceUpdate] = useState(0); // Add this state variable to force re-renders
   
   // Add state variables to control popover open states
   const [editDatePickerOpen, setEditDatePickerOpen] = useState(false);
@@ -345,12 +407,6 @@ export default function TaskManager() {
   // const [currentPage, setCurrentPage] = useState(1);
   const [hasSubtasks, setHasSubtasks] = useState<Record<number, boolean>>({});
   
-  // Add separate pagination state for each task type
-  const [activePage, setActivePage] = useState(1);
-  const [overduePage, setOverduePage] = useState(1);
-  const [completedPage, setCompletedPage] = useState(1);
-  const tasksPerPage = 5; // Number of tasks to show per page
-
   const form = useForm<FormData>({
     resolver: zodResolver(insertTaskSchema),
     defaultValues: {
@@ -382,6 +438,21 @@ export default function TaskManager() {
     queryKey: [QUERY_KEYS.TASKS],
     queryFn: getTasks,
   });
+
+  // Check for task reminders whenever tasks change
+  useEffect(() => {
+    if (tasks && Array.isArray(tasks)) {
+      try {
+        // Format tasks for the notification system using the helper function
+        const formattedTasks = tasks.map(convertTaskForNotifications);
+        
+        // Check for tasks that need reminders
+        checkTaskReminders(formattedTasks);
+      } catch (error) {
+        console.error("Error checking task reminders:", error);
+      }
+    }
+  }, [tasks, checkTaskReminders]);
 
   useEffect(() => {
     if (tasksError) {
@@ -421,9 +492,22 @@ export default function TaskManager() {
     onMutate: async (newTask) => {
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       
       // Snapshot the previous value
       const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Convert due_date to timestamp if it exists
+      let dueTimestamp: number | null = null;
+      if (newTask.due_date) {
+        // Check if due_date is already a number
+        if (typeof newTask.due_date === 'number') {
+          dueTimestamp = newTask.due_date;
+        } else {
+          // Only call ensureUnixTimestamp if it's a Date object
+          dueTimestamp = ensureUnixTimestamp(newTask.due_date as Date);
+        }
+      }
       
       // Create an optimistic task with a temporary ID
       const optimisticTask = {
@@ -433,18 +517,16 @@ export default function TaskManager() {
         description: newTask.description || null,
         priority: newTask.priority as "low" | "medium" | "high",
         completed: false,
-        // Convert Date to timestamp directly
-        due_date: typeof newTask.due_date === 'number' 
-          ? newTask.due_date 
-          : null,
+        due_date: dueTimestamp,
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000),
         subtasks: [] as Subtask[],
         has_subtasks: false
       } as TaskWithSubtasks;
       
-      // Optimistically update the tasks list
-      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], [...previousTasks, optimisticTask]);
+      // Optimistically update the tasks list - create a deep copy to avoid reference issues
+      const updatedTasks = deepCopy(previousTasks);
+      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], [...updatedTasks, optimisticTask]);
       
       // Return the context
       return { previousTasks };
@@ -460,13 +542,33 @@ export default function TaskManager() {
         description: error instanceof Error ? error.message : "An unknown error occurred",
       });
     },
-    onSuccess: () => {
+    onSuccess: (newTask) => {
+      console.log("Task created successfully:", newTask);
+      
+      // Get the current tasks from the cache
+      const tasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      
+      // Filter out any optimistic tasks with negative IDs
+      const filteredTasks = tasks.filter(task => task.id > 0);
+      
+      // Add the new task from the server
+      const updatedTasks = [...filteredTasks, { ...newTask, subtasks: [] }];
+      
+      // Update the cache with the server data
+      queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+      
+      // Invalidate queries to ensure consistency
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+      
+      // Force a re-render
+      setForceUpdate((prev: number) => prev + 1);
+      
       toast({
         title: "Task created",
         description: "Your task has been created successfully.",
       });
       form.reset();
-      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
     },
   });
 
@@ -477,12 +579,13 @@ export default function TaskManager() {
       
       // CRITICAL FIX: Cancel ALL related queries to prevent race conditions
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       
       // Snapshot the previous tasks for potential rollback
       const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
       
-      // Create a deep copy to avoid reference issues
-      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      // Create a deep copy to avoid reference issues - use the deepCopy helper
+      const updatedTasks = deepCopy(previousTasks);
       
       // Find the task to update
       const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === updatedTask.id);
@@ -496,7 +599,9 @@ export default function TaskManager() {
           ...updatedTasks[taskIndex],
           ...updatedTask,
           // Ensure completed is properly set as a boolean
-          completed: newCompleted
+          completed: newCompleted,
+          // Add updated_at timestamp for optimistic update
+          updated_at: Math.floor(Date.now() / 1000)
         };
         
         console.log(`Updated task ${updatedTask.id} completed status: ${oldCompleted} -> ${newCompleted}`);
@@ -523,6 +628,9 @@ export default function TaskManager() {
         // CRITICAL FIX: Immediately update the UI with optimistic update
         console.log("Immediately updating UI with optimistic task update");
         queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+        
+        // ADDED: Force a re-render by setting a state variable
+        setForceUpdate((prev: number) => prev + 1);
       }
       
       // Return the context for potential rollback
@@ -546,13 +654,15 @@ export default function TaskManager() {
     onSuccess: (data, variables) => {
       console.log("Task updated successfully:", variables);
       
-      // IMPORTANT: Do NOT invalidate the query here which would cause a refetch
-      // and override our optimistic update. Instead, update the local cache.
+      // Get the current tasks from the cache
       const tasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
       const taskIndex = tasks.findIndex(t => t.id === variables.id);
       
       if (taskIndex !== -1) {
-        const updatedTasks = [...tasks];
+        // Create a deep copy to avoid reference issues
+        const updatedTasks = deepCopy(tasks);
+        
+        // Update the task with the server response data
         updatedTasks[taskIndex] = {
           ...updatedTasks[taskIndex],
           // Merge server data with our local data
@@ -564,7 +674,15 @@ export default function TaskManager() {
         
         // Update with server data
         queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
+        
+        // ADDED: Force a re-render by setting a state variable
+        setForceUpdate((prev: number) => prev + 1);
       }
+      
+      // ADDED: Invalidate queries to ensure consistency with server
+      // This is important for related data that might have changed
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       
       toast({
         title: "Task updated",
@@ -580,12 +698,14 @@ export default function TaskManager() {
       
       // Cancel any outgoing refetches to prevent them from overwriting our optimistic update
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
       
       // Snapshot the previous tasks for potential rollback
       const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
+      const previousTasksWithSubtasks = queryClient.getQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS]) || [];
       
       // Create a deep copy to avoid reference issues
-      const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
+      const updatedTasks = deepCopy(previousTasks);
       
       // Filter out the task to be deleted and any child tasks
       const filteredTasks = updatedTasks.filter((task: TaskWithSubtasks) => {
@@ -596,7 +716,7 @@ export default function TaskManager() {
       queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], filteredTasks);
       
       // Also update tasks-with-subtasks if the task had subtasks
-      const tasksWithSubtasks = queryClient.getQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS]) || [];
+      const tasksWithSubtasks = deepCopy(previousTasksWithSubtasks);
       if (tasksWithSubtasks.includes(taskId)) {
         queryClient.setQueryData<number[]>(
           [QUERY_KEYS.TASKS_WITH_SUBTASKS],
@@ -605,7 +725,7 @@ export default function TaskManager() {
       }
       
       // Return the context for potential rollback
-      return { previousTasks };
+      return { previousTasks, previousTasksWithSubtasks };
     },
     onError: (error, taskId, context) => {
       console.error("Error deleting task:", error);
@@ -613,6 +733,10 @@ export default function TaskManager() {
       // Roll back to the previous state if there was an error
       if (context?.previousTasks) {
         queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], context.previousTasks);
+      }
+      
+      if (context?.previousTasksWithSubtasks) {
+        queryClient.setQueryData<number[]>([QUERY_KEYS.TASKS_WITH_SUBTASKS], context.previousTasksWithSubtasks);
       }
       
       toast({
@@ -624,10 +748,13 @@ export default function TaskManager() {
     onSuccess: (_, taskId) => {
       console.log("Task deleted successfully:", taskId);
       
-      // We don't need to invalidate the queries here since we've already updated the cache
-      // But we'll still invalidate to ensure consistency with the server
+      // We've already updated the cache optimistically, but we'll still invalidate
+      // to ensure consistency with the server for any related data
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+      
+      // Force a re-render
+      setForceUpdate((prev: number) => prev + 1);
       
       toast({
         title: "Task deleted",
@@ -661,7 +788,22 @@ export default function TaskManager() {
       console.log('Sending task data to API:', JSON.stringify(taskData));
 
       // Use the mutation with type assertion to bypass the type error
-      await createTaskMutation.mutateAsync(taskData as any);
+      const newTask = await createTaskMutation.mutateAsync(taskData as any);
+      
+      // Check for task reminders after creating a new task
+      if (newTask) {
+        // Convert task to the right format for the notification system
+        const formattedTask = convertTaskForNotifications({
+          ...newTask,
+          completed: false
+        });
+        
+        try {
+          checkTaskReminders([formattedTask]);
+        } catch (error) {
+          console.error("Error checking task reminders:", error);
+        }
+      }
       
       // Additional UI cleanup
       setShowAddTask(false);
@@ -676,47 +818,18 @@ export default function TaskManager() {
   };
 
   const startEditing = (task: TaskWithSubtasks) => {
-    console.log('Starting edit for task:', task);
     setEditingTask(task.id);
     
-    // Safely create Date objects from timestamps
+    // Convert Unix timestamp to Date object for the form
     let dueDate: Date | null = null;
-    let recurrenceEndDate: Date | null = null;
+    if (task.due_date) {
+      dueDate = new Date(task.due_date * 1000);
+    }
     
-    try {
-      if (task.due_date) {
-        const timestamp = Number(task.due_date);
-        console.log("Raw due_date value:", task.due_date, "converted to number:", timestamp);
-        if (!isNaN(timestamp)) {
-          // Handle potential different timestamp formats
-          if (timestamp < 10000000000) {
-            // Unix timestamp (seconds)
-            dueDate = new Date(timestamp * 1000);
-          } else {
-            // JavaScript timestamp (milliseconds)
-            dueDate = new Date(timestamp);
-          }
-          console.log("Converted due_date to Date:", dueDate.toISOString());
-        }
-      }
-      
-      if (task.recurrence_end_date) {
-        const timestamp = Number(task.recurrence_end_date);
-        console.log("Raw recurrence_end_date value:", task.recurrence_end_date, "converted to number:", timestamp);
-        if (!isNaN(timestamp)) {
-          // Handle potential different timestamp formats
-          if (timestamp < 10000000000) {
-            // Unix timestamp (seconds)
-            recurrenceEndDate = new Date(timestamp * 1000);
-          } else {
-            // JavaScript timestamp (milliseconds)
-            recurrenceEndDate = new Date(timestamp);
-          }
-          console.log("Converted recurrence_end_date to Date:", recurrenceEndDate.toISOString());
-        }
-      }
-    } catch (error) {
-      console.error("Error converting timestamps to dates:", error);
+    // Convert Unix timestamp to Date object for recurrence end date
+    let recurrenceEndDate: Date | null = null;
+    if (task.recurrence_end_date) {
+      recurrenceEndDate = new Date(task.recurrence_end_date * 1000);
     }
     
     console.log("Created date objects:", { dueDate, recurrenceEndDate });
@@ -725,6 +838,7 @@ export default function TaskManager() {
       title: task.title || "",
       description: task.description || "",
       priority: task.priority as "low" | "medium" | "high",
+      completed: task.completed, // Add the completed field
       due_date: dueDate,
       is_recurring: task.is_recurring || false,
       recurrence_pattern: task.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly" | null,
@@ -760,16 +874,31 @@ export default function TaskManager() {
         ...updateData,
       });
 
-      setEditForm({
-        title: "",
-        description: null,
-        priority: "medium",
-        due_date: null,
-        is_recurring: false,
-        recurrence_pattern: null,
-        recurrence_interval: null,
-        recurrence_end_date: null,
-      });
+      // Force a re-render
+      setForceUpdate((prev: number) => prev + 1);
+
+      // Check for task reminders after updating a task
+      if (tasks && Array.isArray(tasks)) {
+        // Find the updated task
+        const updatedTask = tasks.find(task => task.id === taskId);
+        if (updatedTask) {
+          // Convert task to the right format for the notification system
+          const formattedTask = convertTaskForNotifications({
+            ...updatedTask,
+            ...updateData,
+            completed: editForm.completed
+          });
+          
+          try {
+            checkTaskReminders([formattedTask]);
+          } catch (error) {
+            console.error("Error checking task reminders:", error);
+          }
+        }
+      }
+
+      // Reset the edit form
+      setEditForm(null);
     } catch (error) {
       console.error('Error updating task:', error);
       toast({
@@ -781,75 +910,123 @@ export default function TaskManager() {
   };
 
   const generateSubtasks = async (task: TaskWithSubtasks) => {
+    setSelectedTask(task);
+    setShowSubtasks(true);
+    setIsGenerating(false);
+    
     try {
-      setSelectedTask(task);
-      setIsGenerating(true);
-      setShowSubtasks(true);
-
+      // First, try to fetch existing subtasks
       const existingSubtasks = await getSubtasks(task.id);
-      console.log('Existing subtasks:', existingSubtasks);
       
       if (existingSubtasks && Array.isArray(existingSubtasks) && existingSubtasks.length > 0) {
         setEditedSubtasks(existingSubtasks.map(subtask => ({
+          id: subtask.id,
+          user_id: subtask.user_id,
+          task_id: subtask.task_id,
           title: subtask.title,
-          completed: subtask.completed
+          completed: subtask.completed,
+          position: subtask.position,
+          created_at: subtask.created_at,
+          updated_at: subtask.updated_at
         })));
       } else {
         const prompt = `
           Generate 5 clear and simple subtasks for this task. Each subtask should be a single, actionable item.
-          Do not create nested lists or sublists. Each line should be an independent task.
-
-          Main Task: ${task.title}
+          
+          Task: ${task.title}
           ${task.description ? `Description: ${task.description}` : ''}
-          Priority: ${task.priority}
-          ${task.due_date ? `Due Date: ${
-            safeFormatDate(task.due_date)
-          }` : ''}
+          
+          Return the subtasks as a JSON array of strings removing any formatting.
         `;
         
-        console.log('Sending prompt to generate subtasks:', prompt);
+        setIsGenerating(true);
         
-        const response = await generateSubtasksApi(prompt);
-        console.log('Received response from API:', response);
-
-        if (response && Array.isArray(response.subtasks)) {
-          const processedSubtasks = response.subtasks
-            .map(s => typeof s === 'string' ? s.trim() : '')
-            .filter(s => s.length > 0)
-            .map(title => ({
-              title: title.replace(/^[-*\d.]\s*/, ''),
-              completed: false
+        try {
+          const response = await generateSubtasksApi(prompt);
+          setIsGenerating(false);
+          
+          if (response && Array.isArray(response.subtasks)) {
+            const processedSubtasks = response.subtasks.map((subtask, index) => ({
+              id: -Date.now() - index, // Temporary negative ID
+              user_id: task.user_id,
+              task_id: task.id,
+              title: subtask,
+              completed: false,
+              position: index,
+              created_at: Math.floor(Date.now() / 1000),
+              updated_at: Math.floor(Date.now() / 1000)
             }));
-
-          console.log('Processed subtasks:', processedSubtasks);
-          setEditedSubtasks(processedSubtasks);
-        } else if (response && typeof response.subtasks === 'string') {
-          const subtasksArray = response.subtasks
-            .split('\n')
-            .map(s => s.trim())
-            .filter(s => s.length > 0)
-            .map(title => ({
-              title: title.replace(/^[-*\d.]\s*/, ''),
-              completed: false
-            }));
-
-          console.log('Processed string subtasks:', subtasksArray);
-          setEditedSubtasks(subtasksArray);
-        } else {
-          throw new Error("Invalid response format from subtasks generation");
+            
+            console.log('Processed subtasks:', processedSubtasks);
+            setEditedSubtasks(processedSubtasks);
+          } else if (response && typeof response.subtasks === 'string') {
+            const subtasksArray = response.subtasks
+              .split('\n')
+              .filter(line => line.trim().length > 0)
+              .map((line, index) => ({
+                id: -Date.now() - index, // Temporary negative ID
+                user_id: task.user_id,
+                task_id: task.id,
+                title: line.replace(/^[-*•\d.]+\s*/, '').trim(),
+                completed: false,
+                position: index,
+                created_at: Math.floor(Date.now() / 1000),
+                updated_at: Math.floor(Date.now() / 1000)
+              }));
+            
+            console.log('Processed string subtasks:', subtasksArray);
+            setEditedSubtasks(subtasksArray);
+          } else {
+            throw new Error("Invalid response format from subtasks generation");
+          }
+        } catch (error) {
+          console.error('Error generating subtasks:', error);
+          setIsGenerating(false);
+          
+          // If generation fails, create empty subtasks
+          setEditedSubtasks([
+            {
+              id: -Date.now() - 1,
+              user_id: task.user_id,
+              task_id: task.id,
+              title: "",
+              completed: false,
+              position: 0,
+              created_at: Math.floor(Date.now() / 1000),
+              updated_at: Math.floor(Date.now() / 1000)
+            }
+          ]);
+          
+          toast({
+            variant: "destructive",
+            title: "Error generating subtasks",
+            description: error instanceof Error ? error.message : "An unknown error occurred",
+          });
         }
       }
     } catch (error) {
-      console.error('Error generating subtasks:', error);
+      console.error('Error fetching subtasks:', error);
+      setIsGenerating(false);
+      
+      // If fetching fails, create empty subtasks
+      setEditedSubtasks([
+        {
+          id: -Date.now(),
+          user_id: task.user_id,
+          task_id: task.id,
+          title: "",
+          completed: false,
+          position: 0,
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000)
+        }
+      ]);
+      
       toast({
         variant: "destructive",
-        title: "Failed to generate subtasks",
-        description: error instanceof Error ? error.message : "An error occurred while generating subtasks.",
+        title: "Error fetching subtasks",
+        description: error instanceof Error ? error.message : "An unknown error occurred",
       });
-      setEditedSubtasks([]);
-      setShowSubtasks(true);
-    } finally {
-      setIsGenerating(false);
     }
   };
 
@@ -1004,20 +1181,20 @@ export default function TaskManager() {
         <div className="flex-1 space-y-3">
           <Input
             value={editForm.title}
-            onChange={(e) => setEditForm(prev => ({ ...prev, title: e.target.value }))}
+            onChange={(e) => setEditForm(prev => updateFormData(prev, { title: e.target.value }))}
             className="font-medium w-full bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md focus:ring-2 focus:ring-primary focus:border-transparent"
             placeholder="Task title"
           />
           <Input
             value={editForm.description || ""}
-            onChange={(e) => setEditForm(prev => ({ ...prev, description: e.target.value || null }))}
+            onChange={(e) => setEditForm(prev => updateFormData(prev, { description: e.target.value || null }))}
             className="text-sm w-full bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md focus:ring-2 focus:ring-primary focus:border-transparent"
             placeholder="Description"
           />
           <div className="flex flex-col gap-3">
             <Select
               value={editForm.priority}
-              onValueChange={(value) => setEditForm(prev => ({ ...prev, priority: value as "low" | "medium" | "high" }))}
+              onValueChange={(value) => setEditForm(prev => updateFormData(prev, { priority: value as "low" | "medium" | "high" }))}
             >
               <SelectTrigger className="w-full bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md">
                 <SelectValue />
@@ -1048,7 +1225,7 @@ export default function TaskManager() {
                     selected={editForm.due_date || undefined}
                     onSelect={(date) => {
                       console.log("Selected date in edit form:", date);
-                      setEditForm(prev => ({ ...prev, due_date: date }));
+                      setEditForm(prev => updateFormData(prev, { due_date: date }));
                     }}
                     initialFocus
                   />
@@ -1056,7 +1233,7 @@ export default function TaskManager() {
                     <TimeSelect
                       value={editForm.due_date}
                       onChange={(newDate) => {
-                        setEditForm(prev => ({ ...prev, due_date: newDate }));
+                        setEditForm(prev => updateFormData(prev, { due_date: newDate }));
                       }}
                       onComplete={() => {
                         setEditDatePickerOpen(false);
@@ -1074,13 +1251,12 @@ export default function TaskManager() {
                   onCheckedChange={(checked) => {
                     setEditForm(prev => {
                       if (!prev) return prev;
-                      return {
-                        ...prev,
+                      return updateFormData(prev, {
                         is_recurring: checked,
                         recurrence_pattern: checked ? prev.recurrence_pattern || "weekly" : null,
                         recurrence_interval: checked ? prev.recurrence_interval || 1 : null,
                         recurrence_end_date: checked ? prev.recurrence_end_date || null : null,
-                      };
+                      });
                     });
                   }}
                 >
@@ -1105,16 +1281,14 @@ export default function TaskManager() {
                         min="1"
                         placeholder="1"
                         value={editForm.recurrence_interval || ""}
-                        onChange={(e) => setEditForm(prev => ({
-                          ...prev,
+                        onChange={(e) => setEditForm(prev => updateFormData(prev, {
                           recurrence_interval: parseInt(e.target.value) || 1
                         }))}
                         className="w-[80px] bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
                       />
                       <Select
                         value={editForm.recurrence_pattern || "weekly"}
-                        onValueChange={(value) => setEditForm(prev => ({
-                          ...prev,
+                        onValueChange={(value) => setEditForm(prev => updateFormData(prev, {
                           recurrence_pattern: value as "daily" | "weekly" | "monthly" | "yearly"
                         }))}
                       >
@@ -1154,10 +1328,7 @@ export default function TaskManager() {
                           mode="single"
                           selected={editForm.recurrence_end_date || undefined}
                           onSelect={(date) => {
-                            setEditForm((prev) => ({
-                              ...prev,
-                              recurrence_end_date: date,
-                            }));
+                            setEditForm((prev) => updateFormData(prev, { recurrence_end_date: date }));
                             if (!date) {
                               setRecurrenceEndDatePickerOpen(false);
                             }
@@ -1570,29 +1741,39 @@ export default function TaskManager() {
     );
   };
 
+  // Process tasks to add subtask information
   const processedTasks = useMemo(() => {
     if (!tasks) return [];
     
-    return tasks.map((task): TaskWithSubtasks => {
-      // Cast the task properties to the correct types
-      const typedTask: TaskWithSubtasks = {
+    // Create a map of task IDs to their subtasks
+    const taskSubtasksMap = new Map<number, Subtask[]>();
+    
+    // Process tasks to include subtask information
+    return tasks.map(task => {
+      const hasSubtasks = tasksWithSubtasksIds?.includes(task.id) || false;
+      const subtasks: Subtask[] = []; // We'll populate this if needed
+      
+      return {
         ...task,
-        priority: task.priority as "low" | "medium" | "high",
-        recurrence_pattern: task.recurrence_pattern || null,
-        has_subtasks: tasksWithSubtasksIds ? tasksWithSubtasksIds.includes(task.id) : false,
-        subtasks: []
+        subtasks,
+        has_subtasks: hasSubtasks,
+        completed_subtasks: 0,
+        total_subtasks: 0
       };
-      return typedTask;
     });
-  }, [tasks, tasksWithSubtasksIds]);
+  }, [tasks, tasksWithSubtasksIds, forceUpdate]); // Add forceUpdate as a dependency
 
   const completedTasks = useMemo(() => 
-    processedTasks.filter(task => task.completed),
-  [processedTasks]);
+    getCompletedTasks(filterTasks(processedTasks)),
+  [filterTasks, processedTasks, forceUpdate]);
 
-  const incompleteTasks = useMemo(() => 
-    processedTasks.filter(task => !task.completed),
-  [processedTasks]);
+  const activeTasks = useMemo(() => 
+    getActiveTasks(filterTasks(processedTasks)),
+  [filterTasks, processedTasks, forceUpdate]);
+
+  const overdueTasks = useMemo(() => 
+    getOverdueTasks(filterTasks(processedTasks)),
+  [filterTasks, processedTasks, forceUpdate]);
 
   const filteredTasks = useMemo(() => {
     if (searchTerm.length === 0) return processedTasks;
@@ -1603,15 +1784,79 @@ export default function TaskManager() {
         task.title.toLowerCase().includes(searchLower) ||
         (task.description && task.description.toLowerCase().includes(searchLower))
     );
-  }, [processedTasks, searchTerm]);
+  }, [processedTasks, searchTerm, forceUpdate]);
 
   const filteredCompletedTasks = useMemo(() => 
     filteredTasks.filter((task) => task.completed),
-  [filteredTasks]);
+  [filteredTasks, forceUpdate]);
 
   const filteredIncompleteTasks = useMemo(() => 
     filteredTasks.filter((task) => !task.completed),
-  [filteredTasks]);
+  [filteredTasks, forceUpdate]);
+
+  const handleSubtaskChange = (index: number, value: string) => {
+    const newSubtasks = [...editedSubtasks];
+    if (newSubtasks[index]) {
+      newSubtasks[index] = {
+        ...newSubtasks[index],
+        title: value
+      };
+      setEditedSubtasks(newSubtasks);
+    }
+  };
+
+  const handleSubtaskToggle = (index: number) => {
+    const newSubtasks = [...editedSubtasks];
+    if (newSubtasks[index]) {
+      newSubtasks[index] = {
+        ...newSubtasks[index],
+        completed: !newSubtasks[index].completed
+      };
+      setEditedSubtasks(newSubtasks);
+    }
+  };
+
+  const handleSubtaskDelete = (index: number) => {
+    const newSubtasks = [...editedSubtasks];
+    newSubtasks.splice(index, 1);
+    setEditedSubtasks(newSubtasks);
+  };
+
+  const SubtaskItem = ({ subtask, onToggle, onDelete }: { 
+    subtask: { 
+      id: number; 
+      user_id: number; 
+      task_id: number; 
+      title: string; 
+      completed: boolean; 
+      position: number;
+      created_at: number;
+      updated_at: number;
+    }; 
+    onToggle: () => void; 
+    onDelete: () => void 
+  }) => {
+    return (
+      <div className="flex items-center gap-2 py-1">
+        <Checkbox
+          checked={subtask.completed}
+          onCheckedChange={onToggle}
+          className="data-[state=checked]:bg-green-500 data-[state=checked]:text-white"
+        />
+        <span className={cn("flex-1", subtask.completed && "line-through text-muted-foreground")}>
+          {subtask.title}
+        </span>
+        <Button
+          variant="ghost"
+          size="icon"
+          onClick={onDelete}
+          className="h-6 w-6 text-destructive hover:text-destructive hover:bg-destructive/10"
+        >
+          <Trash2 className="h-3 w-3" />
+        </Button>
+      </div>
+    );
+  };
 
   if (isLoading) {
     return (
@@ -2349,7 +2594,7 @@ export default function TaskManager() {
                           >
                             {editedSubtasks.map((subtask, index) => (
                               <Draggable
-                                key={index}
+                                key={subtask.id || `new-${index}`}
                                 draggableId={`subtask-${index}`}
                                 index={index}
                               >
@@ -2365,36 +2610,11 @@ export default function TaskManager() {
                                     >
                                       <GripVertical className="h-4 w-4" />
                                     </div>
-                                    <Checkbox
-                                      checked={subtask.completed}
-                                      onCheckedChange={(checked) => {
-                                        const newSubtasks = [...editedSubtasks];
-                                        newSubtasks[index].completed = checked as boolean;
-                                        setEditedSubtasks(newSubtasks);
-                                      }}
-                                      className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
+                                    <SubtaskItem
+                                      subtask={subtask}
+                                      onToggle={() => handleSubtaskToggle(index)}
+                                      onDelete={() => handleSubtaskDelete(index)}
                                     />
-                                    <Input
-                                      value={subtask.title}
-                                      onChange={(e) => {
-                                        const newSubtasks = [...editedSubtasks];
-                                        newSubtasks[index].title = e.target.value;
-                                        setEditedSubtasks(newSubtasks);
-                                      }}
-                                      className="flex-1 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400"
-                                      placeholder="Enter subtask..."
-                                    />
-                                    <Button
-                                      variant="ghost"
-                                      size="icon"
-                                      onClick={() => {
-                                        const newSubtasks = editedSubtasks.filter((_, i) => i !== index);
-                                        setEditedSubtasks(newSubtasks);
-                                      }}
-                                      className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 rounded-full hover:bg-red-100 dark:hover:bg-red-900/20 text-red-500"
-                                    >
-                                      <Trash2 className="h-4 w-4" />
-                                    </Button>
                                   </div>
                                 )}
                               </Draggable>
@@ -2407,14 +2627,24 @@ export default function TaskManager() {
 
                     <div className="mt-4 space-y-3">
                       <Button
-                        variant="outline"
                         className="w-full flex items-center justify-center gap-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
                         onClick={() => {
-                          setEditedSubtasks([...editedSubtasks, { title: "", completed: false }]);
+                          if (selectedTask) {
+                            setEditedSubtasks([...editedSubtasks, {
+                              id: -Date.now() - editedSubtasks.length,
+                              user_id: selectedTask.user_id,
+                              task_id: selectedTask.id,
+                              title: "",
+                              completed: false,
+                              position: editedSubtasks.length,
+                              created_at: Math.floor(Date.now() / 1000),
+                              updated_at: Math.floor(Date.now() / 1000)
+                            }]);
+                          }
                         }}
                       >
                         <Plus className="h-4 w-4" />
-                        Add Subtask
+                        <span>Add Subtask</span>
                       </Button>
                       <div className="flex gap-2">
                         <Button
