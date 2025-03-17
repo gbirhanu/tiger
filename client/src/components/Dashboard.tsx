@@ -87,25 +87,28 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
   const [timeframe, setTimeframe] = useState<'hourly' | 'daily' | 'weekly' | 'monthly'>('daily');
   
   // Debug tasks data structure
-  console.log('TaskCompletionMetrics - tasks:', tasks);
-  
-  // Check if tasks have the necessary properties
   useEffect(() => {
-    if (!Array.isArray(tasks) || tasks.length === 0) {
-      console.warn('TaskCompletionMetrics: No tasks provided or tasks is not an array');
-      return;
-    }
-    
-    // Check if tasks have the necessary properties
-    const hasCompletedTasks = tasks.some(task => task.completed);
-    if (!hasCompletedTasks) {
-      console.warn('TaskCompletionMetrics: No completed tasks found');
-    }
-    
-    // Check if tasks have updated_at timestamps
-    const hasTimestamps = tasks.some(task => task.updated_at);
-    if (!hasTimestamps) {
-      console.warn('TaskCompletionMetrics: No tasks with updated_at timestamps found');
+    try {
+      console.log('TaskCompletionMetrics - Tasks received:', tasks.length);
+      console.log('TaskCompletionMetrics - Completed tasks:', tasks.filter(task => task.completed).length);
+      console.log('TaskCompletionMetrics - Sample task:', tasks.length > 0 ? tasks[0] : 'No tasks');
+      
+      // Check for unusual timestamp values
+      const tasksWithTimestamps = tasks.filter(task => task.updated_at);
+      if (tasksWithTimestamps.length > 0) {
+        const timestamps = tasksWithTimestamps.map(task => task.updated_at);
+        console.log('TaskCompletionMetrics - Min timestamp:', Math.min(...timestamps));
+        console.log('TaskCompletionMetrics - Max timestamp:', Math.max(...timestamps));
+        
+        // Check a sample timestamp conversion
+        if (timestamps.length > 0) {
+          const sampleTimestamp = timestamps[0];
+          const date = new Date(sampleTimestamp * 1000);
+          console.log(`TaskCompletionMetrics - Sample timestamp ${sampleTimestamp} converts to:`, date.toString());
+        }
+      }
+    } catch (error) {
+      console.error('Error in TaskCompletionMetrics debug logging:', error);
     }
   }, [tasks]);
   
@@ -117,67 +120,56 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
   
   // Get subtasks from tasks that have them
   const subtasks = useMemo(() => {
-    // First, try to extract subtasks directly from task objects
-    const directSubtasks = tasks
-      .filter(task => 'subtasks' in task && Array.isArray((task as any).subtasks))
-      .flatMap(task => (task as any).subtasks || []);
-    
-    console.log('Direct subtasks found:', directSubtasks.length);
-    
-    // If we have direct subtasks, use them
-    if (directSubtasks.length > 0) {
-      return directSubtasks;
-    }
-    
-    // Otherwise, create synthetic subtasks based on completed_subtasks count
-    const syntheticSubtasks = tasks
-      .filter(task => {
-        // Check if task has completed_subtasks property
-        const hasCompletedSubtasks = 
-          task && 
-          typeof task === 'object' && 
-          'completed_subtasks' in task && 
-          (task as any).completed_subtasks > 0;
-        
-        if (hasCompletedSubtasks) {
-          console.log('Task with completed_subtasks:', task.id, (task as any).completed_subtasks);
-        }
-        return hasCompletedSubtasks;
-      })
-      .flatMap(task => {
-        // Create synthetic subtask objects for each completed subtask
-        return Array.from({ length: (task as any).completed_subtasks || 0 }, (_, i) => ({
-          id: `${task.id}-subtask-${i}`,
-          title: `Subtask ${i+1}`,
-          completed: true,
-          // Use the task's updated_at as an approximation for the subtask completion time
-          updated_at: task.updated_at,
-          task_id: task.id
-        }));
-      });
-    
-    console.log('Synthetic subtasks created:', syntheticSubtasks.length);
-    
-    // If we still don't have any subtasks, create some dummy ones for tasks that are completed
-    if (syntheticSubtasks.length === 0) {
-      console.log('No subtasks found, creating dummy subtasks for completed tasks');
+    try {
+      // First, try to extract subtasks directly from task objects
+      const directSubtasks = tasks
+        .filter(task => 'subtasks' in task && Array.isArray((task as any).subtasks))
+        .flatMap(task => (task as any).subtasks || []);
       
-      // Create dummy subtasks for completed tasks
-      const dummySubtasks = tasks
-        .filter(task => task.completed && task.updated_at)
-        .map(task => ({
-          id: `${task.id}-dummy-subtask`,
-          title: `Subtask for ${task.title}`,
-          completed: true,
-          updated_at: task.updated_at,
-          task_id: task.id
-        }));
+      console.log('Direct subtasks found:', directSubtasks.length);
       
-      console.log('Dummy subtasks created:', dummySubtasks.length);
-      return dummySubtasks;
+      // If we have direct subtasks, use them
+      if (directSubtasks.length > 0) {
+        return directSubtasks;
+      }
+      
+      // Otherwise, create synthetic subtasks based on completed_subtasks count
+      const syntheticSubtasks = tasks
+        .filter(task => {
+          // Check if task has completed_subtasks property
+          const hasCompletedSubtasks = 
+            task && 
+            typeof task === 'object' && 
+            'completed_subtasks' in task && 
+            typeof (task as any).completed_subtasks === 'number' &&
+            (task as any).completed_subtasks > 0 &&
+            'total_subtasks' in task && 
+            typeof (task as any).total_subtasks === 'number';
+          
+          if (hasCompletedSubtasks) {
+            console.log('Task with completed_subtasks:', task.id, (task as any).completed_subtasks, 'of', (task as any).total_subtasks);
+          }
+          return hasCompletedSubtasks;
+        })
+        .flatMap(task => {
+          // Create synthetic subtask objects for each completed subtask
+          return Array.from({ length: (task as any).completed_subtasks || 0 }, (_, i) => ({
+            id: `${task.id}-subtask-${i}`,
+            title: `Subtask ${i+1}`,
+            completed: true,
+            // Use the task's updated_at as an approximation for the subtask completion time
+            updated_at: task.updated_at,
+            task_id: task.id
+          }));
+        });
+      
+      console.log('Synthetic subtasks created:', syntheticSubtasks.length);
+      
+      return syntheticSubtasks;
+    } catch (error) {
+      console.error('Error creating subtasks:', error);
+      return [];
     }
-    
-    return syntheticSubtasks;
   }, [tasks]);
   
   // Calculate hourly metrics
@@ -189,24 +181,32 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
       subtasks: 0
     }));
     
-    // Process tasks
+    // Process tasks - only count completed tasks using updated_at timestamp
     tasks.forEach(task => {
       if (task.completed && task.updated_at) {
-        const date = new Date(task.updated_at * 1000);
-        const hour = date.getHours();
-        if (hour >= 0 && hour < 24) {
-          data[hour].tasks += 1;
+        try {
+          const date = new Date(task.updated_at * 1000);
+          const hour = date.getHours();
+          if (hour >= 0 && hour < 24) {
+            data[hour].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing task ${task.id} with timestamp ${task.updated_at}:`, error);
         }
       }
     });
     
-    // Process subtasks
+    // Process subtasks - only count completed subtasks using updated_at timestamp
     subtasks.forEach(subtask => {
       if (subtask.completed && subtask.updated_at) {
-        const date = new Date(subtask.updated_at * 1000);
-        const hour = date.getHours();
-        if (hour >= 0 && hour < 24) {
-          data[hour].subtasks += 1;
+        try {
+          const date = new Date(subtask.updated_at * 1000);
+          const hour = date.getHours();
+          if (hour >= 0 && hour < 24) {
+            data[hour].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing subtask ${subtask.id} with timestamp ${subtask.updated_at}:`, error);
         }
       }
     });
@@ -221,61 +221,56 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
     const data = Array.from({ length: 7 }, (_, i) => {
       const date = new Date();
       date.setDate(today.getDate() - i);
+      
+      // Create start and end timestamps for this day
+      const dayStart = new Date(date);
+      dayStart.setHours(0, 0, 0, 0);
+      
+      const dayEnd = new Date(date);
+      dayEnd.setHours(23, 59, 59, 999);
+      
       return {
         date: formatDate(date, 'EEE'),
         fullDate: formatDate(date, 'MMM d'),
         tasks: 0,
         subtasks: 0,
-        timestamp: Math.floor(date.getTime() / 1000)
+        startTimestamp: Math.floor(dayStart.getTime() / 1000),
+        endTimestamp: Math.floor(dayEnd.getTime() / 1000)
       };
     }).reverse();
     
-    // Process tasks
+    // Process tasks - check if completed and updated_at is within the day's timeframe
     tasks.forEach(task => {
       if (task.completed && task.updated_at) {
-        const completedDate = new Date(task.updated_at * 1000);
-        const dayIndex = data.findIndex(day => {
-          const dayDate = new Date();
-          const [_, month, dayNum] = day.fullDate.split(' ');
-          dayDate.setMonth(getMonthIndex(month));
-          dayDate.setDate(parseInt(dayNum));
+        try {
+          // Find the day this task was completed
+          const dayIndex = data.findIndex(day => 
+            task.updated_at >= day.startTimestamp && task.updated_at <= day.endTimestamp
+          );
           
-          const dayStart = new Date(dayDate);
-          dayStart.setHours(0, 0, 0, 0);
-          
-          const dayEnd = new Date(dayDate);
-          dayEnd.setHours(23, 59, 59, 999);
-          
-          return completedDate >= dayStart && completedDate <= dayEnd;
-        });
-        
-        if (dayIndex !== -1) {
-          data[dayIndex].tasks += 1;
+          if (dayIndex !== -1) {
+            data[dayIndex].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing daily task ${task.id}:`, error);
         }
       }
     });
     
-    // Process subtasks
+    // Process subtasks - check if completed and updated_at is within the day's timeframe
     subtasks.forEach(subtask => {
       if (subtask.completed && subtask.updated_at) {
-        const completedDate = new Date(subtask.updated_at * 1000);
-        const dayIndex = data.findIndex(day => {
-          const dayDate = new Date();
-          const [_, month, dayNum] = day.fullDate.split(' ');
-          dayDate.setMonth(getMonthIndex(month));
-          dayDate.setDate(parseInt(dayNum));
+        try {
+          // Find the day this subtask was completed
+          const dayIndex = data.findIndex(day => 
+            subtask.updated_at >= day.startTimestamp && subtask.updated_at <= day.endTimestamp
+          );
           
-          const dayStart = new Date(dayDate);
-          dayStart.setHours(0, 0, 0, 0);
-          
-          const dayEnd = new Date(dayDate);
-          dayEnd.setHours(23, 59, 59, 999);
-          
-          return completedDate >= dayStart && completedDate <= dayEnd;
-        });
-        
-        if (dayIndex !== -1) {
-          data[dayIndex].subtasks += 1;
+          if (dayIndex !== -1) {
+            data[dayIndex].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing daily subtask ${subtask.id}:`, error);
         }
       }
     });
@@ -292,8 +287,11 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
       date.setDate(today.getDate() - (i * 7));
       const weekStart = new Date(date);
       weekStart.setDate(date.getDate() - date.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      
       const weekEnd = new Date(weekStart);
       weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
       
       return {
         week: `Week ${4-i}`,
@@ -308,11 +306,15 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
     // Process tasks
     tasks.forEach(task => {
       if (task.completed && task.updated_at) {
-        const weekIndex = data.findIndex(week => 
-          task.updated_at >= week.startTimestamp && task.updated_at <= week.endTimestamp
-        );
-        if (weekIndex !== -1) {
-          data[weekIndex].tasks += 1;
+        try {
+          const weekIndex = data.findIndex(week => 
+            task.updated_at >= week.startTimestamp && task.updated_at <= week.endTimestamp
+          );
+          if (weekIndex !== -1) {
+            data[weekIndex].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing weekly task ${task.id}:`, error);
         }
       }
     });
@@ -320,11 +322,15 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
     // Process subtasks
     subtasks.forEach(subtask => {
       if (subtask.completed && subtask.updated_at) {
-        const weekIndex = data.findIndex(week => 
-          subtask.updated_at >= week.startTimestamp && subtask.updated_at <= week.endTimestamp
-        );
-        if (weekIndex !== -1) {
-          data[weekIndex].subtasks += 1;
+        try {
+          const weekIndex = data.findIndex(week => 
+            subtask.updated_at >= week.startTimestamp && subtask.updated_at <= week.endTimestamp
+          );
+          if (weekIndex !== -1) {
+            data[weekIndex].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing weekly subtask ${subtask.id}:`, error);
         }
       }
     });
@@ -339,7 +345,7 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
     const data = Array.from({ length: 6 }, (_, i) => {
       const date = new Date();
       date.setMonth(today.getMonth() - i);
-      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1);
+      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
       const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
       
       return {
@@ -355,11 +361,15 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
     // Process tasks
     tasks.forEach(task => {
       if (task.completed && task.updated_at) {
-        const monthIndex = data.findIndex(month => 
-          task.updated_at >= month.startTimestamp && task.updated_at <= month.endTimestamp
-        );
-        if (monthIndex !== -1) {
-          data[monthIndex].tasks += 1;
+        try {
+          const monthIndex = data.findIndex(month => 
+            task.updated_at >= month.startTimestamp && task.updated_at <= month.endTimestamp
+          );
+          if (monthIndex !== -1) {
+            data[monthIndex].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing monthly task ${task.id}:`, error);
         }
       }
     });
@@ -367,11 +377,15 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
     // Process subtasks
     subtasks.forEach(subtask => {
       if (subtask.completed && subtask.updated_at) {
-        const monthIndex = data.findIndex(month => 
-          subtask.updated_at >= month.startTimestamp && subtask.updated_at <= month.endTimestamp
-        );
-        if (monthIndex !== -1) {
-          data[monthIndex].subtasks += 1;
+        try {
+          const monthIndex = data.findIndex(month => 
+            subtask.updated_at >= month.startTimestamp && subtask.updated_at <= month.endTimestamp
+          );
+          if (monthIndex !== -1) {
+            data[monthIndex].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing monthly subtask ${subtask.id}:`, error);
         }
       }
     });
@@ -382,73 +396,113 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
   
   // Get the appropriate data based on selected timeframe
   const chartData = useMemo(() => {
-    let data;
-    switch (timeframe) {
-      case 'hourly': data = hourlyData; break;
-      case 'daily': data = dailyData; break;
-      case 'weekly': data = weeklyData; break;
-      case 'monthly': data = monthlyData; break;
-      default: data = dailyData;
+    try {
+      let data;
+      switch (timeframe) {
+        case 'hourly': data = hourlyData; break;
+        case 'daily': data = dailyData; break;
+        case 'weekly': data = weeklyData; break;
+        case 'monthly': data = monthlyData; break;
+        default: data = dailyData;
+      }
+      
+      // Check if data has at least one non-zero value
+      const hasData = Array.isArray(data) && data.some(item => 
+        (item.tasks && item.tasks > 0) || (item.subtasks && item.subtasks > 0)
+      );
+      
+      if (!hasData) {
+        console.warn(`No data available for timeframe: ${timeframe}`);
+        
+        // Log more detailed diagnostics
+        const completedTasks = tasks.filter(task => task.completed).length;
+        const tasksWithTimestamps = tasks.filter(task => task.completed && task.updated_at).length;
+        console.log(`Total tasks: ${tasks.length}, Completed: ${completedTasks}, With timestamps: ${tasksWithTimestamps}`);
+        
+        if (timeframe === 'hourly') {
+          console.log('Hourly data check:', hourlyData.map(h => h.tasks).reduce((a, b) => a + b, 0), 'total tasks');
+        } else if (timeframe === 'daily') {
+          console.log('Daily data check:', dailyData.map(d => d.tasks).reduce((a, b) => a + b, 0), 'total tasks');
+        }
+      } else {
+        console.log(`Data available for timeframe: ${timeframe}`, data);
+        
+        // Calculate total tasks across this timeframe
+        const totalTasks = data.reduce((sum, item) => sum + (item.tasks || 0), 0);
+        const totalSubtasks = data.reduce((sum, item) => sum + (item.subtasks || 0), 0);
+        console.log(`Total for ${timeframe}: ${totalTasks} tasks, ${totalSubtasks} subtasks`);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error(`Error calculating chart data for ${timeframe}:`, error);
+      return [];
     }
-    
-    // Check if data has at least one non-zero value
-    const hasData = Array.isArray(data) && data.some(item => 
-      (item.tasks && item.tasks > 0) || (item.subtasks && item.subtasks > 0)
-    );
-    
-    if (!hasData) {
-      console.warn(`No data available for timeframe: ${timeframe}`);
-    } else {
-      console.log(`Data available for timeframe: ${timeframe}`, data);
-    }
-    
-    return data;
-  }, [timeframe, hourlyData, dailyData, weeklyData, monthlyData]);
+  }, [timeframe, hourlyData, dailyData, weeklyData, monthlyData, tasks]);
   
   // Calculate total completions
   const totals = useMemo(() => {
-    const taskTotal = tasks.filter(task => task.completed).length;
-    const subtaskTotal = subtasks.filter(subtask => subtask.completed).length;
-    return {
-      tasks: taskTotal,
-      subtasks: subtaskTotal,
-      total: taskTotal + subtaskTotal
-    };
+    try {
+      const taskTotal = tasks.filter(task => task.completed).length;
+      const subtaskTotal = subtasks.filter(subtask => subtask.completed).length;
+      
+      console.log(`Total completions - Tasks: ${taskTotal}, Subtasks: ${subtaskTotal}`);
+      
+      return {
+        tasks: taskTotal,
+        subtasks: subtaskTotal,
+        total: taskTotal + subtaskTotal
+      };
+    } catch (error) {
+      console.error('Error calculating totals:', error);
+      return { tasks: 0, subtasks: 0, total: 0 };
+    }
   }, [tasks, subtasks]);
   
   // Calculate peak performance times
   const peakTimes = useMemo(() => {
-    // Find hour with most completions
-    let peakHour = { hour: 0, count: 0 };
-    hourlyData.forEach(hourData => {
-      if (hourData && typeof hourData.hour === 'number') {
-        const total = hourData.tasks + hourData.subtasks;
-        if (total > peakHour.count) {
-          peakHour = { hour: hourData.hour, count: total };
+    try {
+      // Find hour with most completions
+      let peakHour = { hour: 0, count: 0 };
+      hourlyData.forEach(hourData => {
+        if (hourData && typeof hourData.hour === 'number') {
+          const total = hourData.tasks + hourData.subtasks;
+          if (total > peakHour.count) {
+            peakHour = { hour: hourData.hour, count: total };
+          }
         }
-      }
-    });
-    
-    // Find day with most completions
-    let peakDay = { day: '', count: 0 };
-    dailyData.forEach(day => {
-      if (day && day.date) {
-        const total = day.tasks + day.subtasks;
-        if (total > peakDay.count) {
-          peakDay = { day: day.date, count: total };
+      });
+      
+      // Find day with most completions
+      let peakDay = { day: '', count: 0 };
+      dailyData.forEach(day => {
+        if (day && day.date) {
+          const total = day.tasks + day.subtasks;
+          if (total > peakDay.count) {
+            peakDay = { day: day.date, count: total };
+          }
         }
-      }
-    });
-    
-    return {
-      hour: peakHour.hour,
-      hourDisplay: peakHour.hour >= 0 && peakHour.hour < hourlyData.length ? 
-        hourlyData[peakHour.hour].displayHour : 
-        `${peakHour.hour % 12 || 12}${peakHour.hour < 12 ? 'AM' : 'PM'}`,
-      hourCount: peakHour.count,
-      day: peakDay.day,
-      dayCount: peakDay.count
-    };
+      });
+      
+      return {
+        hour: peakHour.hour,
+        hourDisplay: peakHour.hour >= 0 && peakHour.hour < hourlyData.length ? 
+          hourlyData[peakHour.hour].displayHour : 
+          `${peakHour.hour % 12 || 12}${peakHour.hour < 12 ? 'AM' : 'PM'}`,
+        hourCount: peakHour.count,
+        day: peakDay.day || 'None',
+        dayCount: peakDay.count
+      };
+    } catch (error) {
+      console.error('Error calculating peak times:', error);
+      return { 
+        hour: 0, 
+        hourDisplay: 'N/A', 
+        hourCount: 0,
+        day: 'N/A',
+        dayCount: 0
+      };
+    }
   }, [hourlyData, dailyData]);
   
   // Get X-axis data key based on timeframe
@@ -571,7 +625,9 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
         </div>
         
         <div className="h-[300px]">
-          {chartData && Array.isArray(chartData) && chartData.length > 0 ? (
+          {chartData && Array.isArray(chartData) && chartData.length > 0 && chartData.some(item => 
+            (item.tasks && item.tasks > 0) || (item.subtasks && item.subtasks > 0)
+          ) ? (
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
@@ -613,7 +669,11 @@ const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
               <div className="text-center">
                 <BarChartIcon className="h-12 w-12 text-muted-foreground/50 mx-auto mb-3" />
                 <p className="text-muted-foreground">No task completion data available</p>
-                <p className="text-xs text-muted-foreground/70 mt-1">Complete some tasks to see metrics</p>
+                <p className="text-xs text-muted-foreground/70 mt-1">
+                  {tasks.some(task => task.completed) ? 
+                    `No completed tasks found in the selected ${timeframe} timeframe` : 
+                    'Complete some tasks to see metrics'}
+                </p>
               </div>
             </div>
           )}
