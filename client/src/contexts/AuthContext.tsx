@@ -13,6 +13,8 @@ interface Session {
 // Extend the User type to include session information
 interface User extends BaseUser {
   session?: Session;
+  role?: 'admin' | 'user';
+  status?: 'active' | 'inactive' | 'suspended';
 }
 interface AuthContextType {
   user: User | null;

@@ -1,89 +1,157 @@
-import { useState } from "react";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import React, { useState, useEffect } from 'react';
+import { useNavigate } from 'react-router-dom';
+import { 
+  User, 
+  Settings, 
+  LogOut, 
+  HelpCircle, 
+  Moon, 
+  Sun 
+} from 'lucide-react';
+
+import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { Bell, LogOut, Settings, User } from "lucide-react";
-import { useAuth } from "@/contexts/AuthContext";
-import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+} from '@/components/ui/dropdown-menu';
+import { useAuth } from '@/contexts/AuthContext';
+import { useTheme } from '@/contexts/ThemeContext';
 
-interface ProfileDropdownProps {
-  className?: string;
-}
-
-export function ProfileDropdown({ className }: ProfileDropdownProps) {
+export function ProfileDropdown() {
   const { user, logout } = useAuth();
-  const [notificationCount] = useState(3); // This would come from a proper notification system
-
-  // Get user initials for avatar fallback
-  const getUserInitials = () => {
-    if (!user?.name) return "U";
-    return user.name
-      .split(" ")
-      .map(n => n[0])
-      .join("")
-      .toUpperCase()
-      .substring(0, 2);
+  const { theme, setTheme } = useTheme();
+  const navigate = useNavigate();
+  
+  const [userInitials, setUserInitials] = useState('');
+  const [userName, setUserName] = useState('');
+  const [userEmail, setUserEmail] = useState('');
+  const [avatarUrl, setAvatarUrl] = useState('');
+  
+  // Get user data on component mount
+  useEffect(() => {
+    // Try to get user data from localStorage if not available in context
+    const storedUser = localStorage.getItem('user');
+    const userData = user || (storedUser ? JSON.parse(storedUser) : null);
+    
+    if (userData) {
+      // Set user name (fallback to "User" if not available)
+      const name = userData.name || userData.username || 'User';
+      setUserName(name);
+      
+      // Set user email (fallback to "user@example.com" if not available)
+      setUserEmail(userData.email || 'user@example.com');
+      
+      // Generate initials from name
+      const initials = name
+        .split(' ')
+        .map((part: string) => part[0])
+        .join('')
+        .toUpperCase()
+        .substring(0, 2);
+      setUserInitials(initials);
+      
+      // Set avatar URL if available
+      if (userData.avatar) {
+        setAvatarUrl(userData.avatar);
+      }
+    } else {
+      // Default values if no user data is available
+      setUserName('User');
+      setUserEmail('user@example.com');
+      setUserInitials('U');
+    }
+  }, [user]);
+  
+  // Handle navigation to different pages
+  const handleNavigation = (path: string) => {
+    // For internal navigation, update the selectedNav in localStorage
+    if (path === '/profile') {
+      localStorage.setItem('selectedNav', 'Profile');
+      window.location.reload();
+    } else if (path === '/settings') {
+      localStorage.setItem('selectedNav', 'Settings');
+      window.location.reload();
+    } else if (path === '/help') {
+      localStorage.setItem('selectedNav', 'Help');
+      window.location.reload();
+    } else {
+      // For external links, use navigate
+      navigate(path);
+    }
   };
-
+  
+  // Toggle theme between light and dark
+  const toggleTheme = () => {
+    setTheme(theme === 'dark' ? 'light' : 'dark');
+  };
+  
   return (
-    <div className={cn("flex items-center gap-4", className)}>
-      {/* Notification Icon */}
-      <Button variant="ghost" size="icon" className="relative">
-        <Bell className="h-5 w-5" />
-        {notificationCount > 0 && (
-          <Badge 
-            variant="destructive" 
-            className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs"
-          >
-            {notificationCount}
-          </Badge>
-        )}
-      </Button>
-
-      {/* Profile Dropdown */}
-      <DropdownMenu>
-        <DropdownMenuTrigger asChild>
-          <button className="flex items-center gap-2 outline-none ring-offset-background transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2">
-            <Avatar className="h-8 w-8 cursor-pointer hover:opacity-80 transition-opacity">
-              {/* Using fallback only since we don't have avatar URLs in the User type */}
-              <AvatarFallback className="bg-primary text-primary-foreground">
-                {getUserInitials()}
-              </AvatarFallback>
-            </Avatar>
-            <div className="hidden md:flex flex-col items-start">
-              <span className="text-sm font-medium leading-none">{user?.name || "User"}</span>
-              <span className="text-xs text-muted-foreground leading-none mt-1">
-                {user?.email || "user@example.com"}
-              </span>
-            </div>
-          </button>
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" className="w-56">
-          <DropdownMenuLabel>My Account</DropdownMenuLabel>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="cursor-pointer">
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <div className="flex items-center space-x-3 cursor-pointer">
+          <Avatar>
+            <AvatarImage src={avatarUrl} alt={userName} />
+            <AvatarFallback className="bg-primary text-primary-foreground">
+              {userInitials}
+            </AvatarFallback>
+          </Avatar>
+          <div className="flex flex-col">
+            <span className="text-sm font-medium">{userName}</span>
+            <span className="text-xs text-muted-foreground truncate max-w-[120px]">
+              {userEmail}
+            </span>
+          </div>
+        </div>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent className="w-56" align="start" forceMount>
+        <DropdownMenuLabel className="font-normal">
+          <div className="flex flex-col space-y-1">
+            <p className="text-sm font-medium leading-none">{userName}</p>
+            <p className="text-xs leading-none text-muted-foreground">
+              {userEmail}
+            </p>
+          </div>
+        </DropdownMenuLabel>
+        <DropdownMenuSeparator />
+        <DropdownMenuGroup>
+          <DropdownMenuItem onClick={() => handleNavigation('/profile')}>
             <User className="mr-2 h-4 w-4" />
             <span>Profile</span>
           </DropdownMenuItem>
-          <DropdownMenuItem className="cursor-pointer">
+          <DropdownMenuItem onClick={() => handleNavigation('/settings')}>
             <Settings className="mr-2 h-4 w-4" />
             <span>Settings</span>
           </DropdownMenuItem>
-          <DropdownMenuSeparator />
-          <DropdownMenuItem className="cursor-pointer text-destructive" onClick={() => logout()}>
-            <LogOut className="mr-2 h-4 w-4" />
-            <span>Log out</span>
+          <DropdownMenuItem onClick={toggleTheme}>
+            {theme === 'dark' ? (
+              <>
+                <Sun className="mr-2 h-4 w-4" />
+                <span>Light Mode</span>
+              </>
+            ) : (
+              <>
+                <Moon className="mr-2 h-4 w-4" />
+                <span>Dark Mode</span>
+              </>
+            )}
           </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </div>
+        </DropdownMenuGroup>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={() => handleNavigation('/help')}>
+          <HelpCircle className="mr-2 h-4 w-4" />
+          <span>Help</span>
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onClick={logout}>
+          <LogOut className="mr-2 h-4 w-4" />
+          <span>Log out</span>
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

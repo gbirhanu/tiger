@@ -35,7 +35,8 @@ import {
   Bell, 
   BellOff,
   Save,
-  Info
+  Info,
+  Key
 } from "lucide-react";
 import { getUserTimezone } from "@/lib/timezone";
 import { TimeSelect } from "./TimeSelect";
@@ -53,9 +54,10 @@ import { useTheme } from "@/contexts/ThemeContext";
 type WorkHour = number | { hour: number; minute: number };
 
 // Define a custom interface that extends UserSettings but with the correct types for work hours
-interface FormattedUserSettings extends Omit<UserSettings, 'work_start_hour' | 'work_end_hour'> {
+interface FormattedUserSettings extends Omit<UserSettings, 'work_start_hour' | 'work_end_hour' | 'gemini_key'> {
   work_start_hour: WorkHour;
   work_end_hour: WorkHour;
+  gemini_key: string;
 }
 
 const TIMEZONES = Intl.supportedValuesOf('timeZone');
@@ -118,7 +120,7 @@ const CurrentTimezone = () => {
 export default function Settings() {
   const { toast } = useToast();
   const { data: settings, isLoading, error } = useQuery<UserSettings>({
-    queryKey: [QUERY_KEYS.SETTINGS],
+    queryKey: [QUERY_KEYS.USER_SETTINGS],
     queryFn: getUserSettings,
   });
   
@@ -135,13 +137,14 @@ export default function Settings() {
   const form = useForm<FormattedUserSettings>({
     resolver: zodResolver(insertUserSettingsSchema),
     defaultValues: {
-      timezone: "UTC",
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       work_start_hour: 9,
       work_end_hour: 17,
       theme: "system",
       default_calendar_view: "month",
       show_notifications: true,
       notifications_enabled: true,
+      gemini_key: "",
     },
   });
 
@@ -177,13 +180,17 @@ export default function Settings() {
       // Format work hours from Unix timestamps to time objects
       const formattedSettings: FormattedUserSettings = { 
         ...settings,
+        // Use the timezone from settings or fall back to system timezone
+        timezone: settings.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone,
         // Convert work hours to the appropriate format
         work_start_hour: typeof settings.work_start_hour === 'number' 
           ? unixTimestampToTimeObject(settings.work_start_hour)
           : settings.work_start_hour,
         work_end_hour: typeof settings.work_end_hour === 'number' 
           ? unixTimestampToTimeObject(settings.work_end_hour)
-          : settings.work_end_hour
+          : settings.work_end_hour,
+        // Ensure gemini_key is properly set
+        gemini_key: settings.gemini_key || ""
       };
       
       console.log("Formatted settings for form:", formattedSettings);
@@ -194,11 +201,16 @@ export default function Settings() {
   const updateSettingsMutation = useMutation({
     mutationFn: (data: FormattedUserSettings) => updateUserSettings(data as any),
     onMutate: async (newSettings) => {
+      console.log("Updating settings:", newSettings);
+      
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.USER_SETTINGS] });
       
       // Snapshot the previous value
-      const previousSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.SETTINGS]);
+      const previousSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS]);
+      
+      // Create a deep copy of the previous settings
+      const previousSettingsCopy = previousSettings ? JSON.parse(JSON.stringify(previousSettings)) : null;
       
       // Convert work hours to hour values for the optimistic update
       const optimisticSettings = { ...newSettings };
@@ -220,51 +232,64 @@ export default function Settings() {
         optimisticSettings.work_end_hour = hour + (minute / 60);
       }
       
+      console.log("Optimistic settings after conversion:", optimisticSettings);
+      
       // Optimistically update to the new value
-      queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], (old) => {
+      queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], (old) => {
         if (!old) return old;
+        
+        // Create a deep copy of the old settings
+        const oldCopy = JSON.parse(JSON.stringify(old));
         
         // Ensure work hours are numbers for type compatibility
         const typedOptimisticSettings: UserSettings = {
-          ...old,
+          ...oldCopy,
           ...optimisticSettings,
           // Ensure these are always numbers
           work_start_hour: typeof optimisticSettings.work_start_hour === 'number' 
             ? optimisticSettings.work_start_hour 
-            : old.work_start_hour,
+            : oldCopy.work_start_hour,
           work_end_hour: typeof optimisticSettings.work_end_hour === 'number' 
             ? optimisticSettings.work_end_hour 
-            : old.work_end_hour,
+            : oldCopy.work_end_hour,
           // Preserve the user_id field
-          user_id: old.user_id
+          user_id: oldCopy.user_id
         };
+        
+        console.log("Final optimistic settings:", typedOptimisticSettings);
         
         return typedOptimisticSettings;
       });
       
       // Return a context object with the previous settings
-      return { previousSettings };
+      return { previousSettings: previousSettingsCopy };
     },
-    onError: (error: Error, _variables, context) => {
-      // If the mutation fails, use the context returned from onMutate to roll back
+    onError: (error: any, _variables, context) => {
+      console.error("Failed to update settings:", error);
+      
+      // Rollback to previous state if available
       if (context?.previousSettings) {
-        queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], context.previousSettings);
+        queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], context.previousSettings);
       }
       
-      console.error("Error updating settings:", error);
       toast({
         variant: "destructive",
         title: "Failed to update settings",
-        description: error.message || "An error occurred while saving your settings.",
+        description: error.message || "An error occurred while updating your settings.",
       });
     },
     onSuccess: (data) => {
+      console.log("Settings updated successfully:", data);
+      
       // Update the cache with the server response
-      queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], data);
+      queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], data);
+      
+      // Also invalidate the query to ensure we have the latest data
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.USER_SETTINGS] });
       
       toast({
         title: "Settings updated",
-        description: "Your preferences have been saved successfully.",
+        description: "Your settings have been updated successfully.",
       });
     },
   });
@@ -630,6 +655,37 @@ export default function Settings() {
                     )}
                   />
                 </div>
+              </div>
+
+              {/* AI Integration Section */}
+              <div className="space-y-4">
+                <div className="flex items-center gap-2">
+                  <Key className="h-5 w-5 text-primary" />
+                  <h3 className="text-lg font-medium">AI Integration</h3>
+                </div>
+                <Separator className="my-2" />
+                
+                <FormField
+                  control={form.control}
+                  name="gemini_key"
+                  render={({ field }) => (
+                    <FormItem>
+                      <FormLabel>Gemini API Key</FormLabel>
+                      <FormControl>
+                        <Input
+                          type="password"
+                          placeholder="Enter your Gemini API key"
+                          {...field}
+                          value={field.value || ""}
+                        />
+                      </FormControl>
+                      <FormDescription>
+                        Enter your Gemini API key to use for generating subtasks. 
+                        You can get a key from <a href="https://ai.google.dev/" target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">Google AI Studio</a>.
+                      </FormDescription>
+                    </FormItem>
+                  )}
+                />
               </div>
 
               <div className="flex justify-end pt-4">

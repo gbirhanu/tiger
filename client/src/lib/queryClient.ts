@@ -31,17 +31,26 @@ async function throwIfResNotOk(res: Response) {
     let errorMessage = `${res.status}: ${res.statusText}`;
     try {
       const text = await res.text();
+      console.error(`Error response body: ${text}`);
+      
       if (text) {
         try {
           // Try to parse as JSON for structured error messages
           const errorData = JSON.parse(text);
+          console.error('Parsed error data:', errorData);
+          
           if (errorData.error) {
             errorMessage = `${res.status}: ${errorData.error}`;
+            if (errorData.details) {
+              console.error('Error details:', errorData.details);
+              errorMessage += ` - ${JSON.stringify(errorData.details)}`;
+            }
           } else {
             errorMessage = `${res.status}: ${text}`;
           }
-        } catch {
+        } catch (parseError) {
           // If not JSON, use the raw text
+          console.error('Error parsing JSON:', parseError);
           errorMessage = `${res.status}: ${text}`;
         }
       }
@@ -63,24 +72,31 @@ export async function apiRequest(
       "Content-Type": "application/json",
     };
 
+    // Ensure URL has the correct prefix
+    const apiUrl = url.startsWith('/api') ? url : `/api${url}`;
+
     const token = getAuthToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
-      console.log(`API Request to ${url} with token: ${token.substring(0, 10)}...`);
+      console.log(`API Request to ${apiUrl} with token: ${token.substring(0, 10)}...`);
     } else {
-      console.warn(`API Request to ${url} without authentication token`);
+      console.warn(`API Request to ${apiUrl} without authentication token`);
     }
 
-    const res = await fetch(url, {
+    console.log(`Making ${method} request to ${apiUrl}`, data ? 'with data' : 'without data');
+    
+    const res = await fetch(apiUrl, {
       method,
       headers,
       body: data ? JSON.stringify(data) : undefined,
       credentials: "include",
     });
 
+    console.log(`Response from ${apiUrl}: status ${res.status}`);
+
     // Handle authentication errors specifically
     if (res.status === 401) {
-      console.error(`Authentication failed for request to ${url} - clearing token`);
+      console.error(`Authentication failed for request to ${apiUrl} - clearing token`);
       setAuthToken(null);
       // You could trigger a redirect to login here if needed
       // window.location.href = '/auth';
@@ -137,15 +153,19 @@ export const getQueryFn = <T>(options: {
 
 // Define standardized query keys as constants for consistent usage across components
 export const QUERY_KEYS = {
-  TASKS: "tasks",
-  TASK: (id: number) => ["task", id],
-  TASKS_WITH_SUBTASKS: "tasks-with-subtasks",
-  TASK_SUBTASKS: (taskId: number) => ["task-subtasks", taskId],
-  NOTES: "notes",
-  NOTE: (id: number) => ["note", id],
-  SETTINGS: "user-settings",
-  MEETINGS: "meetings",
-  MEETING: (id: number) => ["meeting", id]
+  TASKS: 'tasks',
+  TASK: 'task',
+  NOTES: 'notes',
+  LONG_NOTES: 'long-notes',
+  STUDY_SESSIONS: 'study-sessions',
+  TASKS_WITH_SUBTASKS: 'task-with-subtasks',
+  TASK_SUBTASKS: (taskId: number) => ['task-subtasks', taskId],
+  APPOINTMENTS: 'appointments',
+  MEETINGS: 'meetings',
+  POMODORO_SETTINGS: 'pomodoro-settings',
+  USER_SETTINGS: 'user-settings',
+  USER_PROFILE: 'user-profile',
+  NOTIFICATIONS: 'notifications',
 };
 
 export const queryClient = new QueryClient({
@@ -154,9 +174,9 @@ export const queryClient = new QueryClient({
       queryFn: getQueryFn({ on401: "throw" }),
       refetchInterval: false,
       refetchOnWindowFocus: true,
-      staleTime: 0, // Set to 0 to ensure immediate updates
-      gcTime: 1000 * 60 * 10, // 10 minutes garbage collection time (formerly cacheTime)
-      refetchOnMount: true, // Refetch when component mounts
+      staleTime: 0, // Keep at 0 to ensure immediate updates
+      gcTime: 1000 * 60 * 10, // 10 minutes garbage collection time
+      refetchOnMount: true, // Always refetch when component mounts
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors up to 2 times
         if (error?.message?.includes('401')) {
@@ -165,9 +185,30 @@ export const queryClient = new QueryClient({
           return false;
         }
         return failureCount < 2;
-      }
+      },
+      // FIXED: Disable structural sharing to ensure state updates are always detected
+      structuralSharing: false
     },
     mutations: {
+      // FIXED: Properly handle mutation lifecycle
+      onMutate: async (variables) => {
+        console.log('Global mutation handler - canceling related queries');
+        // Cancel any in-flight or pending queries that might conflict
+        await queryClient.cancelQueries();
+        // This is a fallback - specific mutations should define their own onMutate
+        return {};
+      },
+      // FIXED: Always invalidate related queries after mutation
+      onSettled: (data, error, variables, context) => {
+        console.log('Global mutation settled - invalidating queries');
+        // Force refetch of all critical data
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.LONG_NOTES] });
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+        queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPOINTMENTS] });
+        // This is a fallback - specific mutations should handle their own invalidation
+      },
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors once
         if (error?.message?.includes('401')) {
@@ -186,9 +227,24 @@ export const queryClient = new QueryClient({
 window.addEventListener('focus', () => {
   console.log('Window focused - refreshing critical data');
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.LONG_NOTES] });
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
-  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.USER_SETTINGS] });
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPOINTMENTS] });
+});
+
+// ADDED: Add a global visibility change handler to refresh data when tab becomes visible
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') {
+    console.log('Tab became visible - refreshing critical data');
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.LONG_NOTES] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.USER_SETTINGS] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+    queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.APPOINTMENTS] });
+  }
 });
 
 // Add a global error handler for unhandled errors
@@ -205,4 +261,39 @@ window.addEventListener('unhandledrejection', (event) => {
 export function resetQueryCache() {
   console.log('Resetting query cache');
   queryClient.clear();
+}
+
+// ADDED: Helper function to create deep copies of objects to avoid reference issues
+export function deepCopy<T>(obj: T): T {
+  return JSON.parse(JSON.stringify(obj));
+}
+
+// ADDED: Helper function to force a UI refresh for a specific query
+export function forceRefreshQuery(queryKey: unknown[]) {
+  console.log(`Forcing refresh for query: ${JSON.stringify(queryKey)}`);
+  
+  // Get the current data
+  const currentData = queryClient.getQueryData(queryKey);
+  
+  if (currentData) {
+    // Create a deep copy to ensure React detects the change
+    const freshData = deepCopy(currentData);
+    
+    // Set the data back to trigger a re-render
+    queryClient.setQueryData(queryKey, freshData);
+    
+    // Also invalidate to ensure we get fresh data from the server
+    queryClient.invalidateQueries({ queryKey });
+  } else {
+    // If no data exists, just invalidate
+    queryClient.invalidateQueries({ queryKey });
+  }
+}
+
+// Helper function to refresh tasks specifically
+export function refreshTasks() {
+  console.log("Refreshing tasks");
+  
+  // Simply invalidate the query to fetch fresh data from the server
+  queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
 }

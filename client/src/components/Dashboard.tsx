@@ -7,20 +7,19 @@ import {
 } from "@/components/ui/resizable";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
-import { Card, CardContent } from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
-import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home, Clock, Search, Bell, MapPin } from "lucide-react";
+import Appointments from "./Appointments";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home, Clock, Search, Bell, MapPin, User, HelpCircle, Menu, X, NotebookIcon, Calendar as CalendarIcon, Users, BarChart as BarChartIcon } from "lucide-react";
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
 import {
   BarChart,
-  Bar,
-  PieChart,
-  Pie,
+  Bar, 
   LineChart,
   Line,
   XAxis,
@@ -34,15 +33,27 @@ import {
   Area,
   RadialBarChart,
   RadialBar,
+  PieChart,
+  Pie,
 } from "recharts";
 import Meetings from "./Meetings";
 import Settings from "./Settings";
+import Profile from "./Profile";
+import Help from "./Help";
 import { useAuth } from "@/contexts/AuthContext";
 import { getAppointments, getNotes, getPomodoroSettings, getTasks, getMeetings, getTasksWithSubtasks } from "@/lib/api";
 import { ProfileDropdown } from "./ui/ProfileDropdown";
-import { formatDate, getNow } from "@/lib/timezone";
+import { formatDate, getNow, getUserTimezone } from "@/lib/timezone";
 import { useTheme } from "@/contexts/ThemeContext";
 import { toast } from "@/hooks/use-toast";
+import { NotificationsProvider } from "@/contexts/NotificationsContext";
+import { NotificationsDropdown } from "./ui/NotificationsDropdown";
+import { TaskReminderService } from "./TaskReminderService";
+import { QUERY_KEYS } from "@/lib/queryClient";
+import LongNotesBoard from "./LongNotesBoard";
+import UserManagement from "./UserManagement";
+import { useState, useMemo, useEffect } from "react";
+import type { Task, Subtask, TaskWithSubtasks } from "../../../shared/schema";
 
 interface NavItem {
   title: string;
@@ -50,30 +61,6 @@ interface NavItem {
   component: React.ReactNode;
 }
 
-// Sample data for charts
-const taskData = [
-  { name: "Completed", value: 15 },
-  { name: "In Progress", value: 8 },
-  { name: "Not Started", value: 5 },
-];
-
-const pomodoroData = [
-  { name: "Mon", sessions: 4 },
-  { name: "Tue", sessions: 6 },
-  { name: "Wed", sessions: 3 },
-  { name: "Thu", sessions: 7 },
-  { name: "Fri", sessions: 5 },
-];
-
-const noteData = [
-  { date: "Mar 1", count: 3 },
-  { date: "Mar 2", count: 5 },
-  { date: "Mar 3", count: 4 },
-  { date: "Mar 4", count: 7 },
-  { date: "Mar 5", count: 6 },
-];
-
-const COLORS = ["#10B981", "#FBBF24", "#EF4444"];
 const CHART_COLORS = {
   green: "#10B981",
   blue: "#3B82F6",
@@ -84,17 +71,639 @@ const CHART_COLORS = {
   gray: "#94A3B8"
 };
 
+// Task Completion Metrics Component
+interface TaskCompletionMetricsProps {
+  tasks: TaskWithSubtaskCounts[];
+}
+
+// Extended Task interface to include subtask-related properties
+interface TaskWithSubtaskCounts extends Task {
+  completed_subtasks?: number;
+  total_subtasks?: number;
+  subtasks?: Subtask[];
+}
+
+const TaskCompletionMetrics = ({ tasks = [] }: TaskCompletionMetricsProps) => {
+  const [timeframe, setTimeframe] = useState<'hourly' | 'daily' | 'weekly' | 'monthly'>('daily');
+  
+  // Debug tasks data structure
+  useEffect(() => {
+    try {
+      console.log('TaskCompletionMetrics - Tasks received:', tasks.length);
+      console.log('TaskCompletionMetrics - Completed tasks:', tasks.filter(task => task.completed).length);
+      console.log('TaskCompletionMetrics - Sample task:', tasks.length > 0 ? tasks[0] : 'No tasks');
+      
+      // Check for unusual timestamp values
+      const tasksWithTimestamps = tasks.filter(task => task.updated_at);
+      if (tasksWithTimestamps.length > 0) {
+        const timestamps = tasksWithTimestamps.map(task => task.updated_at);
+        console.log('TaskCompletionMetrics - Min timestamp:', Math.min(...timestamps));
+        console.log('TaskCompletionMetrics - Max timestamp:', Math.max(...timestamps));
+        
+        // Check a sample timestamp conversion
+        if (timestamps.length > 0) {
+          const sampleTimestamp = timestamps[0];
+          const date = new Date(sampleTimestamp * 1000);
+          console.log(`TaskCompletionMetrics - Sample timestamp ${sampleTimestamp} converts to:`, date.toString());
+        }
+      }
+    } catch (error) {
+      console.error('Error in TaskCompletionMetrics debug logging:', error);
+    }
+  }, [tasks]);
+  
+  // Helper function to get month index from month name
+  const getMonthIndex = (monthName: string) => {
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return months.findIndex(m => m === monthName);
+  };
+  
+  // Get subtasks from tasks that have them
+  const subtasks = useMemo(() => {
+    try {
+      // First, try to extract subtasks directly from task objects
+      const directSubtasks = tasks
+        .filter(task => 'subtasks' in task && Array.isArray((task as any).subtasks))
+        .flatMap(task => (task as any).subtasks || []);
+      
+      console.log('Direct subtasks found:', directSubtasks.length);
+      
+      // If we have direct subtasks, use them
+      if (directSubtasks.length > 0) {
+        return directSubtasks;
+      }
+      
+      // Otherwise, create synthetic subtasks based on completed_subtasks count
+      const syntheticSubtasks = tasks
+        .filter(task => {
+          // Check if task has completed_subtasks property
+          const hasCompletedSubtasks = 
+            task && 
+            typeof task === 'object' && 
+            'completed_subtasks' in task && 
+            typeof (task as any).completed_subtasks === 'number' &&
+            (task as any).completed_subtasks > 0 &&
+            'total_subtasks' in task && 
+            typeof (task as any).total_subtasks === 'number';
+          
+          if (hasCompletedSubtasks) {
+            console.log('Task with completed_subtasks:', task.id, (task as any).completed_subtasks, 'of', (task as any).total_subtasks);
+          }
+          return hasCompletedSubtasks;
+        })
+        .flatMap(task => {
+          // Create synthetic subtask objects for each completed subtask
+          return Array.from({ length: (task as any).completed_subtasks || 0 }, (_, i) => ({
+            id: `${task.id}-subtask-${i}`,
+            title: `Subtask ${i+1}`,
+            completed: true,
+            // Use the task's updated_at as an approximation for the subtask completion time
+            updated_at: task.updated_at,
+            task_id: task.id
+          }));
+        });
+      
+      console.log('Synthetic subtasks created:', syntheticSubtasks.length);
+      
+      return syntheticSubtasks;
+    } catch (error) {
+      console.error('Error creating subtasks:', error);
+      return [];
+    }
+  }, [tasks]);
+  
+  // Calculate hourly metrics
+  const hourlyData = useMemo(() => {
+    const data = Array.from({ length: 24 }, (_, hour) => ({
+      hour,
+      displayHour: hour === 0 ? '12 AM' : hour === 12 ? '12 PM' : hour < 12 ? `${hour} AM` : `${hour - 12} PM`,
+      tasks: 0,
+      subtasks: 0
+    }));
+    
+    // Process tasks - only count completed tasks using updated_at timestamp
+    tasks.forEach(task => {
+      if (task.completed && task.updated_at) {
+        try {
+          const date = new Date(task.updated_at * 1000);
+          const hour = date.getHours();
+          if (hour >= 0 && hour < 24) {
+            data[hour].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing task ${task.id} with timestamp ${task.updated_at}:`, error);
+        }
+      }
+    });
+    
+    // Process subtasks - only count completed subtasks using updated_at timestamp
+    subtasks.forEach(subtask => {
+      if (subtask.completed && subtask.updated_at) {
+        try {
+          const date = new Date(subtask.updated_at * 1000);
+          const hour = date.getHours();
+          if (hour >= 0 && hour < 24) {
+            data[hour].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing subtask ${subtask.id} with timestamp ${subtask.updated_at}:`, error);
+        }
+      }
+    });
+    
+    console.log('Hourly data:', data);
+    return data;
+  }, [tasks, subtasks]);
+  
+  // Calculate daily metrics (last 7 days)
+  const dailyData = useMemo(() => {
+    const today = new Date();
+    const data = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date();
+      date.setDate(today.getDate() - i);
+      
+      // Create start and end timestamps for this day
+      const dayStart = new Date(date);
+      dayStart.setHours(0, 0, 0, 0);
+      
+      const dayEnd = new Date(date);
+      dayEnd.setHours(23, 59, 59, 999);
+      
+      return {
+        date: formatDate(date, 'EEE'),
+        fullDate: formatDate(date, 'MMM d'),
+        tasks: 0,
+        subtasks: 0,
+        startTimestamp: Math.floor(dayStart.getTime() / 1000),
+        endTimestamp: Math.floor(dayEnd.getTime() / 1000)
+      };
+    }).reverse();
+    
+    // Process tasks - check if completed and updated_at is within the day's timeframe
+    tasks.forEach(task => {
+      if (task.completed && task.updated_at) {
+        try {
+          // Find the day this task was completed
+          const dayIndex = data.findIndex(day => 
+            task.updated_at >= day.startTimestamp && task.updated_at <= day.endTimestamp
+          );
+          
+          if (dayIndex !== -1) {
+            data[dayIndex].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing daily task ${task.id}:`, error);
+        }
+      }
+    });
+    
+    // Process subtasks - check if completed and updated_at is within the day's timeframe
+    subtasks.forEach(subtask => {
+      if (subtask.completed && subtask.updated_at) {
+        try {
+          // Find the day this subtask was completed
+          const dayIndex = data.findIndex(day => 
+            subtask.updated_at >= day.startTimestamp && subtask.updated_at <= day.endTimestamp
+          );
+          
+          if (dayIndex !== -1) {
+            data[dayIndex].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing daily subtask ${subtask.id}:`, error);
+        }
+      }
+    });
+    
+    console.log('Daily data:', data);
+    return data;
+  }, [tasks, subtasks]);
+  
+  // Calculate weekly metrics (last 4 weeks)
+  const weeklyData = useMemo(() => {
+    const today = new Date();
+    const data = Array.from({ length: 4 }, (_, i) => {
+      const date = new Date();
+      date.setDate(today.getDate() - (i * 7));
+      const weekStart = new Date(date);
+      weekStart.setDate(date.getDate() - date.getDay());
+      weekStart.setHours(0, 0, 0, 0);
+      
+      const weekEnd = new Date(weekStart);
+      weekEnd.setDate(weekStart.getDate() + 6);
+      weekEnd.setHours(23, 59, 59, 999);
+      
+      return {
+        week: `Week ${4-i}`,
+        label: `${formatDate(weekStart, 'MMM d')} - ${formatDate(weekEnd, 'MMM d')}`,
+        tasks: 0,
+        subtasks: 0,
+        startTimestamp: Math.floor(weekStart.getTime() / 1000),
+        endTimestamp: Math.floor(weekEnd.getTime() / 1000)
+      };
+    }).reverse();
+    
+    // Process tasks
+    tasks.forEach(task => {
+      if (task.completed && task.updated_at) {
+        try {
+          const weekIndex = data.findIndex(week => 
+            task.updated_at >= week.startTimestamp && task.updated_at <= week.endTimestamp
+          );
+          if (weekIndex !== -1) {
+            data[weekIndex].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing weekly task ${task.id}:`, error);
+        }
+      }
+    });
+    
+    // Process subtasks
+    subtasks.forEach(subtask => {
+      if (subtask.completed && subtask.updated_at) {
+        try {
+          const weekIndex = data.findIndex(week => 
+            subtask.updated_at >= week.startTimestamp && subtask.updated_at <= week.endTimestamp
+          );
+          if (weekIndex !== -1) {
+            data[weekIndex].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing weekly subtask ${subtask.id}:`, error);
+        }
+      }
+    });
+    
+    console.log('Weekly data:', data);
+    return data;
+  }, [tasks, subtasks]);
+  
+  // Calculate monthly metrics (last 6 months)
+  const monthlyData = useMemo(() => {
+    const today = new Date();
+    const data = Array.from({ length: 6 }, (_, i) => {
+      const date = new Date();
+      date.setMonth(today.getMonth() - i);
+      const monthStart = new Date(date.getFullYear(), date.getMonth(), 1, 0, 0, 0, 0);
+      const monthEnd = new Date(date.getFullYear(), date.getMonth() + 1, 0, 23, 59, 59, 999);
+      
+      return {
+        month: formatDate(date, 'MMM'),
+        label: formatDate(date, 'MMMM yyyy'),
+        tasks: 0,
+        subtasks: 0,
+        startTimestamp: Math.floor(monthStart.getTime() / 1000),
+        endTimestamp: Math.floor(monthEnd.getTime() / 1000)
+      };
+    }).reverse();
+    
+    // Process tasks
+    tasks.forEach(task => {
+      if (task.completed && task.updated_at) {
+        try {
+          const monthIndex = data.findIndex(month => 
+            task.updated_at >= month.startTimestamp && task.updated_at <= month.endTimestamp
+          );
+          if (monthIndex !== -1) {
+            data[monthIndex].tasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing monthly task ${task.id}:`, error);
+        }
+      }
+    });
+    
+    // Process subtasks
+    subtasks.forEach(subtask => {
+      if (subtask.completed && subtask.updated_at) {
+        try {
+          const monthIndex = data.findIndex(month => 
+            subtask.updated_at >= month.startTimestamp && subtask.updated_at <= month.endTimestamp
+          );
+          if (monthIndex !== -1) {
+            data[monthIndex].subtasks += 1;
+          }
+        } catch (error) {
+          console.error(`Error processing monthly subtask ${subtask.id}:`, error);
+        }
+      }
+    });
+    
+    console.log('Monthly data:', data);
+    return data;
+  }, [tasks, subtasks]);
+  
+  // Get the appropriate data based on selected timeframe
+  const chartData = useMemo(() => {
+    try {
+      let data;
+      switch (timeframe) {
+        case 'hourly': data = hourlyData; break;
+        case 'daily': data = dailyData; break;
+        case 'weekly': data = weeklyData; break;
+        case 'monthly': data = monthlyData; break;
+        default: data = dailyData;
+      }
+      
+      // Check if data has at least one non-zero value
+      const hasData = Array.isArray(data) && data.some(item => 
+        (item.tasks && item.tasks > 0) || (item.subtasks && item.subtasks > 0)
+      );
+      
+      if (!hasData) {
+        console.warn(`No data available for timeframe: ${timeframe}`);
+        
+        // Log more detailed diagnostics
+        const completedTasks = tasks.filter(task => task.completed).length;
+        const tasksWithTimestamps = tasks.filter(task => task.completed && task.updated_at).length;
+        console.log(`Total tasks: ${tasks.length}, Completed: ${completedTasks}, With timestamps: ${tasksWithTimestamps}`);
+        
+        if (timeframe === 'hourly') {
+          console.log('Hourly data check:', hourlyData.map(h => h.tasks).reduce((a, b) => a + b, 0), 'total tasks');
+        } else if (timeframe === 'daily') {
+          console.log('Daily data check:', dailyData.map(d => d.tasks).reduce((a, b) => a + b, 0), 'total tasks');
+        }
+      } else {
+        console.log(`Data available for timeframe: ${timeframe}`, data);
+        
+        // Calculate total tasks across this timeframe
+        const totalTasks = data.reduce((sum, item) => sum + (item.tasks || 0), 0);
+        const totalSubtasks = data.reduce((sum, item) => sum + (item.subtasks || 0), 0);
+        console.log(`Total for ${timeframe}: ${totalTasks} tasks, ${totalSubtasks} subtasks`);
+      }
+      
+      return data;
+    } catch (error) {
+      console.error(`Error calculating chart data for ${timeframe}:`, error);
+      return [];
+    }
+  }, [timeframe, hourlyData, dailyData, weeklyData, monthlyData, tasks]);
+  
+  // Calculate total completions
+  const totals = useMemo(() => {
+    try {
+      const taskTotal = tasks.filter(task => task.completed).length;
+      const subtaskTotal = subtasks.filter(subtask => subtask.completed).length;
+      
+      console.log(`Total completions - Tasks: ${taskTotal}, Subtasks: ${subtaskTotal}`);
+      
+      return {
+        tasks: taskTotal,
+        subtasks: subtaskTotal,
+        total: taskTotal + subtaskTotal
+      };
+    } catch (error) {
+      console.error('Error calculating totals:', error);
+      return { tasks: 0, subtasks: 0, total: 0 };
+    }
+  }, [tasks, subtasks]);
+  
+  // Calculate peak performance times
+  const peakTimes = useMemo(() => {
+    try {
+      // Find hour with most completions
+      let peakHour = { hour: 0, count: 0 };
+      hourlyData.forEach(hourData => {
+        if (hourData && typeof hourData.hour === 'number') {
+          const total = hourData.tasks + hourData.subtasks;
+          if (total > peakHour.count) {
+            peakHour = { hour: hourData.hour, count: total };
+          }
+        }
+      });
+      
+      // Find day with most completions
+      let peakDay = { day: '', count: 0 };
+      dailyData.forEach(day => {
+        if (day && day.date) {
+          const total = day.tasks + day.subtasks;
+          if (total > peakDay.count) {
+            peakDay = { day: day.date, count: total };
+          }
+        }
+      });
+      
+      return {
+        hour: peakHour.hour,
+        hourDisplay: peakHour.hour >= 0 && peakHour.hour < hourlyData.length ? 
+          hourlyData[peakHour.hour].displayHour : 
+          `${peakHour.hour % 12 || 12}${peakHour.hour < 12 ? 'AM' : 'PM'}`,
+        hourCount: peakHour.count,
+        day: peakDay.day || 'None',
+        dayCount: peakDay.count
+      };
+    } catch (error) {
+      console.error('Error calculating peak times:', error);
+      return { 
+        hour: 0, 
+        hourDisplay: 'N/A', 
+        hourCount: 0,
+        day: 'N/A',
+        dayCount: 0
+      };
+    }
+  }, [hourlyData, dailyData]);
+  
+  // Get X-axis data key based on timeframe
+  const getXAxisDataKey = () => {
+    switch (timeframe) {
+      case 'hourly': return 'displayHour';
+      case 'daily': return 'date';
+      case 'weekly': return 'week';
+      case 'monthly': return 'month';
+      default: return 'date';
+    }
+  };
+  
+  // Get tooltip label formatter based on timeframe
+  const getTooltipLabelFormatter = (label: string) => {
+    if (!label) return 'Unknown';
+    
+    if (timeframe === 'hourly') return `Hour: ${label}`;
+    
+    if (timeframe === 'daily' && Array.isArray(dailyData)) {
+      const item = dailyData.find(d => d && d.date === label);
+      return item && item.fullDate ? item.fullDate : label;
+    }
+    
+    if (timeframe === 'weekly' && Array.isArray(weeklyData)) {
+      const item = weeklyData.find(d => d && d.week === label);
+      return item && item.label ? item.label : label;
+    }
+    
+    if (timeframe === 'monthly' && Array.isArray(monthlyData)) {
+      const item = monthlyData.find(d => d && d.month === label);
+      return item && item.label ? item.label : label;
+    }
+    
+    return label;
+  };
+  
+  return (
+    <Card className="mt-6">
+      <CardHeader className="pb-2">
+        <CardTitle className="text-lg flex justify-between items-center">
+          <div className="flex items-center gap-2">
+            <BarChartIcon className="h-5 w-5 text-primary" />
+            <span>Task Completion Metrics</span>
+          </div>
+          <div className="flex gap-1">
+            <Button 
+              variant={timeframe === 'hourly' ? 'default' : 'outline'} 
+              size="sm" 
+              className="h-7 text-xs"
+              onClick={() => setTimeframe('hourly')}
+            >
+              Hourly
+            </Button>
+            <Button 
+              variant={timeframe === 'daily' ? 'default' : 'outline'} 
+              size="sm" 
+              className="h-7 text-xs"
+              onClick={() => setTimeframe('daily')}
+            >
+              Daily
+            </Button>
+            <Button 
+              variant={timeframe === 'weekly' ? 'default' : 'outline'} 
+              size="sm" 
+              className="h-7 text-xs"
+              onClick={() => setTimeframe('weekly')}
+            >
+              Weekly
+            </Button>
+            <Button 
+              variant={timeframe === 'monthly' ? 'default' : 'outline'} 
+              size="sm" 
+              className="h-7 text-xs"
+              onClick={() => setTimeframe('monthly')}
+            >
+              Monthly
+            </Button>
+          </div>
+        </CardTitle>
+        <CardDescription>
+          Analyze your task and subtask completion patterns over time
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+          <Card className="bg-blue-50 dark:bg-blue-900/20 border-blue-100 dark:border-blue-800">
+            <CardContent className="p-4">
+              <div className="text-sm text-blue-600 dark:text-blue-300 font-medium">Tasks Completed</div>
+              <div className="text-2xl font-bold mt-1 text-blue-700 dark:text-blue-200">{totals.tasks}</div>
+            </CardContent>
+          </Card>
+          
+          <Card className="bg-green-50 dark:bg-green-900/20 border-green-100 dark:border-green-800">
+            <CardContent className="p-4">
+              <div className="text-sm text-green-600 dark:text-green-300 font-medium">Subtasks Completed</div>
+              <div className="text-2xl font-bold mt-1 text-green-700 dark:text-green-200">{totals.subtasks}</div>
+            </CardContent>
+          </Card>
+          
+          <Card className="bg-purple-50 dark:bg-purple-900/20 border-purple-100 dark:border-purple-800">
+            <CardContent className="p-4">
+              <div className="text-sm text-purple-600 dark:text-purple-300 font-medium">Peak Hour</div>
+              <div className="text-2xl font-bold mt-1 text-purple-700 dark:text-purple-200">
+                {peakTimes.hourDisplay}
+                <span className="text-sm font-normal ml-2">({peakTimes.hourCount} items)</span>
+              </div>
+            </CardContent>
+          </Card>
+          
+          <Card className="bg-amber-50 dark:bg-amber-900/20 border-amber-100 dark:border-amber-800">
+            <CardContent className="p-4">
+              <div className="text-sm text-amber-600 dark:text-amber-300 font-medium">Most Productive Day</div>
+              <div className="text-2xl font-bold mt-1 text-amber-700 dark:text-amber-200">
+                {peakTimes.day}
+                <span className="text-sm font-normal ml-2">({peakTimes.dayCount} items)</span>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+        
+        <div className="h-[300px]">
+          {chartData && Array.isArray(chartData) && chartData.length > 0 && chartData.some(item => 
+            (item.tasks && item.tasks > 0) || (item.subtasks && item.subtasks > 0)
+          ) ? (
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
+                <XAxis 
+                  dataKey={getXAxisDataKey()} 
+                  tick={{ fontSize: 12 }}
+                  interval={timeframe === 'hourly' ? 2 : 0}
+                />
+                <YAxis tick={{ fontSize: 12 }} />
+                <Tooltip 
+                  formatter={(value, name) => [value, name === 'tasks' ? 'Tasks' : 'Subtasks']}
+                  labelFormatter={(label) => getTooltipLabelFormatter(label)}
+                  contentStyle={{
+                    backgroundColor: 'var(--background)',
+                    borderColor: 'var(--border)',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                  }}
+                />
+                <Legend />
+                <Bar 
+                  dataKey="tasks" 
+                  name="Tasks" 
+                  fill={CHART_COLORS.blue} 
+                  radius={[4, 4, 0, 0]} 
+                  barSize={timeframe === 'hourly' ? 8 : 20}
+                />
+                <Bar 
+                  dataKey="subtasks" 
+                  name="Subtasks" 
+                  fill={CHART_COLORS.green} 
+                  radius={[4, 4, 0, 0]} 
+                  barSize={timeframe === 'hourly' ? 8 : 20}
+                />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div className="h-full flex items-center justify-center">
+              <div className="text-center">
+                <BarChartIcon className="h-12 w-12 text-muted-foreground/50 mx-auto mb-3" />
+                <p className="text-muted-foreground">No task completion data available</p>
+                <p className="text-xs text-muted-foreground/70 mt-1">
+                  {tasks.some(task => task.completed) ? 
+                    `No completed tasks found in the selected ${timeframe} timeframe` : 
+                    'Complete some tasks to see metrics'}
+                </p>
+              </div>
+            </div>
+          )}
+        </div>
+        
+        <div className="mt-6 text-sm text-muted-foreground">
+          <p>
+            {timeframe === 'hourly' && 'Hourly breakdown shows when you complete most tasks during the day.'}
+            {timeframe === 'daily' && 'Daily view shows your task completion pattern over the last 7 days.'}
+            {timeframe === 'weekly' && 'Weekly view shows your productivity trends over the last 4 weeks.'}
+            {timeframe === 'monthly' && 'Monthly view shows your long-term productivity over the last 6 months.'}
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  );
+};
+
 const DashboardOverview = () => {
   const { data: tasks = [], error: tasksError, isLoading: tasksLoading } = useQuery({
-    queryKey: ["tasks"],
+    queryKey: [QUERY_KEYS.TASKS],
     queryFn: async () => {
       const response = await getTasks();
-      return response;
+      // Cast the response to include subtask counts
+      return response as TaskWithSubtaskCounts[];
     },
   });
 
   const { data: notes = [], error: notesError, isLoading: notesLoading } = useQuery({
-    queryKey: ["notes"],
+    queryKey: [QUERY_KEYS.NOTES],
     queryFn: async () => {
       const response = await getNotes();
       return response;
@@ -125,21 +734,51 @@ const DashboardOverview = () => {
     },
   });
 
-  const { data: pomodoroSettings } = useQuery({
-    queryKey: ["pomodoro-settings"],
-    queryFn: async () => {
-      const response = await getPomodoroSettings();
-      return response;
-    },
-  });
+  // Debug data
+  useEffect(() => {
+    console.log("Tasks data:", tasks);
+    console.log("Tasks with subtasks:", tasksWithSubtasksIds);
+  }, [tasks, tasksWithSubtasksIds]);
 
-  // Calculate task statistics safely
-  const taskStats = {
-    completed: Array.isArray(tasks) ? tasks.filter((task: any) => task.completed).length : 0,
-    inProgress: Array.isArray(tasks) ? tasks.filter((task: any) => !task.completed && task.due_date).length : 0,
-    notStarted: Array.isArray(tasks) ? tasks.filter((task: any) => !task.completed && !task.due_date).length : 0,
-    withSubtasks: Array.isArray(tasksWithSubtasksIds) ? tasksWithSubtasksIds.length : 0,
-  };
+  // Calculate task statistics with improved logic
+  const taskStats = useMemo(() => {
+    if (!Array.isArray(tasks)) return { completed: 0, inProgress: 0, notStarted: 0, withSubtasks: 0 };
+    
+    // Get IDs of tasks with subtasks for easier lookup
+    const tasksWithSubtasksSet = new Set(
+      Array.isArray(tasksWithSubtasksIds) ? tasksWithSubtasksIds : []
+    );
+    
+    // Count tasks by status
+    const completed = tasks.filter(task => task.completed).length;
+    
+    // A task is in progress if:
+    // 1. It has subtasks (is in the tasksWithSubtasksIds array)
+    // 2. It's not completed
+    const inProgress = tasks.filter(task => {
+      const taskWithSubtasks = task as TaskWithSubtaskCounts;
+      return !task.completed && 
+        (tasksWithSubtasksSet.has(task.id) || 
+         (taskWithSubtasks.total_subtasks && taskWithSubtasks.total_subtasks > 0));
+    }).length;
+    
+    // A task is not started if:
+    // 1. It's not completed
+    // 2. It doesn't have subtasks OR has no started subtasks
+    const notStarted = tasks.filter(task => {
+      const taskWithSubtasks = task as TaskWithSubtaskCounts;
+      return !task.completed && 
+        !tasksWithSubtasksSet.has(task.id) &&
+        (!taskWithSubtasks.total_subtasks || taskWithSubtasks.total_subtasks === 0);
+    }).length;
+    
+    return {
+      completed,
+      inProgress,
+      notStarted,
+      withSubtasks: tasksWithSubtasksSet.size
+    };
+  }, [tasks, tasksWithSubtasksIds]);
 
   // Task progress data for radial chart
   const taskProgressData = [
@@ -162,8 +801,14 @@ const DashboardOverview = () => {
 
   // Calculate subtask completion statistics
   const subtaskStats = {
-    total: Array.isArray(tasks) ? tasks.reduce((sum, task: any) => sum + (task.total_subtasks || 0), 0) : 0,
-    completed: Array.isArray(tasks) ? tasks.reduce((sum, task: any) => sum + (task.completed_subtasks || 0), 0) : 0,
+    total: Array.isArray(tasks) ? tasks.reduce((sum, task) => {
+      const taskWithSubtasks = task as TaskWithSubtaskCounts;
+      return sum + (taskWithSubtasks.total_subtasks || 0);
+    }, 0) : 0,
+    completed: Array.isArray(tasks) ? tasks.reduce((sum, task) => {
+      const taskWithSubtasks = task as TaskWithSubtaskCounts;
+      return sum + (taskWithSubtasks.completed_subtasks || 0);
+    }, 0) : 0,
   };
 
   // Calculate meeting statistics
@@ -188,7 +833,7 @@ const DashboardOverview = () => {
     ).length : 0,
   };
 
-  // Calculate productivity trends (last 7 days)
+  // Calculate productivity trends (last 7 days) with improved timestamp handling
   const last7Days = Array.from({ length: 7 }, (_, i) => {
     const date = new Date();
     date.setDate(date.getDate() - i);
@@ -199,100 +844,175 @@ const DashboardOverview = () => {
     };
   }).reverse();
 
-  const productivityTrends = last7Days.map(day => {
-    // Get timestamp for start and end of the day
-    const startOfDay = new Date(day.date);
-    startOfDay.setHours(0, 0, 0, 0);
-    const endOfDay = new Date(day.date);
-    endOfDay.setHours(23, 59, 59, 999);
+  const productivityTrends = useMemo(() => {
+    // Debug tasks data
+    console.log("Tasks for productivity trends:", tasks);
+    console.log("Completed tasks for trends:", tasks.filter((task: any) => task.completed).length);
     
-    const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
-    const endTimestamp = Math.floor(endOfDay.getTime() / 1000);
+    const trends = last7Days.map(day => {
+      // Get timestamp for start and end of the day
+      const startOfDay = new Date(day.date);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(day.date);
+      endOfDay.setHours(23, 59, 59, 999);
+      
+      const startTimestamp = Math.floor(startOfDay.getTime() / 1000);
+      const endTimestamp = Math.floor(endOfDay.getTime() / 1000);
+      
+      // Debug day range
+      try {
+        console.log(`Day: ${day.dateString}, Start: ${new Date(startTimestamp * 1000).toString()}, End: ${new Date(endTimestamp * 1000).toString()}`);
+      } catch (error) {
+        console.error(`Error logging day range for ${day.dateString}:`, error);
+      }
+      
+      // Count completed tasks for this day - check both updated_at and completed_at
+      const tasksCompleted = Array.isArray(tasks) 
+        ? tasks.filter((task: any) => {
+            // If task is completed and has a timestamp
+            if (!task.completed) return false;
+            
+            // Check updated_at (when the task was last modified)
+            const updatedAt = task.updated_at || 0;
+            
+            // Check if the task was completed on this day
+            const completed = updatedAt >= startTimestamp && updatedAt <= endTimestamp;
+            
+            if (completed) {
+              console.log(`Task ${task.id} completed on ${day.dateString}, timestamp: ${updatedAt}`);
+            }
+            
+            return completed;
+          }).length
+        : 0;
+      
+      // Count meetings attended for this day
+      const meetingsAttended = Array.isArray(meetings)
+        ? meetings.filter((meeting: any) =>
+            meeting.start_time >= startTimestamp &&
+            meeting.start_time <= endTimestamp
+          ).length
+        : 0;
+      
+      // Count appointments attended for this day
+      const appointmentsAttended = Array.isArray(appointments)
+        ? appointments.filter((apt: any) =>
+            apt.start_time >= startTimestamp &&
+            apt.start_time <= endTimestamp
+          ).length
+        : 0;
+      
+      // Debug counts for this day
+      try {
+        console.log(`${day.dateString}: Tasks=${tasksCompleted}, Meetings=${meetingsAttended}, Appointments=${appointmentsAttended}`);
+      } catch (error) {
+        console.error(`Error logging day counts for ${day.dateString}:`, error);
+      }
+      
+      return {
+        name: day.shortDate,
+        fullDate: day.dateString,
+        tasks: tasksCompleted,
+        meetings: meetingsAttended,
+        appointments: appointmentsAttended,
+        total: tasksCompleted + meetingsAttended + appointmentsAttended
+      };
+    });
     
-    // Count completed tasks for this day
-    const tasksCompleted = Array.isArray(tasks) 
-      ? tasks.filter((task: any) => 
-          task.completed && 
-          task.updated_at >= startTimestamp && 
-          task.updated_at <= endTimestamp
-        ).length
-      : 0;
+    // Debug final trends data
+    try {
+      console.log("Productivity trends:", trends);
+    } catch (error) {
+      console.error("Error logging productivity trends:", error);
+    }
     
-    // Count meetings attended for this day
-    const meetingsAttended = Array.isArray(meetings)
-      ? meetings.filter((meeting: any) =>
-          meeting.start_time >= startTimestamp &&
-          meeting.start_time <= endTimestamp
-        ).length
-      : 0;
-    
-    // Count appointments attended for this day
-    const appointmentsAttended = Array.isArray(appointments)
-      ? appointments.filter((apt: any) =>
-          apt.start_time >= startTimestamp &&
-          apt.start_time <= endTimestamp
-        ).length
-      : 0;
-    
-    return {
-      name: day.shortDate,
-      fullDate: day.dateString,
-      tasks: tasksCompleted,
-      meetings: meetingsAttended,
-      appointments: appointmentsAttended,
-      total: tasksCompleted + meetingsAttended + appointmentsAttended
-    };
-  });
+    return trends;
+  }, [tasks, meetings, appointments, last7Days]);
 
   // Calculate hourly activity distribution (24-hour format)
-  const hourlyActivityData = Array.from({ length: 24 }, (_, hour) => ({
-    hour: hour,
-    displayHour: hour === 0 ? '12 AM' : hour === 12 ? '12 PM' : hour < 12 ? `${hour} AM` : `${hour - 12} PM`,
-    tasks: 0,
-    meetings: 0,
-    appointments: 0,
-    total: 0
-  }));
+  const hourlyActivityData = useMemo(() => {
+    // Debug tasks data
+    try {
+      console.log("Tasks for hourly distribution:", tasks);
+      console.log("Completed tasks for hourly:", tasks.filter((task: any) => task.completed).length);
+    } catch (error) {
+      console.error("Error logging hourly task data:", error);
+    }
+    
+    // Initialize hourly data structure
+    const hourlyData = Array.from({ length: 24 }, (_, hour) => ({
+      hour: hour,
+      displayHour: hour === 0 ? '12 AM' : hour === 12 ? '12 PM' : hour < 12 ? `${hour} AM` : `${hour - 12} PM`,
+      tasks: 0,
+      meetings: 0,
+      appointments: 0,
+      total: 0
+    }));
 
-  // Populate hourly activity data
-  if (Array.isArray(tasks)) {
-    tasks.forEach((task: any) => {
-      if (task && task.updated_at) {
-        const date = new Date(task.updated_at * 1000);
-        const hour = date.getHours();
-        if (hourlyActivityData[hour]) {
-          hourlyActivityData[hour].tasks += 1;
-          hourlyActivityData[hour].total += 1;
+    // Populate with task data
+    if (Array.isArray(tasks)) {
+      tasks.forEach((task: any) => {
+        if (task && task.completed && task.updated_at) {
+          try {
+            // Convert Unix timestamp to Date object
+            const date = new Date(task.updated_at * 1000);
+            const hour = date.getHours();
+            
+            // Debug task completion hour
+            console.log(`Task ${task.id} completed at hour ${hour}, timestamp: ${task.updated_at}, date: ${date.toString()}`);
+            
+            if (hour >= 0 && hour < 24) {
+              hourlyData[hour].tasks += 1;
+              hourlyData[hour].total += 1;
+            }
+          } catch (error) {
+            console.error(`Error processing task ${task.id} with timestamp ${task.updated_at}:`, error);
+          }
         }
-      }
-    });
-  }
+      });
+    }
 
-  if (Array.isArray(meetings)) {
-    meetings.forEach((meeting: any) => {
-      if (meeting && meeting.start_time) {
-        const date = new Date(meeting.start_time * 1000);
-        const hour = date.getHours();
-        if (hourlyActivityData[hour]) {
-          hourlyActivityData[hour].meetings += 1;
-          hourlyActivityData[hour].total += 1;
+    // Populate with meeting data
+    if (Array.isArray(meetings)) {
+      meetings.forEach((meeting: any) => {
+        if (meeting && meeting.start_time) {
+          const date = new Date(meeting.start_time * 1000);
+          const hour = date.getHours();
+          if (hour >= 0 && hour < 24) {
+            hourlyData[hour].meetings += 1;
+            hourlyData[hour].total += 1;
+          }
         }
-      }
-    });
-  }
+      });
+    }
 
-  if (Array.isArray(appointments)) {
-    appointments.forEach((apt: any) => {
-      if (apt && apt.start_time) {
-        const date = new Date(apt.start_time * 1000);
-        const hour = date.getHours();
-        if (hourlyActivityData[hour]) {
-          hourlyActivityData[hour].appointments += 1;
-          hourlyActivityData[hour].total += 1;
+    // Populate with appointment data
+    if (Array.isArray(appointments)) {
+      appointments.forEach((apt: any) => {
+        if (apt && apt.start_time) {
+          const date = new Date(apt.start_time * 1000);
+          const hour = date.getHours();
+          if (hour >= 0 && hour < 24) {
+            hourlyData[hour].appointments += 1;
+            hourlyData[hour].total += 1;
+          }
         }
-      }
-    });
-  }
+      });
+    }
+    
+    // Debug hourly data
+    try {
+      console.log("Hourly activity data:", hourlyData);
+      
+      // Check if there's any data
+      const hasData = hourlyData.some(item => item.total > 0);
+      console.log("Hourly data has values:", hasData);
+    } catch (error) {
+      console.error("Error logging hourly activity data:", error);
+    }
+    
+    return hourlyData;
+  }, [tasks, meetings, appointments]);
 
   // Calculate monthly task completion trends (last 6 months)
   const last6Months = Array.from({ length: 6 }, (_, i) => {
@@ -304,55 +1024,71 @@ const DashboardOverview = () => {
     };
   }).reverse();
 
-  const monthlyCompletionTrends = last6Months.map(monthData => {
-    const startOfMonth = new Date(monthData.date);
-    const endOfMonth = new Date(monthData.date.getFullYear(), monthData.date.getMonth() + 1, 0, 23, 59, 59, 999);
+  const monthlyCompletionTrends = useMemo(() => {
+    // Debug tasks data
+    console.log("Tasks for monthly trends:", tasks);
+    console.log("Completed tasks:", tasks.filter((task: any) => task.completed).length);
     
-    const startTimestamp = Math.floor(startOfMonth.getTime() / 1000);
-    const endTimestamp = Math.floor(endOfMonth.getTime() / 1000);
+    const trends = last6Months.map(monthData => {
+      // Create date objects using the user's timezone
+      const startOfMonth = new Date(monthData.date);
+      startOfMonth.setHours(0, 0, 0, 0);
+      
+      const endOfMonth = new Date(monthData.date.getFullYear(), monthData.date.getMonth() + 1, 0);
+      endOfMonth.setHours(23, 59, 59, 999);
+      
+      const startTimestamp = Math.floor(startOfMonth.getTime() / 1000);
+      const endTimestamp = Math.floor(endOfMonth.getTime() / 1000);
+      
+      // Debug timestamps
+      try {
+        console.log(`Month: ${monthData.month}, Start: ${new Date(startTimestamp * 1000).toString()}, End: ${new Date(endTimestamp * 1000).toString()}`);
+      } catch (error) {
+        console.error(`Error logging month range for ${monthData.month}:`, error);
+      }
+      
+      // Count tasks created in this month
+      const tasksCreated = Array.isArray(tasks) 
+        ? tasks.filter((task: any) => {
+            const created = task.created_at >= startTimestamp && task.created_at <= endTimestamp;
+            return created;
+          }).length
+        : 0;
+      
+      // Count tasks completed in this month
+      const tasksCompleted = Array.isArray(tasks) 
+        ? tasks.filter((task: any) => {
+            if (!task.completed || !task.updated_at) return false;
+            
+            const completed = task.updated_at >= startTimestamp && task.updated_at <= endTimestamp;
+            return completed;
+          }).length
+        : 0;
+      
+      // Debug counts for this month
+      try {
+        console.log(`${monthData.month}: Created=${tasksCreated}, Completed=${tasksCompleted}`);
+      } catch (error) {
+        console.error(`Error logging month counts for ${monthData.month}:`, error);
+      }
+      
+      return {
+        name: monthData.month,
+        created: tasksCreated,
+        completed: tasksCompleted,
+        completion_rate: tasksCreated > 0 ? Math.round((tasksCompleted / tasksCreated) * 100) : 0
+      };
+    });
     
-    // Count tasks created in this month
-    const tasksCreated = Array.isArray(tasks) 
-      ? tasks.filter((task: any) => 
-          task.created_at >= startTimestamp && 
-          task.created_at <= endTimestamp
-        ).length
-      : 0;
+    // Debug final trends data
+    try {
+      console.log("Monthly completion trends:", trends);
+    } catch (error) {
+      console.error("Error logging monthly completion trends:", error);
+    }
     
-    // Count tasks completed in this month
-    const tasksCompleted = Array.isArray(tasks) 
-      ? tasks.filter((task: any) => 
-          task.completed && 
-          task.updated_at >= startTimestamp && 
-          task.updated_at <= endTimestamp
-        ).length
-      : 0;
-    
-    return {
-      name: monthData.month,
-      created: tasksCreated,
-      completed: tasksCompleted,
-      completion_rate: tasksCreated > 0 ? Math.round((tasksCompleted / tasksCreated) * 100) : 0
-    };
-  });
-
-  const taskChartData = [
-    { name: "Completed", value: taskStats.completed },
-    { name: "In Progress", value: taskStats.inProgress },
-    { name: "Not Started", value: taskStats.notStarted },
-  ];
-
-  // Create data for subtask progress chart
-  const subtaskProgressData = [
-    { name: "Completed", value: subtaskStats.completed },
-    { name: "Remaining", value: subtaskStats.total - subtaskStats.completed },
-  ];
-
-  // Create data for meetings and appointments chart
-  const eventChartData = [
-    { name: "Meetings", upcoming: meetingStats.upcoming, past: meetingStats.past },
-    { name: "Appointments", upcoming: appointmentStats.upcoming, past: appointmentStats.past },
-  ];
+    return trends;
+  }, [tasks, last6Months]);
 
   // Calculate task priority distribution
   const taskPriorityStats = {
@@ -373,13 +1109,6 @@ const DashboardOverview = () => {
     date.setDate(date.getDate() - i);
     return formatDate(date, "MMM d");
   }).reverse();
-
-  const notesByDate = last5Days.map(date => ({
-    date,
-    count: Array.isArray(notes) ? notes.filter((note: any) => 
-      note.createdAt && formatDate(new Date(note.createdAt), "MMM d") === date
-    ).length : 0
-  }));
 
   // Get upcoming appointments safely
   const upcomingAppointments = Array.isArray(appointments) ? appointments
@@ -416,7 +1145,7 @@ const DashboardOverview = () => {
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div>
             <h2 className="text-2xl font-bold tracking-tight">
-              {getGreeting()}, <span className="text-primary">{localStorage.getItem("userName") || "User"}</span>
+              {getGreeting()}, <span className="text-primary">{localStorage.getItem("userName")?.split(" ")[0] || "User"}</span>
             </h2>
             <p className="text-muted-foreground mt-1">
               Here's what's happening with your tasks and schedule today.
@@ -810,7 +1539,7 @@ const DashboardOverview = () => {
           <CardContent className="pt-6">
             <h3 className="text-lg font-semibold mb-4">Productivity Trends (Last 7 Days)</h3>
             <div className="h-[300px]">
-              {productivityTrends.every(item => item.total === 0) ? (
+              {productivityTrends.length > 0 && productivityTrends.every(item => item.total === 0) ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
                   No activity in the last 7 days
                 </div>
@@ -849,7 +1578,7 @@ const DashboardOverview = () => {
           <CardContent className="pt-6">
             <h3 className="text-lg font-semibold mb-4">Monthly Task Completion</h3>
             <div className="h-[300px]">
-              {monthlyCompletionTrends.every(item => item.created === 0 && item.completed === 0) ? (
+              {monthlyCompletionTrends.length > 0 && monthlyCompletionTrends.every(item => item.created === 0 && item.completed === 0) ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
                   No task data available for the last 6 months
                 </div>
@@ -925,7 +1654,7 @@ const DashboardOverview = () => {
           <CardContent className="pt-6">
             <h3 className="text-lg font-semibold mb-4">Hourly Activity Distribution</h3>
             <div className="h-[300px]">
-              {hourlyActivityData.every(item => item.total === 0) ? (
+              {hourlyActivityData.length > 0 && hourlyActivityData.every(item => item.total === 0) ? (
                 <div className="h-full flex items-center justify-center text-muted-foreground">
                   No activity data available
                 </div>
@@ -1048,47 +1777,19 @@ const DashboardOverview = () => {
           </CardContent>
         </Card>
       </div>
+
+      {/* Task Completion Metrics - Full width section */}
+      {Array.isArray(tasks) && tasks.length > 0 && (
+        <>
+          {/* Debug task structure */}
+          <div style={{ display: 'none' }}>
+          </div>
+          <TaskCompletionMetrics tasks={tasks as TaskWithSubtaskCounts[]} />
+        </>
+      )}
     </div>
   );
 };
-
-const navItems: NavItem[] = [
-  {
-    title: "Dashboard",
-    icon: <LayoutGrid className="h-4 w-4" />,
-    component: <DashboardOverview />,
-  },
-  {
-    title: "Tasks",
-    icon: <CheckSquare className="h-4 w-4" />,
-    component: <TaskManager />,
-  },
-  {
-    title: "Notes",
-    icon: <StickyNote className="h-4 w-4" />,
-    component: <NotesBoard />,
-  },
-  {
-    title: "Pomodoro",
-    icon: <Timer className="h-4 w-4" />,
-    component: <PomodoroTimer />,
-  },
-  {
-    title: "Calendar",
-    icon: <CalendarDays className="h-4 w-4" />,
-    component: <Calendar />,
-  },
-  {
-    title: "Meetings",
-    icon: <Video className="h-4 w-4" />,
-    component: <Meetings />,
-  },
-  {
-    title: "Settings",
-    icon: <SettingsIcon className="h-4 w-4" />,
-    component: <Settings />,
-  },
-];
 
 export default function Dashboard() {
   // Use localStorage to persist the selected navigation item
@@ -1098,32 +1799,207 @@ export default function Dashboard() {
     // Return the saved nav or default to "Dashboard"
     return savedNav || "Dashboard";
   });
-  const { logout } = useAuth();
+  const { logout, user } = useAuth();
   const { theme, setTheme } = useTheme();
+  const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  const [isMobileView, setIsMobileView] = React.useState(false);
+
+  // Define navItems inside the component to access user
+  const navItems = React.useMemo(() => {
+    // Base navigation items that all users can see
+    const baseItems = [
+      {
+        title: "Dashboard",
+        icon: <LayoutGrid className="h-4 w-4" />,
+        component: <DashboardOverview />,
+      },
+      {
+        title: "Tasks",
+        icon: <CheckSquare className="h-4 w-4" />,
+        component: React.createElement(TaskManager),
+      },
+      {
+        title: "Sticky Notes",
+        icon: <StickyNote className="h-4 w-4" />,
+        component: <NotesBoard />,
+      },
+      {
+        title: "Long Notes",
+        icon: <NotebookIcon className="h-4 w-4" />,
+        component: <LongNotesBoard />,
+      },
+      {
+        title: "Pomodoro",
+        icon: <Timer className="h-4 w-4" />,
+        component: <PomodoroTimer />,
+      },
+      {
+        title: "Calendar",
+        icon: <CalendarDays className="h-4 w-4" />,
+        component: <Calendar />,
+      },
+      {
+        title: "Appointments",
+        icon: <CalendarIcon className="h-4 w-4" />,
+        component: <Appointments />,
+      },
+      {
+        title: "Meetings",
+        icon: <Video className="h-4 w-4" />,
+        component: <Meetings />,
+      },
+      {
+        title: "Settings",
+        icon: <SettingsIcon className="h-4 w-4" />,
+        component: <Settings />,
+      },
+    ];
+    
+    // Add admin-only items
+    if (user?.role === 'admin') {
+      baseItems.push({
+        title: "User Management",
+        icon: <Users className="h-4 w-4" />,
+        component: <UserManagement />,
+      });
+    }
+    
+    return baseItems;
+  }, [user?.role]);
 
   // Update localStorage when navigation changes
   React.useEffect(() => {
     localStorage.setItem('selectedNav', selectedNav);
   }, [selectedNav]);
 
+  // Check if we're in mobile view
+  React.useEffect(() => {
+    const checkMobileView = () => {
+      setIsMobileView(window.innerWidth < 768);
+      if (window.innerWidth < 768) {
+        setIsSidebarOpen(false);
+      } else {
+        setIsSidebarOpen(true);
+      }
+    };
+
+    // Initial check
+    checkMobileView();
+
+    // Add event listener for window resize
+    window.addEventListener('resize', checkMobileView);
+
+    // Cleanup
+    return () => window.removeEventListener('resize', checkMobileView);
+  }, []);
+
   return (
-    <ResizablePanelGroup
-      direction="horizontal"
-      className="h-screen items-stretch"
-    >
-      {/* Resizable sidebar with slightly larger initial width */}
-      <ResizablePanel defaultSize={22} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] flex flex-col h-screen shadow-sm">
+    <NotificationsProvider>
+      <TaskReminderService />
+      
+      {/* Mobile menu button - only visible on small screens */}
+      {isMobileView && (
+        <div className="fixed top-4 left-4 z-50">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="h-10 w-10 rounded-full bg-background/80 backdrop-blur-sm border border-border shadow-md"
+          >
+            {isSidebarOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </Button>
+        </div>
+      )}
+
+      {/* Mobile view */}
+      {isMobileView ? (
+        <div className="h-screen flex flex-col">
+          {/* Sidebar for mobile - conditionally shown */}
+          <div 
+            className={cn(
+              "bg-[hsl(var(--background))] flex flex-col shadow-md z-40 fixed inset-y-0 left-0 w-[280px] transition-transform duration-300 ease-in-out",
+              isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+            )}
+          >
+            {/* Sidebar content */}
+            {renderSidebarContent()}
+          </div>
+
+          {/* Overlay for mobile */}
+          {isSidebarOpen && (
+            <div 
+              className="fixed inset-0 bg-black/50 z-30 backdrop-blur-sm"
+              onClick={() => setIsSidebarOpen(false)}
+            />
+          )}
+
+          {/* Main content for mobile */}
+          <div className="flex-1 bg-[hsl(var(--background))] h-screen flex flex-col overflow-hidden">
+            <ScrollArea className="flex-1 thin-scrollbar">
+              <div className="p-4 md:p-6">
+                {renderMainContent()}
+              </div>
+            </ScrollArea>
+          </div>
+        </div>
+      ) : (
+        /* Desktop view with resizable panels */
+        <ResizablePanelGroup
+          direction="horizontal"
+          className="h-screen items-stretch"
+        >
+          {/* Resizable sidebar */}
+          <ResizablePanel 
+            defaultSize={22} 
+            minSize={15} 
+            maxSize={30} 
+            className="bg-[hsl(var(--background))] flex flex-col h-screen shadow-sm"
+          >
+            {renderSidebarContent()}
+          </ResizablePanel>
+
+          <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
+
+          {/* Main content area */}
+          <ResizablePanel 
+            defaultSize={78} 
+            minSize={70} 
+            maxSize={85} 
+            className="bg-[hsl(var(--background))] h-screen flex flex-col"
+          >
+            <ScrollArea className="flex-1 thin-scrollbar">
+              <div className="p-6">
+                {renderMainContent()}
+              </div>
+            </ScrollArea>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      )}
+    </NotificationsProvider>
+  );
+
+  // Helper function to render sidebar content
+  function renderSidebarContent() {
+    return (
+      <>
         {/* App branding - now clickable */}
         <div className="px-4 py-4">
           <div className="flex items-center justify-between">
             <div 
               className="flex items-center gap-2.5 cursor-pointer justify-center group" 
-              onClick={() => setSelectedNav("Dashboard")}
+              onClick={() => {
+                setSelectedNav("Dashboard");
+                if (isMobileView) setIsSidebarOpen(false);
+              }}
             >
               <div className="flex items-center justify-center
                 rounded-full
                 bg-gradient-to-br from-yellow-500 to-amber-700
-                p-1.5
+                p-1
                 shadow-lg
                 group-hover:from-yellow-400 group-hover:to-amber-600
                 transition-all
@@ -1177,12 +2053,30 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
-
+        {/* add divider for light and dark theme */}
+        {theme === "light" ? (
+          <div className="h-[1px] bg-gray-200" />
+        ) : (
+          <div className="h-[1px] bg-gray-700" />
+        )}
         {/* User Profile Section */}
         <div className="px-4 py-3">
-          <ProfileDropdown />
+          <div className="flex items-center justify-between">
+            <ProfileDropdown />
+            {theme === "light" ? (
+              <div className="w-[1px] h-10 bg-gray-200" /> 
+            ) : (
+              <div className="w-[1px] h-10 bg-gray-700" />
+            )}
+            <NotificationsDropdown />
+          </div>
         </div>
-        
+        {/* add divider for light and dark theme */}
+        {theme === "light" ? (
+          <div className="h-[1px] bg-gray-200" />
+        ) : (
+          <div className="h-[1px] bg-gray-700" />
+        )}
         {/* Navigation - independently scrollable */}
         <ScrollArea className="flex-1 thin-scrollbar px-3">
           <div className="space-y-1.5 py-4">
@@ -1198,7 +2092,10 @@ export default function Dashboard() {
                     "hover:bg-[hsl(var(--primary)/0.08)] hover:text-primary hover:translate-x-1": selectedNav !== item.title,
                   }
                 )}
-                onClick={() => setSelectedNav(item.title)}
+                onClick={() => {
+                  setSelectedNav(item.title);
+                  if (isMobileView) setIsSidebarOpen(false);
+                }}
               >
                 <div className={cn(
                   "w-9 h-9 flex items-center justify-center rounded-md transition-all duration-300",
@@ -1231,36 +2128,42 @@ export default function Dashboard() {
             <span className="font-medium">Logout</span>
           </Button>
         </div>
-      </ResizablePanel>
+      </>
+    );
+  }
 
-      <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
-
-      {/* Main content area */}
-      <ResizablePanel defaultSize={78} minSize={70} maxSize={85} className="bg-[hsl(var(--background))] h-screen flex flex-col">
-        {/* Main content header with breadcrumb */}
-      
-        
-        {/* Main content with independent scrolling */}
-        <ScrollArea className="flex-1 thin-scrollbar">
-          <div className="p-6">
-            {/* Conditional rendering based on selected navigation item */}
-            {selectedNav === "Dashboard" && <DashboardOverview />}
-            {selectedNav === "Tasks" && <TaskManager />}
-            {selectedNav === "Notes" && <NotesBoard />}
-            {selectedNav === "Pomodoro" && <PomodoroTimer />}
-            {selectedNav === "Calendar" && <Calendar />}
-            {selectedNav === "Meetings" && <Meetings />}
-            {selectedNav === "Settings" && <Settings />}
-          </div>
-        </ScrollArea>
-      </ResizablePanel>
-    </ResizablePanelGroup>
-  );
+  // Helper function to render main content
+  function renderMainContent() {
+    console.log("Selected navigation item:", selectedNav);
+    
+    // Find the matching nav item
+    const navItem = navItems.find(item => item.title === selectedNav);
+    console.log("Found nav item:", navItem?.title);
+    
+    // If we found a matching nav item, render its component
+    if (navItem) {
+      return (
+        <div className="w-full">
+          {navItem.component}
+        </div>
+      );
+    }
+    
+    // Fallback to Dashboard if no matching nav item
+    return <DashboardOverview />;
+  }
 }
 
 // Helper function to get greeting based on time of day
 const getGreeting = () => {
-  const hour = new Date().getHours();
+  // Get the current date in the user's timezone
+  const timezone = getUserTimezone();
+  const now = new Date();
+  
+  // Format the date in the user's timezone to get the correct hour
+  const timeString = formatDate(now, 'HH');
+  const hour = parseInt(timeString, 10);
+  
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
   return "Good evening";

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Progress } from "@/components/ui/progress";
@@ -24,16 +24,42 @@ import { useToast } from "@/hooks/use-toast";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { getPomodoroSettings, updatePomodoroSettings } from "@/lib/api";
-import { queryClient } from "@/lib/queryClient";
-import { Play, Pause, RotateCcw, Loader2, Settings as SettingsIcon, AlertCircle, Coffee, Brain, Moon, CheckCircle2, Volume2, VolumeX, Bell, Flame } from "lucide-react";
-import { PomodoroSettings } from "@shared/schema";
+import { 
+  getPomodoroSettings, 
+  updatePomodoroSettings,
+  getStudySessions,
+  createStudySession,
+  updateStudySession
+} from "@/lib/api";
+import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
+import { 
+  Play, 
+  Pause, 
+  RotateCcw, 
+  Loader2, 
+  Settings as SettingsIcon, 
+  AlertCircle, 
+  Coffee, 
+  Brain, 
+  Moon, 
+  CheckCircle2, 
+  Volume2, 
+  VolumeX, 
+  Bell, 
+  Flame,
+  BookOpen,
+  BarChart2,
+  Clock,
+  Calendar
+} from "lucide-react";
+import { PomodoroSettings, StudySession } from "@shared/schema";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Slider } from "@/components/ui/slider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { motion, AnimatePresence } from "framer-motion";
+import { Textarea } from "@/components/ui/textarea";
 
 // Asset paths
 const NOTIFICATION_SOUND_PATH = "/assets/bell_not.wav";
@@ -95,8 +121,19 @@ const MOTIVATIONAL_QUOTES = {
   ],
 };
 
+// Update the formSchema to include study session fields
+const studySessionFormSchema = z.object({
+  title: z.string().min(1, { message: "Title is required" }),
+  description: z.string().optional(),
+  subject: z.string().optional(),
+  goal: z.string().optional(),
+});
+
+type StudySessionFormValues = z.infer<typeof studySessionFormSchema>;
+
 export default function PomodoroTimer() {
   const { toast } = useToast();
+  const queryClient = useQueryClient();
   const [isRunning, setIsRunning] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [timeLeft, setTimeLeft] = useState(DEFAULT_SETTINGS.work_duration * 60);
@@ -105,6 +142,11 @@ export default function PomodoroTimer() {
   const [isSettingsDialogOpen, setIsSettingsDialogOpen] = useState(false);
   const [soundEnabled, setSoundEnabled] = useState(true);
   const [showCompletionAnimation, setShowCompletionAnimation] = useState(false);
+  const [currentStudySession, setCurrentStudySession] = useState<StudySession | null>(null);
+  const [isStudySessionDialogOpen, setIsStudySessionDialogOpen] = useState(false);
+  const [totalFocusTime, setTotalFocusTime] = useState(0);
+  const [totalBreaks, setTotalBreaks] = useState(0);
+  const [isStatsDialogOpen, setIsStatsDialogOpen] = useState(false);
   
   // Get a random motivational quote based on the current timer state
   const getRandomQuote = () => {
@@ -226,6 +268,48 @@ export default function PomodoroTimer() {
       console.log("Calling updatePomodoroSettings with:", cleanData);
       return updatePomodoroSettings(cleanData);
     },
+    onMutate: async (data) => {
+      console.log("Optimistically updating pomodoro settings in cache");
+      
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: ["settings", "pomodoro"] });
+      
+      // Snapshot the previous value
+      const previousSettings = queryClient.getQueryData(["settings", "pomodoro"]);
+      
+      // Create a proper deep copy to avoid reference issues
+      const previousSettingsCopy = previousSettings ? JSON.parse(JSON.stringify(previousSettings)) : null;
+      
+      // Create optimistic update with validated numeric values
+      const optimisticSettings = {
+        work_duration: Number(data.work_duration),
+        break_duration: Number(data.break_duration),
+        long_break_duration: Number(data.long_break_duration),
+        sessions_before_long_break: Number(data.sessions_before_long_break)
+      };
+      
+      console.log("Optimistic settings:", optimisticSettings);
+      
+      // Update the cache with the optimistic data
+      queryClient.setQueryData(["settings", "pomodoro"], optimisticSettings);
+      
+      return { previousSettings: previousSettingsCopy };
+    },
+    onError: (error: any, _variables, context) => {
+      console.error("Failed to update pomodoro settings:", error);
+      
+      // Rollback to previous state if available
+      if (context?.previousSettings) {
+        console.log("Rolling back to previous settings state");
+        queryClient.setQueryData(["settings", "pomodoro"], context.previousSettings);
+      }
+      
+      toast({
+        variant: "destructive",
+        title: "Update Failed",
+        description: error.message || "An error occurred while updating your settings. Please try again.",
+      });
+    },
     onSuccess: (data) => {
       console.log("Settings update successful:", data);
       
@@ -240,19 +324,13 @@ export default function PomodoroTimer() {
         }
       }
       
+      // Simply fetch the settings again from the server
       queryClient.invalidateQueries({ queryKey: ["settings", "pomodoro"] });
+      
       setIsSettingsDialogOpen(false);
       toast({
         title: "Settings Updated",
         description: "Your Pomodoro timer settings have been updated successfully.",
-      });
-    },
-    onError: (error: any) => {
-      console.error("Failed to update pomodoro settings:", error);
-      toast({
-        variant: "destructive",
-        title: "Update Failed",
-        description: error.message || "An error occurred while updating your settings. Please try again.",
       });
     },
   });
@@ -385,6 +463,148 @@ export default function PomodoroTimer() {
 
   const progress = (timeLeft / getMaxTime()) * 100;
 
+  // Form for study session
+  const studySessionForm = useForm<StudySessionFormValues>({
+    resolver: zodResolver(studySessionFormSchema),
+    defaultValues: {
+      title: "",
+      description: "",
+      subject: "",
+      goal: "",
+    }
+  });
+
+  // Query for study sessions
+  const { data: studySessions, isLoading: isLoadingStudySessions } = useQuery({
+    queryKey: [QUERY_KEYS.STUDY_SESSIONS],
+    queryFn: getStudySessions,
+    enabled: isStatsDialogOpen, // Only fetch when stats dialog is open
+  });
+
+  // Create study session mutation
+  const createStudySessionMutation = useMutation({
+    mutationFn: createStudySession,
+    onSuccess: (data) => {
+      setCurrentStudySession(data);
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.STUDY_SESSIONS] });
+      toast({
+        title: "Study Session Started",
+        description: "Your study session has been created successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to Start Session",
+        description: error.message || "Something went wrong when creating your study session.",
+      });
+    }
+  });
+
+  // Update study session mutation
+  const updateStudySessionMutation = useMutation({
+    mutationFn: ({ id, data }: { id: string | number, data: any }) => 
+      updateStudySession(id, data),
+    onSuccess: (data) => {
+      setCurrentStudySession(data);
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.STUDY_SESSIONS] });
+      toast({
+        title: "Study Session Updated",
+        description: "Your study session has been updated successfully.",
+      });
+    },
+    onError: (error: any) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to Update Session",
+        description: error.message || "Something went wrong when updating your study session.",
+      });
+    }
+  });
+
+  // Handle study session form submission
+  const onSubmitStudySession = (data: StudySessionFormValues) => {
+    if (currentStudySession) {
+      // Update existing session
+      updateStudySessionMutation.mutate({
+        id: currentStudySession.id,
+        data: {
+          ...data,
+          total_focus_time: totalFocusTime,
+          total_breaks: totalBreaks,
+        }
+      });
+    } else {
+      // Create new session
+      createStudySessionMutation.mutate({
+        ...data,
+        total_focus_time: 0,
+        total_breaks: 0,
+      });
+    }
+    setIsStudySessionDialogOpen(false);
+  };
+
+  // Update the session whenever a work session completes
+  useEffect(() => {
+    if (currentStudySession && timerState === "work" && timeLeft === 0) {
+      // A work session just completed, update the study session
+      const newFocusTime = totalFocusTime + (settings?.work_duration || 25) * 60;
+      setTotalFocusTime(newFocusTime);
+      
+      updateStudySessionMutation.mutate({
+        id: currentStudySession.id,
+        data: {
+          total_focus_time: newFocusTime,
+        }
+      });
+    } else if (currentStudySession && (timerState === "break" || timerState === "longBreak") && timeLeft === 0) {
+      // A break just completed, update the total breaks
+      const newTotalBreaks = totalBreaks + 1;
+      setTotalBreaks(newTotalBreaks);
+      
+      updateStudySessionMutation.mutate({
+        id: currentStudySession.id,
+        data: {
+          total_breaks: newTotalBreaks,
+        }
+      });
+    }
+  }, [timerState, timeLeft]);
+
+  // Format time in hours and minutes
+  const formatTimeHoursMinutes = (seconds: number) => {
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    } else {
+      return `${minutes}m`;
+    }
+  };
+
+  // End the current study session
+  const endStudySession = () => {
+    if (currentStudySession) {
+      updateStudySessionMutation.mutate({
+        id: currentStudySession.id,
+        data: {
+          completed: true,
+          total_focus_time: totalFocusTime,
+          total_breaks: totalBreaks,
+        }
+      });
+      setCurrentStudySession(null);
+      setTotalFocusTime(0);
+      setTotalBreaks(0);
+      toast({
+        title: "Study Session Completed",
+        description: "Your study session has been marked as completed.",
+      });
+    }
+  };
+
   // Show loading state
   if (isLoadingSettings) {
     return (
@@ -449,6 +669,68 @@ export default function PomodoroTimer() {
         </Alert>
       )}
       
+      {/* Study Session Info Card - Show when a session is active */}
+      {currentStudySession && (
+        <Card className="shadow-md hover:shadow-lg transition-all duration-300 overflow-hidden bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-blue-900/20 dark:to-indigo-800/20 border-blue-200 dark:border-blue-800">
+          <CardContent className="pt-3 pb-3 px-4">
+            <div className="flex flex-col space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-blue-600" />
+                  <h3 className="font-semibold text-sm">{currentStudySession.title}</h3>
+                </div>
+                <Badge className="bg-blue-600 text-xs py-0 px-2">Active</Badge>
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2">
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Focus:</span>
+                  <span className="text-xs font-semibold text-blue-600">
+                    {formatTimeHoursMinutes(totalFocusTime)}
+                  </span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">Breaks:</span>
+                  <span className="text-xs font-semibold text-emerald-600">
+                    {totalBreaks}
+                  </span>
+                </div>
+              </div>
+              
+              <div className="flex justify-between">
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="h-7 text-xs border-blue-300 hover:bg-blue-100 dark:border-blue-700 dark:hover:bg-blue-900"
+                  onClick={() => {
+                    studySessionForm.reset({
+                      title: currentStudySession.title,
+                      description: currentStudySession.description || "",
+                      subject: currentStudySession.subject || "",
+                      goal: currentStudySession.goal || "",
+                    });
+                    setIsStudySessionDialogOpen(true);
+                  }}
+                >
+                  <SettingsIcon className="h-3 w-3 mr-1" />
+                  Edit
+                </Button>
+                
+                <Button 
+                  variant="outline" 
+                  size="sm"
+                  className="h-7 text-xs border-red-300 hover:bg-red-100 dark:border-red-700 dark:hover:bg-red-900 hover:text-red-600"
+                  onClick={endStudySession}
+                >
+                  <CheckCircle2 className="h-3 w-3 mr-1" />
+                  End
+                </Button>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+      
       <Card className={`shadow-xl hover:shadow-2xl transition-all duration-500 ${currentTheme.shadow} overflow-hidden relative ${currentTheme.bgGradient} ${currentTheme.borderColor}`}>
         <div className="absolute top-0 left-0 w-full h-1 overflow-hidden">
           <div 
@@ -483,9 +765,11 @@ export default function PomodoroTimer() {
                 <div 
                   key={i} 
                   className={`w-3 h-3 rounded-full transition-all duration-300 ${
-                    i < sessionsCompleted 
+                    i < sessionsCompleted % (settings?.sessions_before_long_break || 4) 
                       ? `bg-opacity-100 ${currentTheme.progress}` 
-                      : 'bg-gray-300 dark:bg-gray-700'
+                      : i === sessionsCompleted % (settings?.sessions_before_long_break || 4) && isRunning && timerState === "work"
+                        ? `bg-opacity-100 ${currentTheme.progress} animate-pulse`
+                        : 'bg-gray-300 dark:bg-gray-700'
                   }`}
                 ></div>
               ))}
@@ -569,11 +853,46 @@ export default function PomodoroTimer() {
               </Button>
             </div>
             
+            {/* Additional action buttons */}
+            <div className="flex justify-center mt-6 gap-3">
+              {/* Start Study Session Button - Only show if no active session */}
+              {!currentStudySession && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-xs flex items-center gap-1.5 hover:bg-blue-50 hover:text-blue-600 dark:hover:bg-blue-950 border-blue-200 dark:border-blue-800"
+                  onClick={() => {
+                    studySessionForm.reset({
+                      title: "",
+                      description: "",
+                      subject: "",
+                      goal: "",
+                    });
+                    setIsStudySessionDialogOpen(true);
+                  }}
+                >
+                  <BookOpen className="h-3.5 w-3.5" />
+                  Start Study Session
+                </Button>
+              )}
+              
+              {/* View Stats Button */}
+              <Button
+                variant="outline"
+                size="sm"
+                className="text-xs flex items-center gap-1.5 hover:bg-purple-50 hover:text-purple-600 dark:hover:bg-purple-950 border-purple-200 dark:border-purple-800"
+                onClick={() => setIsStatsDialogOpen(true)}
+              >
+                <BarChart2 className="h-3.5 w-3.5" />
+                View Stats
+              </Button>
+            </div>
+            
             {/* Sound test button */}
             <Button
               variant="ghost"
               size="sm"
-              className="mt-6 text-xs flex items-center gap-1.5 text-muted-foreground hover:text-primary"
+              className="mt-3 text-xs flex items-center gap-1.5 text-muted-foreground hover:text-primary"
               onClick={() => {
                 // Test the sound
                 if (!soundEnabled) {
@@ -618,6 +937,228 @@ export default function PomodoroTimer() {
           </div>
         </CardContent>
       </Card>
+      
+      {/* Study Session Dialog */}
+      <Dialog open={isStudySessionDialogOpen} onOpenChange={setIsStudySessionDialogOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-semibold">
+              <BookOpen className="h-5 w-5" />
+              {currentStudySession ? "Edit Study Session" : "Start New Study Session"}
+            </DialogTitle>
+          </DialogHeader>
+          
+          <Form {...studySessionForm}>
+            <form onSubmit={studySessionForm.handleSubmit(onSubmitStudySession)} className="space-y-4 py-4">
+              <FormField
+                control={studySessionForm.control}
+                name="title"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Title</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Math Homework" {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      Give your study session a descriptive title
+                    </FormDescription>
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={studySessionForm.control}
+                name="subject"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Subject</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Mathematics, Physics, etc." {...field} />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={studySessionForm.control}
+                name="goal"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Goal</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Complete 3 practice problems" {...field} />
+                    </FormControl>
+                    <FormDescription>
+                      What do you want to accomplish?
+                    </FormDescription>
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={studySessionForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Notes</FormLabel>
+                    <FormControl>
+                      <Textarea 
+                        placeholder="Additional notes about your study session" 
+                        className="resize-none" 
+                        rows={3} 
+                        {...field} 
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              
+              <div className="flex justify-between pt-2">
+                <Button
+                  type="button" 
+                  variant="outline"
+                  onClick={() => setIsStudySessionDialogOpen(false)}
+                  disabled={createStudySessionMutation.isPending || updateStudySessionMutation.isPending}
+                  className="w-28"
+                >
+                  Cancel
+                </Button>
+                <Button 
+                  type="submit" 
+                  disabled={createStudySessionMutation.isPending || updateStudySessionMutation.isPending}
+                  className="w-36 bg-blue-600 hover:bg-blue-700"
+                >
+                  {(createStudySessionMutation.isPending || updateStudySessionMutation.isPending) ? (
+                    <>
+                      <Loader2 className="mr-2 h-5 w-5 animate-spin" />
+                      Saving...
+                    </>
+                  ) : currentStudySession ? (
+                    "Update Session"
+                  ) : (
+                    "Start Session"
+                  )}
+                </Button>
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+      
+      {/* Stats Dialog */}
+      <Dialog open={isStatsDialogOpen} onOpenChange={setIsStatsDialogOpen}>
+        <DialogContent className="sm:max-w-md max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-xl font-semibold">
+              <BarChart2 className="h-5 w-5" />
+              Study Statistics
+            </DialogTitle>
+          </DialogHeader>
+          
+          <div className="py-2">
+            {isLoadingStudySessions ? (
+              <div className="flex justify-center py-6">
+                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              </div>
+            ) : !studySessions || studySessions.length === 0 ? (
+              <div className="text-center py-4 space-y-2">
+                <BookOpen className="h-10 w-10 mx-auto text-muted-foreground opacity-50" />
+                <p className="text-muted-foreground">No study sessions found.</p>
+                <p className="text-sm text-muted-foreground">
+                  Start a new study session to track your progress.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {/* Summary stats */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-3 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Total Focus Time</p>
+                    <p className="text-xl font-bold text-blue-600">
+                      {formatTimeHoursMinutes(studySessions.reduce((total: number, session: StudySession) => 
+                        total + (session.total_focus_time || 0), 0
+                      ))}
+                    </p>
+                  </div>
+                  <div className="bg-emerald-50 dark:bg-emerald-900/20 rounded-lg p-3 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Sessions Completed</p>
+                    <p className="text-xl font-bold text-emerald-600">
+                      {studySessions.filter((session: StudySession) => session.completed).length}
+                    </p>
+                  </div>
+                </div>
+                
+                {/* Performance Graph */}
+                <div>
+                  <h3 className="text-sm font-medium mb-2 flex items-center gap-1.5">
+                    <Clock className="h-4 w-4 text-blue-600" />
+                    Focus Time Trend
+                  </h3>
+                  <div className="h-[120px] bg-slate-50 dark:bg-slate-900/30 rounded-md p-3 border">
+                    {studySessions.length > 0 && (
+                      <PerformanceGraph sessions={studySessions} />
+                    )}
+                  </div>
+                </div>
+                
+                {/* Recent sessions */}
+                <div>
+                  <h3 className="text-sm font-medium mb-2 flex items-center gap-1.5">
+                    <Calendar className="h-4 w-4 text-indigo-600" />
+                    Recent Study Sessions
+                  </h3>
+                  <div className="space-y-2 max-h-40 overflow-y-auto pr-2">
+                    {studySessions
+                      .sort((a: StudySession, b: StudySession) => b.created_at - a.created_at)
+                      .slice(0, 3)
+                      .map((session: StudySession) => (
+                        <div 
+                          key={session.id} 
+                          className="border rounded-md p-2 hover:bg-muted/50 transition-colors"
+                        >
+                          <div className="flex justify-between items-start">
+                            <div>
+                              <p className="font-medium text-sm">{session.title}</p>
+                              {session.subject && (
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {session.subject}
+                                </p>
+                              )}
+                            </div>
+                            <Badge className={`${session.completed ? 
+                              "bg-emerald-600" : "bg-blue-600"} text-xs py-0 px-2`}
+                            >
+                              {session.completed ? "Completed" : "In Progress"}
+                            </Badge>
+                          </div>
+                          <div className="grid grid-cols-2 gap-2 mt-1 text-xs">
+                            <div>
+                              <span className="text-muted-foreground">Focus:</span>{" "}
+                              {formatTimeHoursMinutes(session.total_focus_time || 0)}
+                            </div>
+                            <div>
+                              <span className="text-muted-foreground">Breaks:</span>{" "}
+                              {session.total_breaks || 0}
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            <div className="flex justify-center mt-4">
+              <Button 
+                onClick={() => setIsStatsDialogOpen(false)}
+                className="w-full"
+              >
+                Close
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
       
       {/* Settings Dialog */}
       <Dialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen}>
@@ -899,3 +1440,96 @@ export default function PomodoroTimer() {
     </div>
   );
 }
+
+const PerformanceGraph = ({ sessions }: { sessions: StudySession[] }) => {
+  // Get the last 7 sessions or fewer if not enough data
+  const recentSessions = [...sessions]
+    .sort((a, b) => {
+      // Handle different date formats for sorting
+      const dateA = parseSessionDate(a.created_at);
+      const dateB = parseSessionDate(b.created_at);
+      return dateA.getTime() - dateB.getTime();
+    })
+    .slice(-7);
+  
+  // Find the maximum focus time to scale the graph
+  const maxFocusTime = Math.max(
+    ...recentSessions.map(session => session.total_focus_time || 0),
+    1800 // Minimum of 30 minutes to avoid empty graph
+  );
+  
+  // Helper function to parse different date formats
+  function parseSessionDate(dateValue: any): Date {
+    if (!dateValue) return new Date(); // Default to current date if missing
+    
+    try {
+      // Case 1: Unix timestamp (number)
+      if (typeof dateValue === 'number') {
+        return new Date(dateValue * 1000);
+      }
+      
+      // Case 2: Unix timestamp (string)
+      if (typeof dateValue === 'string' && !isNaN(Number(dateValue)) && dateValue.length === 10) {
+        return new Date(Number(dateValue) * 1000);
+      }
+      
+      // Case 3: SQLite date string format (2025-03-17 07:26:32)
+      if (typeof dateValue === 'string' && dateValue.includes('-')) {
+        return new Date(dateValue.replace(' ', 'T'));
+      }
+      
+      // Default case: try to parse as is
+      return new Date(dateValue);
+    } catch (e) {
+      console.error("Error parsing date:", e, dateValue);
+      return new Date(); // Return current date as fallback
+    }
+  }
+  
+  return (
+    <div className="w-full h-full flex items-end justify-between">
+      {recentSessions.map((session, index) => {
+        const height = `${Math.max(((session.total_focus_time || 0) / maxFocusTime) * 100, 5)}%`;
+        const isCompleted = session.completed;
+        const barColor = isCompleted ? 'bg-emerald-500' : 'bg-blue-500';
+        const hoverColor = isCompleted ? 'group-hover:bg-emerald-600' : 'group-hover:bg-blue-600';
+        
+        // Format date safely using our helper function
+        let dateLabel = "N/A";
+        try {
+          const date = parseSessionDate(session.created_at);
+          if (!isNaN(date.getTime())) {
+            dateLabel = date.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+          }
+        } catch (e) {
+          console.error("Date formatting error:", e);
+        }
+        
+        return (
+          <div 
+            key={index} 
+            className="group relative flex flex-col items-center w-full h-full"
+            title={`${session.title}: ${Math.floor((session.total_focus_time || 0) / 60)} minutes`}
+          >
+            <div className="absolute top-0 opacity-0 group-hover:opacity-100 transition-opacity text-xs font-medium text-center w-full -mt-6 truncate">
+              {Math.floor((session.total_focus_time || 0) / 60)}m
+            </div>
+            <div 
+              className={`w-4 rounded-t-sm ${barColor} ${hoverColor} transition-all duration-200`} 
+              style={{ height }}
+            ></div>
+            <div className="text-[9px] text-muted-foreground mt-1 truncate w-full text-center">
+              {dateLabel}
+            </div>
+          </div>
+        );
+      })}
+      
+      {recentSessions.length === 0 && (
+        <div className="w-full h-full flex items-center justify-center text-muted-foreground text-sm">
+          No data to display
+        </div>
+      )}
+    </div>
+  );
+};

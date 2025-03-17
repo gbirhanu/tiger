@@ -3,7 +3,7 @@ import { db } from "../../shared/db";
 import { 
   tasks, notes, appointments, meetings, pomodoroSettings, userSettings, subtasks,
   type Task, type Subtask,
-  insertNoteSchema
+  insertNoteSchema, longNotes, insertLongNoteSchema
 } from "../../shared/schema";
 import { eq, sql, and } from "drizzle-orm";
 import { z } from "zod";
@@ -556,12 +556,228 @@ router.delete("/notes/:id", requireAuth, async (req: Request, res: Response) => 
   }
 });
 
+// Long Notes
+router.get("/long-notes", requireAuth, async (req: Request, res: Response) => {
+  try {
+    console.log(`GET /long-notes request from user ${req.userId}`);
+    const userLongNotes = await db
+      .select()
+      .from(longNotes)
+      .where(eq(longNotes.user_id, req.userId!));
+    console.log(`Returning ${userLongNotes.length} long notes for user ${req.userId}`);
+    res.json(userLongNotes);
+  } catch (error) {
+    console.error("Error fetching long notes:", error);
+    res.status(500).json({ error: "Failed to fetch long notes" });
+  }
+});
+
+router.get("/long-notes/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const noteId = parseInt(req.params.id);
+    const note = await db
+      .select()
+      .from(longNotes)
+      .where(and(
+        eq(longNotes.id, noteId),
+        eq(longNotes.user_id, req.userId!)
+      ));
+    
+    if (note.length === 0) {
+      return res.status(404).json({ error: "Long note not found" });
+    }
+    
+    res.json(note[0]);
+  } catch (error) {
+    console.error("Error fetching long note:", error);
+    res.status(500).json({ error: "Failed to fetch long note" });
+  }
+});
+
+router.post("/long-notes", requireAuth, async (req: Request, res: Response) => {
+  try {
+    console.log(`POST /long-notes request from user ${req.userId}`, req.body);
+    const result = insertLongNoteSchema.safeParse(req.body);
+    if (!result.success) {
+      console.error("Invalid long note data:", result.error.errors);
+      return res.status(400).json({ 
+        error: "Invalid long note data", 
+        details: result.error.errors 
+      });
+    }
+
+    const noteData = result.data;
+    console.log("Validated note data:", noteData);
+    const newNote = await db.insert(longNotes).values({
+      ...noteData,
+      user_id: req.userId!
+    }).returning();
+    console.log("Created new long note:", newNote[0]);
+    res.json(newNote[0]);
+  } catch (error) {
+    console.error("Error creating long note:", error);
+    res.status(500).json({ error: "Failed to create long note" });
+  }
+});
+
+router.patch("/long-notes/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const noteId = parseInt(req.params.id);
+    
+    // Check if note exists and belongs to user
+    const existingNote = await db
+      .select()
+      .from(longNotes)
+      .where(and(
+        eq(longNotes.id, noteId),
+        eq(longNotes.user_id, req.userId!)
+      ));
+      
+    if (existingNote.length === 0) {
+      return res.status(404).json({ error: "Long note not found" });
+    }
+    
+    // Validate request body
+    const result = insertLongNoteSchema.partial().safeParse(req.body);
+    if (!result.success) {
+      return res.status(400).json({ 
+        error: "Invalid long note data", 
+        details: result.error.errors 
+      });
+    }
+
+    const updatedNote = await db
+      .update(longNotes)
+      .set({
+        ...result.data,
+        updated_at: Math.floor(Date.now() / 1000)
+      })
+      .where(eq(longNotes.id, noteId))
+      .returning();
+    
+    res.json(updatedNote[0]);
+  } catch (error) {
+    console.error("Error updating long note:", error);
+    res.status(500).json({ error: "Failed to update long note" });
+  }
+});
+
+router.delete("/long-notes/:id", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const noteId = parseInt(req.params.id);
+    
+    // Check if note exists and belongs to user
+    const existingNote = await db
+      .select()
+      .from(longNotes)
+      .where(and(
+        eq(longNotes.id, noteId),
+        eq(longNotes.user_id, req.userId!)
+      ));
+      
+    if (existingNote.length === 0) {
+      return res.status(404).json({ error: "Long note not found" });
+    }
+    
+    await db
+      .delete(longNotes)
+      .where(eq(longNotes.id, noteId));
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error deleting long note:", error);
+    res.status(500).json({ error: "Failed to delete long note" });
+  }
+});
+
+// Enhance note with Gemini API
+router.post("/long-notes/:id/enhance", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const noteId = parseInt(req.params.id);
+    const { prompt } = req.body;
+    
+    if (!prompt) {
+      return res.status(400).json({ error: "Enhancement prompt is required" });
+    }
+    
+    // Check if note exists and belongs to user
+    const existingNote = await db
+      .select()
+      .from(longNotes)
+      .where(and(
+        eq(longNotes.id, noteId),
+        eq(longNotes.user_id, req.userId!)
+      ));
+      
+    if (existingNote.length === 0) {
+      return res.status(404).json({ error: "Long note not found" });
+    }
+    
+    const note = existingNote[0];
+    
+    // Get user's Gemini API key from settings
+    const userSetting = await db
+      .select()
+      .from(userSettings)
+      .where(eq(userSettings.user_id, req.userId!))
+      .get();
+    
+    // Use user's key if available, otherwise use fallback
+    const GEMINI_API_KEY = userSetting?.gemini_key || process.env.FALLBACK_GEMINI_API_KEY;
+    
+    // Verify API key is available
+    if (!GEMINI_API_KEY) {
+      return res.status(500).json({ 
+        error: "Gemini API key is not configured",
+        details: "Please set your Gemini API key in Settings"
+      });
+    }
+
+    // Initialize Gemini API with the appropriate key
+    const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+    
+    // Get the generative model
+    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+    // Create prompt for enhancement
+    const geminiPrompt = `
+      I have the following note with title: "${note.title}" and content:
+      
+      ${note.content || ""}
+      
+      ${prompt}
+      
+      Return only the enhanced content in Markdown format without any additional explanations.
+    `;
+
+    // Generate enhanced content
+    const result = await model.generateContent(geminiPrompt);
+    const response = await result.response;
+    const enhancedContent = response.text();
+
+    // Return the enhanced content
+    res.json({ content: enhancedContent });
+  } catch (error) {
+    console.error("Error enhancing note:", error);
+    res.status(500).json({ 
+      error: "Failed to enhance note",
+      details: error instanceof Error ? error.message : "Unknown error"
+    });
+  }
+});
+
 // Appointments
 router.get("/appointments", requireAuth, async (req, res) => {
   try {
-    const allAppointments = await db.select().from(appointments);
+    const allAppointments = await db
+      .select()
+      .from(appointments)
+      .where(eq(appointments.user_id, req.userId!));
+    
+    console.log("Fetched appointments for user:", req.userId, allAppointments);
     res.json(allAppointments);
   } catch (error) {
+    console.error("Error fetching appointments:", error);
     res.status(500).json({ error: "Failed to fetch appointments" });
   }
 });
@@ -583,9 +799,19 @@ router.get("/appointments/:id", requireAuth, async (req, res) => {
 
 router.post("/appointments", requireAuth, async (req, res) => {
   try {
-    const newAppointment = await db.insert(appointments).values(req.body).returning();
+    // Ensure user_id is set from the authenticated user
+    const appointmentData = {
+      ...req.body,
+      user_id: req.userId
+    };
+    
+    console.log("Creating appointment with data:", appointmentData);
+    
+    const newAppointment = await db.insert(appointments).values(appointmentData).returning();
+    console.log("Appointment created:", newAppointment[0]);
     res.json(newAppointment[0]);
   } catch (error) {
+    console.error("Error creating appointment:", error);
     res.status(500).json({ error: "Failed to create appointment" });
   }
 });

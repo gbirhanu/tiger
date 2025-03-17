@@ -1,8 +1,8 @@
 import axios, { InternalAxiosRequestConfig, AxiosResponse, AxiosError } from "axios";
-import type { Task, Note, Appointment, Meeting, PomodoroSettings, UserSettings, Subtask } from "../../../shared/schema";
+import type { Task, Note, Appointment, Meeting, PomodoroSettings, UserSettings, Subtask, LongNote } from "../../../shared/schema";
 
 // Import the shared token management functions from queryClient
-import { setAuthToken as setToken, getAuthToken as getToken } from './queryClient';
+import { setAuthToken as setToken, getAuthToken as getToken, apiRequest } from './queryClient';
 
 // Re-export the token functions for backwards compatibility
 export const setAuthToken = setToken;
@@ -96,15 +96,54 @@ export const updateNote = (id: number, note: Partial<Note>) => api.patch<Note>(`
 export const deleteNote = (id: number) => api.delete(`/notes/${id}`).then((res: AxiosResponse<any>) => res.data);
 
 // Appointments API endpoints
-export const getAppointments = () => api.get<Appointment[]>("/appointments").then((res: AxiosResponse<Appointment[]>) => res.data);
-export const getAppointment = (id: number) => api.get<Appointment>(`/appointments/${id}`).then((res: AxiosResponse<Appointment>) => res.data);
+export const getAppointments = () => 
+  api.get<Appointment[]>("/appointments")
+    .then((res: AxiosResponse<Appointment[]>) => {
+      console.log("API response for appointments:", res.data);
+      return res.data;
+    })
+    .catch(error => {
+      console.error("API error fetching appointments:", error);
+      throw error;
+    });
+
+export const getAppointment = (id: number) => 
+  api.get<Appointment>(`/appointments/${id}`)
+    .then((res: AxiosResponse<Appointment>) => res.data)
+    .catch(error => {
+      console.error(`API error fetching appointment ${id}:`, error);
+      throw error;
+    });
+
 export const createAppointment = (appointment: Omit<Appointment, "id" | "user_id">) => {
   // The server will set the user_id based on the authentication token
-  return api.post<Appointment>("/appointments", appointment).then((res: AxiosResponse<Appointment>) => res.data);
+  console.log("Creating appointment with data:", appointment);
+  return api.post<Appointment>("/appointments", appointment)
+    .then((res: AxiosResponse<Appointment>) => {
+      console.log("Appointment created successfully:", res.data);
+      return res.data;
+    })
+    .catch(error => {
+      console.error("API error creating appointment:", error);
+      throw error;
+    });
 };
+
 export const updateAppointment = (id: number, appointment: Partial<Appointment>) => 
-  api.patch<Appointment>(`/appointments/${id}`, appointment).then((res: AxiosResponse<Appointment>) => res.data);
-export const deleteAppointment = (id: number) => api.delete(`/appointments/${id}`).then((res: AxiosResponse<any>) => res.data);
+  api.patch<Appointment>(`/appointments/${id}`, appointment)
+    .then((res: AxiosResponse<Appointment>) => res.data)
+    .catch(error => {
+      console.error(`API error updating appointment ${id}:`, error);
+      throw error;
+    });
+
+export const deleteAppointment = (id: number) => 
+  api.delete(`/appointments/${id}`)
+    .then((res: AxiosResponse<any>) => res.data)
+    .catch(error => {
+      console.error(`API error deleting appointment ${id}:`, error);
+      throw error;
+    });
 
 // Meetings API endpoints
 export const getMeetings = () => api.get<Meeting[]>("/meetings").then((res: AxiosResponse<Meeting[]>) => res.data);
@@ -205,3 +244,181 @@ export const logout = () => api.post<{ success: boolean }>("/auth/logout")
 export const generateSubtasks = (prompt: string) => 
   api.post<{ subtasks: string[] | string }>("/generate-subtasks", { prompt })
     .then((res: AxiosResponse<{ subtasks: string[] | string }>) => res.data);
+
+// Generate content for long notes using the generate-subtasks endpoint
+export const generateContent = async (prompt: string): Promise<{ content: string }> => {
+  try {
+    console.log('Generating content with prompt:', prompt);
+    const generationPrompt = `Generate a detailed markdown note about: "${prompt}". Include headings, bullet points, and detailed explanations.`;
+    
+    const response = await apiRequest('POST', '/generate-subtasks', { prompt: generationPrompt });
+    console.log('generateContent response received');
+    const data = await response.json();
+    console.log('generateContent data parsed:', data);
+    
+    // The generate-subtasks endpoint returns { subtasks: string }
+    // We need to convert it to { content: string }
+    return { content: data.subtasks };
+  } catch (error) {
+    console.error('Error generating content:', error);
+    throw error;
+  }
+};
+
+// Study Sessions API
+export async function getStudySessions() {
+  const response = await apiRequest('GET', '/study-sessions');
+  return response.json();
+}
+
+export async function getStudySession(id: string | number) {
+  const response = await apiRequest('GET', `/study-sessions/${id}`);
+  return response.json();
+}
+
+export async function createStudySession(data: {
+  title: string;
+  description?: string | null;
+  subject?: string | null;
+  goal?: string | null;
+  completed?: boolean;
+  total_focus_time?: number;
+  total_breaks?: number;
+}) {
+  const response = await apiRequest('POST', '/study-sessions', data);
+  return response.json();
+}
+
+export async function updateStudySession(
+  id: string | number,
+  data: {
+    title?: string;
+    description?: string | null;
+    subject?: string | null;
+    goal?: string | null;
+    completed?: boolean;
+    total_focus_time?: number;
+    total_breaks?: number;
+  }
+) {
+  const response = await apiRequest('PUT', `/study-sessions/${id}`, data);
+  return response.json();
+}
+
+export async function deleteStudySession(id: string | number) {
+  const response = await apiRequest('DELETE', `/study-sessions/${id}`);
+  return response.ok;
+}
+
+// Long Notes API
+export const getLongNotes = async (): Promise<LongNote[]> => {
+  try {
+    console.log('Calling getLongNotes API function');
+    const response = await apiRequest('GET', '/long-notes');
+    console.log('getLongNotes response received');
+    const data = await response.json();
+    console.log('getLongNotes data parsed:', data);
+    return data;
+  } catch (error) {
+    console.error('Error fetching notes:', error);
+    throw error;
+  }
+};
+
+export const getLongNote = async (id: number): Promise<LongNote> => {
+  try {
+    const response = await apiRequest('GET', `/long-notes/${id}`);
+    return response.json();
+  } catch (error) {
+    console.error('Error fetching note:', error);
+    throw error;
+  }
+};
+
+export const createLongNote = async (noteData: {
+  title: string;
+  content: string | null;
+  tags: string | null;
+  is_favorite: boolean;
+}): Promise<LongNote> => {
+  try {
+    console.log('Creating long note with data:', noteData);
+    // Ensure the data matches the schema expected by the server
+    const validatedData = {
+      title: noteData.title,
+      content: noteData.content || null,
+      tags: noteData.tags || null,
+      is_favorite: Boolean(noteData.is_favorite)
+    };
+    
+    const response = await apiRequest('POST', '/long-notes', validatedData);
+    console.log('createLongNote response received');
+    const data = await response.json();
+    console.log('createLongNote data parsed:', data);
+    return data;
+  } catch (error) {
+    console.error('Error creating note:', error);
+    throw error;
+  }
+};
+
+export const updateLongNote = async (id: number, data: Partial<LongNote>): Promise<LongNote> => {
+  try {
+    console.log('Updating long note with id:', id, 'and data:', data);
+    // Ensure we only send valid fields to the server
+    const validatedData: Partial<LongNote> = {};
+    
+    if (data.title !== undefined) validatedData.title = data.title;
+    if (data.content !== undefined) validatedData.content = data.content;
+    if (data.tags !== undefined) validatedData.tags = data.tags;
+    if (data.is_favorite !== undefined) validatedData.is_favorite = Boolean(data.is_favorite);
+    
+    const response = await apiRequest('PATCH', `/long-notes/${id}`, validatedData);
+    console.log('updateLongNote response received');
+    const responseData = await response.json();
+    console.log('updateLongNote data parsed:', responseData);
+    return responseData;
+  } catch (error) {
+    console.error('Error updating note:', error);
+    throw error;
+  }
+};
+
+export const deleteLongNote = async (id: number): Promise<void> => {
+  try {
+    await apiRequest('DELETE', `/long-notes/${id}`);
+    return;
+  } catch (error) {
+    console.error('Error deleting note:', error);
+    throw error;
+  }
+};
+
+export const enhanceLongNote = async (noteId: number, prompt: string): Promise<{ content: string }> => {
+  try {
+    console.log('Enhancing long note with id:', noteId, 'and prompt:', prompt);
+    
+    // Ensure we send the prompt in the expected format
+    const response = await apiRequest('POST', `/long-notes/${noteId}/enhance`, { prompt });
+    console.log('enhanceLongNote response received');
+    const data = await response.json();
+    console.log('enhanceLongNote data parsed:', data);
+    
+    // Ensure we return the expected format even if the server response is different
+    if (data && typeof data === 'object') {
+      if (data.content) {
+        return { content: data.content };
+      } else if (data.enhanced) {
+        // Handle the case where the server returns { original, enhanced } format
+        return { content: data.enhanced };
+      }
+    }
+    
+    // Fallback if the response format is unexpected
+    console.error('Unexpected response format from enhance endpoint:', data);
+    return { content: '' };
+  } catch (error) {
+    console.error('Error enhancing note content:', error);
+    throw error;
+  }
+};
