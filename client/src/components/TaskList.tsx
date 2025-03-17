@@ -363,30 +363,40 @@ export function TaskList() {
 
       {isLoading ? (
         <div className="flex justify-center p-4">
-          <Loader2 className="h-6 w-6 animate-spin" />
+          <Loader2 className="h-6 w-6 animate-spin text-teal-500" />
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">
           {/* Active Tasks */}
-          <Card className="border-t-4 border-t-blue-500">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+          <Card className="border-t-4 border-t-teal-500 shadow-md hover:shadow-lg transition-shadow">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg md:text-xl">
                 Active Tasks
-                <span className="ml-auto text-sm text-muted-foreground">
+                <span className="ml-auto text-sm px-2 py-1 rounded-full bg-teal-100 dark:bg-teal-900/30 text-teal-700 dark:text-teal-300 font-medium">
                   {activeTasks.length} tasks
                 </span>
               </CardTitle>
               <CardDescription>Non-recurring parent tasks only</CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="space-y-4">
+              <ul className="space-y-3">
                 {activeTasks.map((task) => (
                   <li
                     key={task.id}
-                    className="group flex flex-col space-y-2 p-4 rounded-lg border bg-card hover:bg-accent/5 transition-colors"
+                    className="group flex flex-col space-y-2 p-3 md:p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors shadow-sm relative pt-6"
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-3">
+                    <div
+                      className={cn(
+                        "absolute top-0 left-0 px-2 py-0.5 text-xs font-medium rounded-tl-lg rounded-br-lg",
+                        task.priority === "high" && "bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400",
+                        task.priority === "medium" && "bg-yellow-100 dark:bg-yellow-900/30 text-yellow-700 dark:text-yellow-400",
+                        task.priority === "low" && "bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400"
+                      )}
+                    >
+                      {task.priority}
+                    </div>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="flex items-start gap-3 flex-1 min-w-0">
                         <Checkbox
                           checked={task.completed}
                           onCheckedChange={(checked: boolean) =>
@@ -395,65 +405,56 @@ export function TaskList() {
                               task: { completed: checked },
                             })
                           }
-                          className="mt-1"
+                          className="mt-1 h-5 w-5 rounded-md border-2 border-teal-400 dark:border-teal-500 data-[state=checked]:bg-teal-500 data-[state=checked]:border-teal-500"
                         />
-                        <div>
-                          <h4 className="font-medium">{task.title}</h4>
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium text-gray-900 dark:text-gray-100 truncate">{task.title}</h4>
                           {task.description && (
-                            <p className="text-sm text-muted-foreground mt-1">
+                            <p className="text-sm text-gray-500 dark:text-gray-400 mt-1 line-clamp-2">
                               {task.description}
                             </p>
                           )}
-                          {/* Show number of subtasks if any */}
-                          {tasks.some(t => t.parent_task_id === task.id) && (
-                            <span className="text-xs text-muted-foreground">
-                              {tasks.filter(t => t.parent_task_id === task.id).length} subtasks
-                            </span>
-                          )}
+                          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                            {task.due_date && (
+                              <span className="text-xs text-gray-600 dark:text-gray-300 flex items-center gap-1 bg-gray-100 dark:bg-gray-700/50 px-1.5 py-0.5 rounded">
+                                <CalendarIcon className="h-3 w-3" />
+                                {formatDueDate(task.due_date)}
+                              </span>
+                            )}
+                            {/* Show number of subtasks if any */}
+                            {tasks.some(t => t.parent_task_id === task.id) && (
+                              <span className="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                                <span className="inline-block w-2.5 h-2.5 rounded-full bg-teal-100 dark:bg-teal-900/50 border border-teal-300 dark:border-teal-700"></span>
+                                {tasks.filter(t => t.parent_task_id === task.id).length} subtasks
+                              </span>
+                            )}
+                            {task.is_recurring && (
+                              <span className="text-xs text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
+                                <span className="inline-block w-2.5 h-2.5 rounded-full bg-indigo-100 dark:bg-indigo-900/50 border border-indigo-300 dark:border-indigo-700"></span>
+                                {task.recurrence_pattern}
+                                {task.recurrence_interval && task.recurrence_interval > 1
+                                  ? ` (${task.recurrence_interval})`
+                                  : ``}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => deleteTaskMutation.mutate(task.id)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 rounded-full"
                       >
                         <Trash2 className="h-4 w-4 text-red-500" />
                       </Button>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "px-2 py-1 rounded-full text-xs font-medium",
-                          task.priority === "high" && "bg-red-100 text-red-700",
-                          task.priority === "medium" && "bg-yellow-100 text-yellow-700",
-                          task.priority === "low" && "bg-green-100 text-green-700"
-                        )}
-                      >
-                        {task.priority}
-                      </span>
-                      {task.due_date && (
-                        <span className="text-xs text-muted-foreground">
-                          Due {formatDueDate(task.due_date)}
-                        </span>
-                      )}
-                      {task.is_recurring && (
-                        <span className="text-xs text-muted-foreground">
-                          Repeats {task.recurrence_pattern}
-                          {task.recurrence_interval && task.recurrence_interval > 1
-                            ? ` every ${task.recurrence_interval} ${task.recurrence_pattern}s`
-                            : ``}
-                          {task.recurrence_end_date
-                            ? ` until ${formatDueDate(task.recurrence_end_date)}`
-                            : ``}
-                        </span>
-                      )}
-                    </div>
                   </li>
                 ))}
                 {activeTasks.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No active tasks
+                  <div className="text-center py-8 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
+                    <p className="mb-1">No active tasks</p>
+                    <p className="text-sm">Create a new task to get started</p>
                   </div>
                 )}
               </ul>
@@ -461,25 +462,35 @@ export function TaskList() {
           </Card>
 
           {/* Completed Tasks */}
-          <Card className="border-t-4 border-t-green-500">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
+          <Card className="border-t-4 border-t-emerald-500 shadow-md hover:shadow-lg transition-shadow">
+            <CardHeader className="pb-3">
+              <CardTitle className="flex items-center gap-2 text-lg md:text-xl">
                 Completed Tasks
-                <span className="ml-auto text-sm text-muted-foreground">
+                <span className="ml-auto text-sm px-2 py-1 rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300 font-medium">
                   {completedTasks.length} tasks
                 </span>
               </CardTitle>
               <CardDescription>Non-recurring parent tasks only</CardDescription>
             </CardHeader>
             <CardContent>
-              <ul className="space-y-4">
+              <ul className="space-y-3">
                 {completedTasks.map((task) => (
                   <li
                     key={task.id}
-                    className="group flex flex-col space-y-2 p-4 rounded-lg border bg-muted/50"
+                    className="group flex flex-col space-y-2 p-3 md:p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50 transition-colors shadow-sm relative"
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-3">
+                    <span
+                      className={cn(
+                        "absolute top-0 left-0 px-2 py-0.5 text-xs font-medium rounded-tl-lg rounded-br-lg opacity-60",
+                        task.priority === "high" && "bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400",
+                        task.priority === "medium" && "bg-yellow-100 dark:bg-yellow-900/20 text-yellow-600 dark:text-yellow-400",
+                        task.priority === "low" && "bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400"
+                      )}
+                    >
+                      {task.priority}
+                    </span>
+                    <div className="flex items-start justify-between gap-3 mt-3">
+                      <div className="flex items-start gap-3 flex-1 min-w-0">
                         <Checkbox
                           checked={task.completed}
                           onCheckedChange={(checked: boolean) =>
@@ -488,56 +499,49 @@ export function TaskList() {
                               task: { completed: checked },
                             })
                           }
-                          className="mt-1"
+                          className="mt-1 h-5 w-5 rounded-md border-2 border-emerald-400 dark:border-emerald-500 data-[state=checked]:bg-emerald-500 data-[state=checked]:border-emerald-500"
                         />
-                        <div>
-                          <h4 className="font-medium line-through text-muted-foreground">
+                        <div className="flex-1 min-w-0">
+                          <h4 className="font-medium line-through text-gray-500 dark:text-gray-400 truncate">
                             {task.title}
                           </h4>
                           {task.description && (
-                            <p className="text-sm text-muted-foreground mt-1 line-through">
+                            <p className="text-sm text-gray-400 dark:text-gray-500 mt-1 line-through line-clamp-2">
                               {task.description}
                             </p>
                           )}
-                          {/* Show number of subtasks if any */}
-                          {tasks.some(t => t.parent_task_id === task.id) && (
-                            <span className="text-xs text-muted-foreground">
-                              {tasks.filter(t => t.parent_task_id === task.id).length} subtasks
-                            </span>
-                          )}
+                          <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                            {/* Show number of subtasks if any */}
+                            {tasks.some(t => t.parent_task_id === task.id) && (
+                              <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1">
+                                <span className="inline-block w-2.5 h-2.5 rounded-full bg-gray-200 dark:bg-gray-700 border border-gray-300 dark:border-gray-600"></span>
+                                {tasks.filter(t => t.parent_task_id === task.id).length} subtasks
+                              </span>
+                            )}
+                            {task.due_date && (
+                              <span className="text-xs text-gray-400 dark:text-gray-500 flex items-center gap-1 line-through">
+                                <CalendarIcon className="h-2.5 w-2.5" />
+                                {formatDueDate(task.due_date)}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
                       <Button
                         variant="ghost"
                         size="icon"
                         onClick={() => deleteTaskMutation.mutate(task.id)}
-                        className="opacity-0 group-hover:opacity-100 transition-opacity"
+                        className="opacity-0 group-hover:opacity-100 transition-opacity h-8 w-8 rounded-full"
                       >
                         <Trash2 className="h-4 w-4 text-red-500" />
                       </Button>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={cn(
-                          "px-2 py-1 rounded-full text-xs font-medium opacity-50",
-                          task.priority === "high" && "bg-red-100 text-red-700",
-                          task.priority === "medium" && "bg-yellow-100 text-yellow-700",
-                          task.priority === "low" && "bg-green-100 text-green-700"
-                        )}
-                      >
-                        {task.priority}
-                      </span>
-                      {task.due_date && (
-                        <span className="text-xs text-muted-foreground line-through">
-                          Due {formatDueDate(task.due_date)}
-                        </span>
-                      )}
-                    </div>
                   </li>
                 ))}
                 {completedTasks.length === 0 && (
-                  <div className="text-center py-8 text-muted-foreground">
-                    No completed tasks
+                  <div className="text-center py-8 text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-800/50 rounded-lg border border-dashed border-gray-300 dark:border-gray-700">
+                    <p className="mb-1">No completed tasks</p>
+                    <p className="text-sm">Complete a task to see it here</p>
                   </div>
                 )}
               </ul>

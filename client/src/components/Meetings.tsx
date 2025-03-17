@@ -22,6 +22,8 @@ import {
   DialogHeader,
   DialogTitle,
   DialogTrigger,
+  DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import {
   Popover,
@@ -31,8 +33,8 @@ import {
 import { Calendar } from "@/components/ui/calendar";
 import { useToast } from "@/hooks/use-toast";
 import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
-import { getMeetings, createMeeting, deleteMeeting } from "@/lib/api";
-import { Plus, Trash2, Video, Loader2, CalendarIcon, Clock } from "lucide-react";
+import { getMeetings, createMeeting, deleteMeeting, updateMeeting } from "@/lib/api";
+import { Plus, Trash2, Video, Loader2, CalendarIcon, Clock, Pencil, Users } from "lucide-react";
 import { formatDate, getNow } from "@/lib/timezone";
 import { TimeSelect } from "./TimeSelect";
 import { cn } from "@/lib/utils";
@@ -91,7 +93,12 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
   const [dialogOpen, setDialogOpen] = useState(false);
   const [startDatePickerOpen, setStartDatePickerOpen] = useState(false);
   const [endDatePickerOpen, setEndDatePickerOpen] = useState(false);
+  const [isEditing, setIsEditing] = useState(false);
+  const [selectedMeeting, setSelectedMeeting] = useState<Meeting | null>(null);
   
+  // Add isSubmitting state
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
   // Create default start and end times
   const defaultStartTime = initialDate || getNow();
   const defaultEndTime = new Date(defaultStartTime.getTime() + 60 * 60 * 1000); // 1 hour later
@@ -303,6 +310,44 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
     },
   });
 
+  const updateMeetingMutation = useMutation({
+    mutationFn: async (data: MeetingFormValues) => {
+      if (!selectedMeeting) throw new Error("No meeting selected for update");
+      if (!data.startDate || !data.endDate) throw new Error("Start and end times are required");
+      if (data.endDate <= data.startDate) throw new Error("End time must be after start time");
+      
+      const meeting = {
+        id: selectedMeeting.id,
+        title: data.title,
+        description: data.description || null,
+        location: data.meetingLink || null,
+        start_time: Math.floor(data.startDate.getTime() / 1000),
+        end_time: Math.floor(data.endDate.getTime() / 1000),
+        attendees: null,
+        updated_at: Math.floor(Date.now() / 1000)
+      };
+      
+      return updateMeeting(selectedMeeting.id, meeting);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
+      setDialogOpen(false);
+      setIsEditing(false);
+      setSelectedMeeting(null);
+      toast({
+        title: "Meeting updated",
+        description: "The meeting has been updated successfully.",
+      });
+    },
+    onError: (error: Error) => {
+      toast({
+        variant: "destructive",
+        title: "Failed to update meeting",
+        description: error.message || "An error occurred while updating the meeting.",
+      });
+    }
+  });
+
   // Calculate meeting statistics
   const inProgressMeetings = filterMeetingsByStatus(meetings, "in-progress");
   const upcomingMeetings = filterMeetingsByStatus(meetings, "upcoming");
@@ -315,6 +360,36 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
   
   const totalMeetingHours = Math.floor(totalMeetingMinutes / 60);
   const remainingMinutes = Math.round(totalMeetingMinutes % 60);
+
+  // Add function to handle edit button click
+  const handleEditClick = (meeting: Meeting) => {
+    setIsEditing(true);
+    setSelectedMeeting(meeting);
+    form.reset({
+      title: meeting.title,
+      description: meeting.description || "",
+      meetingLink: meeting.location || "",
+      startDate: new Date(meeting.start_time * 1000),
+      endDate: new Date(meeting.end_time * 1000),
+    });
+    setDialogOpen(true);
+  };
+
+  // Update onSubmit to handle isSubmitting state
+  const onSubmit = async (data: MeetingFormValues) => {
+    setIsSubmitting(true);
+    try {
+      if (isEditing) {
+        await updateMeetingMutation.mutateAsync(data);
+      } else {
+        await createMeetingMutation.mutateAsync(data);
+      }
+    } catch (error) {
+      console.error("Error submitting form:", error);
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -338,34 +413,30 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
               Schedule Meeting
             </Button>
           </DialogTrigger>
-          <DialogContent className="sm:max-w-md">
+          <DialogContent className="sm:max-w-[500px]">
             <DialogHeader>
-              <DialogTitle className="text-xl font-semibold bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">Schedule New Meeting</DialogTitle>
+              <DialogTitle className="flex items-center text-lg font-semibold">
+                {isEditing ? (
+                  <>
+                    <Pencil className="h-5 w-5 mr-2 text-indigo-500" />
+                    Edit Meeting
+                  </>
+                ) : (
+                  <>
+                    <Users className="h-5 w-5 mr-2 text-indigo-500" />
+                    Schedule New Meeting
+                  </>
+                )}
+              </DialogTitle>
+              <DialogDescription className="text-muted-foreground">
+                {isEditing 
+                  ? "Make changes to your meeting details below." 
+                  : "Fill in the details to schedule a new meeting."}
+              </DialogDescription>
             </DialogHeader>
             <Form {...form}>
               <form
-                onSubmit={form.handleSubmit((data) => {
-                  // Additional validation before submitting
-                  if (!data.startDate || !data.endDate) {
-                    toast({
-                      variant: "destructive",
-                      title: "Missing date information",
-                      description: "Please select both start and end times",
-                    });
-                    return;
-                  }
-                  
-                  if (data.endDate <= data.startDate) {
-                    toast({
-                      variant: "destructive",
-                      title: "Invalid time range",
-                      description: "End time must be after start time",
-                    });
-                    return;
-                  }
-                  
-                  createMeetingMutation.mutate(data);
-                })}
+                onSubmit={form.handleSubmit(onSubmit)}
                 className="space-y-5"
               >
                 <div className="space-y-4">
@@ -578,23 +649,25 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                   </div>
                 </div>
                 
-                <Button 
-                  type="submit" 
-                  disabled={createMeetingMutation.isPending} 
-                  className="w-full bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 transition-all duration-300"
-                >
-                  {createMeetingMutation.isPending ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Creating...
-                    </>
-                  ) : (
-                    <>
-                      <CalendarIcon className="mr-2 h-4 w-4" />
-                      Schedule Meeting
-                    </>
-                  )}
-                </Button>
+                <DialogFooter>
+                  <Button 
+                    type="submit" 
+                    disabled={isSubmitting} 
+                    className="w-full bg-[#4F46E5] hover:bg-[#4F46E5]/90 text-white font-medium"
+                  >
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        {isEditing ? "Updating..." : "Creating..."}
+                      </>
+                    ) : (
+                      <>
+                        <Users className="mr-2 h-4 w-4" />
+                        {isEditing ? "Update Meeting" : "Schedule Meeting"}
+                      </>
+                    )}
+                  </Button>
+                </DialogFooter>
               </form>
             </Form>
           </DialogContent>
@@ -795,19 +868,24 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                                     )}
                                   </div>
                                   
-                                  <Button
-                                    variant="ghost"
-                                    size="icon"
-                                    onClick={() => deleteMeetingMutation.mutate(meeting.id)}
-                                    disabled={deleteMeetingMutation.isPending}
-                                    className="opacity-50 hover:opacity-100 transition-opacity"
-                                  >
-                                    {deleteMeetingMutation.isPending ? (
-                                      <Loader2 className="h-4 w-4 animate-spin" />
-                                    ) : (
+                                  <div className="flex gap-2 ml-4">
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => handleEditClick(meeting)}
+                                      className="h-8 w-8 hover:bg-muted"
+                                    >
+                                      <Pencil className="h-4 w-4" />
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="icon"
+                                      onClick={() => deleteMeetingMutation.mutate(meeting.id)}
+                                      className="h-8 w-8 text-destructive hover:bg-destructive/10"
+                                    >
                                       <Trash2 className="h-4 w-4" />
-                                    )}
-                                  </Button>
+                                    </Button>
+                                  </div>
                                 </div>
                               </div>
                             </div>

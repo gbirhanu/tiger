@@ -7,7 +7,7 @@ export interface Notification {
   id: string;
   title: string;
   message: string;
-  type: 'task' | 'meeting' | 'reminder' | 'system';
+  type: 'task' | 'meeting' | 'appointment' | 'reminder' | 'system';
   read: boolean;
   createdAt: string;
   link?: string;
@@ -33,6 +33,26 @@ interface Task {
   parent_task_id?: number | null;
 }
 
+// Meeting interface for reminders
+interface Meeting {
+  id: string;
+  title: string;
+  description?: string | null;
+  start_time: number; // Unix timestamp
+  end_time: number; // Unix timestamp
+  meeting_link?: string | null;
+}
+
+// Appointment interface for reminders
+interface Appointment {
+  id: string;
+  title: string;
+  description?: string | null;
+  due_date: number; // Unix timestamp
+  location?: string | null;
+  contact?: string | null;
+}
+
 // Define the context type
 export interface NotificationsContextType {
   notifications: Notification[];
@@ -42,6 +62,8 @@ export interface NotificationsContextType {
   markAllAsRead: () => void;
   clearNotifications: () => void;
   checkTaskReminders: (tasks: Task[]) => void;
+  checkMeetingReminders: (meetings: Meeting[]) => void;
+  checkAppointmentReminders: (appointments: Appointment[]) => void;
 }
 
 // Create the context
@@ -75,7 +97,7 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
   const { user } = useAuth();
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [desktopNotificationsEnabled, setDesktopNotificationsEnabled] = useState(false);
-  const [notifiedTaskIds, setNotifiedTaskIds] = useState<Set<string>>(new Set());
+  const [notifiedItemIds, setNotifiedItemIds] = useState<Set<string>>(new Set());
   
   // Calculate unread count
   const unreadCount = notifications.filter(notification => !notification.read).length;
@@ -134,13 +156,13 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
       setNotifications(sampleNotifications);
     }
     
-    // Load notified task IDs from localStorage
-    const savedNotifiedTaskIds = localStorage.getItem('notifiedTaskIds');
-    if (savedNotifiedTaskIds) {
+    // Load notified item IDs from localStorage
+    const savedNotifiedItemIds = localStorage.getItem('notifiedItemIds');
+    if (savedNotifiedItemIds) {
       try {
-        setNotifiedTaskIds(new Set(JSON.parse(savedNotifiedTaskIds)));
+        setNotifiedItemIds(new Set(JSON.parse(savedNotifiedItemIds)));
       } catch (error) {
-        console.error('Failed to parse notified task IDs', error);
+        console.error('Failed to parse notified item IDs', error);
       }
     }
   }, []);
@@ -150,10 +172,10 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
     localStorage.setItem('notifications', JSON.stringify(notifications));
   }, [notifications]);
   
-  // Save notified task IDs to localStorage whenever they change
+  // Save notified item IDs to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('notifiedTaskIds', JSON.stringify(Array.from(notifiedTaskIds)));
-  }, [notifiedTaskIds]);
+    localStorage.setItem('notifiedItemIds', JSON.stringify(Array.from(notifiedItemIds)));
+  }, [notifiedItemIds]);
   
   // Mark a notification as read
   const markAsRead = useCallback((id: string) => {
@@ -195,6 +217,9 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
       description: notification.message,
       variant: "default"
     });
+    
+    // Dispatch custom event for notification sound
+    document.dispatchEvent(new CustomEvent('tigerNotification', { detail: notification }));
     
     // Show desktop notification if enabled
     if (desktopNotificationsEnabled) {
@@ -251,14 +276,14 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
       const timeUntilDue = dueDate - now;
       
       // Create notification key based on task ID and notification type
-      const createNotificationKey = (taskId: string, type: string) => `${taskId}-${type}`;
+      const createNotificationKey = (taskId: string, type: string) => `task-${taskId}-${type}`;
       
       // Task is overdue
       if (timeUntilDue < 0 && timeUntilDue > -oneDayInSeconds) {
         const notificationKey = createNotificationKey(task.id, 'overdue');
         
         // Only notify if we haven't already notified for this task being overdue
-        if (!notifiedTaskIds.has(notificationKey)) {
+        if (!notifiedItemIds.has(notificationKey)) {
           addNotification({
             title: 'Task Overdue',
             message: `"${task.title}" is now overdue`,
@@ -267,7 +292,7 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
           });
           
           // Mark as notified
-          setNotifiedTaskIds(prev => {
+          setNotifiedItemIds(prev => {
             const newSet = new Set(prev);
             newSet.add(notificationKey);
             return newSet;
@@ -281,7 +306,7 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
         const notificationKey = createNotificationKey(task.id, 'hour');
         
         // Only notify if we haven't already notified for this task being due within an hour
-        if (!notifiedTaskIds.has(notificationKey)) {
+        if (!notifiedItemIds.has(notificationKey)) {
           addNotification({
             title: 'Task Due Soon',
             message: `"${task.title}" is due in less than an hour`,
@@ -290,7 +315,7 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
           });
           
           // Mark as notified
-          setNotifiedTaskIds(prev => {
+          setNotifiedItemIds(prev => {
             const newSet = new Set(prev);
             newSet.add(notificationKey);
             return newSet;
@@ -304,7 +329,7 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
         const notificationKey = createNotificationKey(task.id, 'day');
         
         // Only notify if we haven't already notified for this task being due within a day
-        if (!notifiedTaskIds.has(notificationKey)) {
+        if (!notifiedItemIds.has(notificationKey)) {
           addNotification({
             title: 'Task Due Tomorrow',
             message: `"${task.title}" is due within 24 hours`,
@@ -313,7 +338,7 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
           });
           
           // Mark as notified
-          setNotifiedTaskIds(prev => {
+          setNotifiedItemIds(prev => {
             const newSet = new Set(prev);
             newSet.add(notificationKey);
             return newSet;
@@ -322,7 +347,196 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
         return;
       }
     });
-  }, [addNotification, notifiedTaskIds]);
+  }, [addNotification, notifiedItemIds]);
+  
+  // Check for meetings that need reminders
+  const checkMeetingReminders = useCallback((meetings: Meeting[]) => {
+    if (!meetings || !Array.isArray(meetings)) return;
+    
+    const now = Date.now() / 1000; // Current time in seconds
+    const oneHourInSeconds = 60 * 60;
+    const fifteenMinutesInSeconds = 15 * 60;
+    
+    // Get notification preferences from localStorage
+    const storedPreferences = localStorage.getItem('notificationPreferences');
+    let meetingRemindersEnabled = true;
+    
+    if (storedPreferences) {
+      try {
+        const preferences = JSON.parse(storedPreferences);
+        meetingRemindersEnabled = preferences.meetings ?? true;
+      } catch (error) {
+        console.error('Failed to parse notification preferences', error);
+      }
+    }
+    
+    // Skip if meeting reminders are disabled
+    if (!meetingRemindersEnabled) return;
+    
+    // Check each meeting
+    meetings.forEach(meeting => {
+      // Skip meetings without start time
+      if (!meeting.start_time) return;
+      
+      const startTime = meeting.start_time;
+      const timeUntilStart = startTime - now;
+      
+      // Create notification key based on meeting ID and notification type
+      const createNotificationKey = (meetingId: string, type: string) => `meeting-${meetingId}-${type}`;
+      
+      // Meeting is starting in 15 minutes
+      if (timeUntilStart > 0 && timeUntilStart < fifteenMinutesInSeconds) {
+        const notificationKey = createNotificationKey(meeting.id, '15min');
+        
+        // Only notify if we haven't already notified for this meeting starting soon
+        if (!notifiedItemIds.has(notificationKey)) {
+          addNotification({
+            title: 'Meeting Starting Soon',
+            message: `"${meeting.title}" is starting in ${Math.floor(timeUntilStart / 60)} minutes`,
+            type: 'meeting',
+            link: '/meetings'
+          });
+          
+          // Mark as notified
+          setNotifiedItemIds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(notificationKey);
+            return newSet;
+          });
+        }
+        return;
+      }
+      
+      // Meeting is starting in 1 hour
+      if (timeUntilStart > fifteenMinutesInSeconds && timeUntilStart < oneHourInSeconds) {
+        const notificationKey = createNotificationKey(meeting.id, 'hour');
+        
+        // Only notify if we haven't already notified for this meeting starting in an hour
+        if (!notifiedItemIds.has(notificationKey)) {
+          addNotification({
+            title: 'Upcoming Meeting',
+            message: `"${meeting.title}" is starting in about an hour`,
+            type: 'meeting',
+            link: '/meetings'
+          });
+          
+          // Mark as notified
+          setNotifiedItemIds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(notificationKey);
+            return newSet;
+          });
+        }
+        return;
+      }
+    });
+  }, [addNotification, notifiedItemIds]);
+  
+  // Check for appointments that need reminders
+  const checkAppointmentReminders = useCallback((appointments: Appointment[]) => {
+    if (!appointments || !Array.isArray(appointments)) return;
+    
+    const now = Date.now() / 1000; // Current time in seconds
+    const oneDayInSeconds = 24 * 60 * 60;
+    const oneHourInSeconds = 60 * 60;
+    
+    // Get notification preferences from localStorage
+    const storedPreferences = localStorage.getItem('notificationPreferences');
+    let appointmentRemindersEnabled = true;
+    
+    if (storedPreferences) {
+      try {
+        const preferences = JSON.parse(storedPreferences);
+        appointmentRemindersEnabled = preferences.appointments ?? true;
+      } catch (error) {
+        console.error('Failed to parse notification preferences', error);
+      }
+    }
+    
+    // Skip if appointment reminders are disabled
+    if (!appointmentRemindersEnabled) return;
+    
+    // Check each appointment
+    appointments.forEach(appointment => {
+      // Skip appointments without due date
+      if (!appointment.due_date) return;
+      
+      const dueDate = appointment.due_date;
+      const timeUntilDue = dueDate - now;
+      
+      // Create notification key based on appointment ID and notification type
+      const createNotificationKey = (appointmentId: string, type: string) => `appointment-${appointmentId}-${type}`;
+      
+      // Appointment is overdue
+      if (timeUntilDue < 0 && timeUntilDue > -oneHourInSeconds) {
+        const notificationKey = createNotificationKey(appointment.id, 'overdue');
+        
+        // Only notify if we haven't already notified for this appointment being overdue
+        if (!notifiedItemIds.has(notificationKey)) {
+          addNotification({
+            title: 'Appointment Overdue',
+            message: `"${appointment.title}" has started`,
+            type: 'appointment',
+            link: '/appointments'
+          });
+          
+          // Mark as notified
+          setNotifiedItemIds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(notificationKey);
+            return newSet;
+          });
+        }
+        return;
+      }
+      
+      // Appointment is due within the next hour
+      if (timeUntilDue > 0 && timeUntilDue < oneHourInSeconds) {
+        const notificationKey = createNotificationKey(appointment.id, 'hour');
+        
+        // Only notify if we haven't already notified for this appointment being due within an hour
+        if (!notifiedItemIds.has(notificationKey)) {
+          addNotification({
+            title: 'Appointment Soon',
+            message: `"${appointment.title}" is in less than an hour${appointment.location ? ` at ${appointment.location}` : ''}`,
+            type: 'appointment',
+            link: '/appointments'
+          });
+          
+          // Mark as notified
+          setNotifiedItemIds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(notificationKey);
+            return newSet;
+          });
+        }
+        return;
+      }
+      
+      // Appointment is due within the next day
+      if (timeUntilDue > 0 && timeUntilDue < oneDayInSeconds) {
+        const notificationKey = createNotificationKey(appointment.id, 'day');
+        
+        // Only notify if we haven't already notified for this appointment being due within a day
+        if (!notifiedItemIds.has(notificationKey)) {
+          addNotification({
+            title: 'Appointment Tomorrow',
+            message: `"${appointment.title}" is scheduled within 24 hours`,
+            type: 'appointment',
+            link: '/appointments'
+          });
+          
+          // Mark as notified
+          setNotifiedItemIds(prev => {
+            const newSet = new Set(prev);
+            newSet.add(notificationKey);
+            return newSet;
+          });
+        }
+        return;
+      }
+    });
+  }, [addNotification, notifiedItemIds]);
   
   return (
     <NotificationsContext.Provider 
@@ -333,7 +547,9 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
         markAllAsRead, 
         clearNotifications, 
         addNotification,
-        checkTaskReminders
+        checkTaskReminders,
+        checkMeetingReminders,
+        checkAppointmentReminders
       }}
     >
       {children}

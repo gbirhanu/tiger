@@ -12,7 +12,8 @@ import TaskManager from "./TaskManager";
 import NotesBoard from "./NotesBoard";
 import PomodoroTimer from "./PomodoroTimer";
 import Calendar from "./Calendar";
-import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home, Clock, Search, Bell, MapPin, User, HelpCircle } from "lucide-react";
+import Appointments from "./Appointments";
+import { LayoutGrid, CheckSquare, StickyNote, Timer, CalendarDays, Video, Settings as SettingsIcon, Flame, LogOut, Moon, Sun, ChevronRight, Home, Clock, Search, Bell, MapPin, User, HelpCircle, Menu, X, NotebookIcon, Calendar as CalendarIcon } from "lucide-react";
 import React from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format } from "date-fns";
@@ -40,13 +41,14 @@ import Help from "./Help";
 import { useAuth } from "@/contexts/AuthContext";
 import { getAppointments, getNotes, getPomodoroSettings, getTasks, getMeetings, getTasksWithSubtasks } from "@/lib/api";
 import { ProfileDropdown } from "./ui/ProfileDropdown";
-import { formatDate, getNow } from "@/lib/timezone";
+import { formatDate, getNow, getUserTimezone } from "@/lib/timezone";
 import { useTheme } from "@/contexts/ThemeContext";
 import { toast } from "@/hooks/use-toast";
 import { NotificationsProvider } from "@/contexts/NotificationsContext";
 import { NotificationsDropdown } from "./ui/NotificationsDropdown";
 import { TaskReminderService } from "./TaskReminderService";
 import { QUERY_KEYS } from "@/lib/queryClient";
+import LongNotesBoard from "./LongNotesBoard";
 
 interface NavItem {
   title: string;
@@ -1016,9 +1018,14 @@ const navItems: NavItem[] = [
     component: React.createElement(TaskManager),
   },
   {
-    title: "Notes",
+    title: "Sticky Notes",
     icon: <StickyNote className="h-4 w-4" />,
     component: <NotesBoard />,
+  },
+  {
+    title: "Long Notes",
+    icon: <NotebookIcon className="h-4 w-4" />,
+    component: <LongNotesBoard />,
   },
   {
     title: "Pomodoro",
@@ -1029,6 +1036,11 @@ const navItems: NavItem[] = [
     title: "Calendar",
     icon: <CalendarDays className="h-4 w-4" />,
     component: <Calendar />,
+  },
+  {
+    title: "Appointments",
+    icon: <CalendarIcon className="h-4 w-4" />,
+    component: <Appointments />,
   },
   {
     title: "Meetings",
@@ -1053,190 +1065,306 @@ export default function Dashboard() {
   });
   const { logout } = useAuth();
   const { theme, setTheme } = useTheme();
+  const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  const [isMobileView, setIsMobileView] = React.useState(false);
 
   // Update localStorage when navigation changes
   React.useEffect(() => {
     localStorage.setItem('selectedNav', selectedNav);
   }, [selectedNav]);
 
+  // Check if we're in mobile view
+  React.useEffect(() => {
+    const checkMobileView = () => {
+      setIsMobileView(window.innerWidth < 768);
+      if (window.innerWidth < 768) {
+        setIsSidebarOpen(false);
+      } else {
+        setIsSidebarOpen(true);
+      }
+    };
+
+    // Initial check
+    checkMobileView();
+
+    // Add event listener for window resize
+    window.addEventListener('resize', checkMobileView);
+
+    // Cleanup
+    return () => window.removeEventListener('resize', checkMobileView);
+  }, []);
+
   return (
     <NotificationsProvider>
       <TaskReminderService />
-      <ResizablePanelGroup
-        direction="horizontal"
-        className="h-screen items-stretch"
-      >
-        {/* Resizable sidebar with slightly larger initial width */}
-        <ResizablePanel defaultSize={22} minSize={15} maxSize={30} className="bg-[hsl(var(--background))] flex flex-col h-screen shadow-sm">
-          {/* App branding - now clickable */}
-          <div className="px-4 py-4">
-            <div className="flex items-center justify-between">
-              <div 
-                className="flex items-center gap-2.5 cursor-pointer justify-center group" 
-                onClick={() => setSelectedNav("Dashboard")}
-              >
-                <div className="flex items-center justify-center
-                  rounded-full
-                  bg-gradient-to-br from-yellow-500 to-amber-700
-                  p-1
-                  shadow-lg
-                  group-hover:from-yellow-400 group-hover:to-amber-600
-                  transition-all
-                  duration-300
-                  transform group-hover:scale-105
-                  border-2 border-yellow-400/40
-                ">
-                  <img 
-                    src="/assets/tiger_logo.png" 
-                    alt="Tiger" 
-                    className="h-8 w-8 drop-shadow-md" 
-                  />
-                </div>
-                <div className="flex items-center">
-                  <h2 className="text-xl
-                    font-extrabold
-                    bg-gradient-to-r from-yellow-500 to-amber-700
-                    bg-clip-text text-transparent
-                    group-hover:from-yellow-400 group-hover:to-amber-600
-                    transition-colors
-                    duration-300
-                    cursor-pointer
-                  ">Tiger</h2>
-                  <span className="text-xs text-amber-500 ml-0.5">
-                    <sup className="font-semibold">TM</sup>
-                  </span>
-                </div>
-              </div>
-              
-              {/* Add a theme toggle button */}
-              <div className="flex items-center">
-                {theme === "dark" ? (
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={() => setTheme("light")}
-                    className="h-8 w-8 rounded-full hover:bg-yellow-100/10 transition-colors duration-200"
-                  >
-                    <Sun className="h-4 w-4 text-yellow-400" />
-                  </Button>
-                ) : (
-                  <Button 
-                    variant="ghost" 
-                    size="icon" 
-                    onClick={() => setTheme("dark")}
-                    className="h-8 w-8 rounded-full hover:bg-slate-200 transition-colors duration-200"
-                  >
-                    <Moon className="h-4 w-4 text-slate-700" />
-                  </Button>
-                )}
-              </div>
-            </div>
-          </div>
-          {/* add divider for light and dark theme */}
-          {theme === "light" ? (
-            <div className="h-[1px] bg-gray-200" />
-          ) : (
-            <div className="h-[1px] bg-gray-700" />
-          )}
-          {/* User Profile Section */}
-          <div className="px-4 py-3">
-            <div className="flex items-center justify-between">
-              <ProfileDropdown />
-              {theme === "light" ? (
-                <div className="w-[1px] h-10 bg-gray-200" /> 
-              ) : (
-                <div className="w-[1px] h-10 bg-gray-700" />
-              )}
-              <NotificationsDropdown />
-            </div>
-          </div>
-          {/* add divider for light and dark theme */}
-          {theme === "light" ? (
-            <div className="h-[1px] bg-gray-200" />
-          ) : (
-            <div className="h-[1px] bg-gray-700" />
-          )}
-          {/* Navigation - independently scrollable */}
-          <ScrollArea className="flex-1 thin-scrollbar px-3">
-            <div className="space-y-1.5 py-4">
-              {navItems.map((item) => (
-                <Button
-                  key={item.title}
-                  variant={selectedNav === item.title ? "default" : "ghost"}
-                  size="sm"
-                  className={cn(
-                    "w-full justify-start gap-3 mb-1 px-3 py-5 font-medium transition-all duration-300 rounded-lg",
-                    {
-                      "bg-gradient-to-r from-primary/90 to-primary text-primary-foreground shadow-md": selectedNav === item.title,
-                      "hover:bg-[hsl(var(--primary)/0.08)] hover:text-primary hover:translate-x-1": selectedNav !== item.title,
-                    }
-                  )}
-                  onClick={() => setSelectedNav(item.title)}
-                >
-                  <div className={cn(
-                    "w-9 h-9 flex items-center justify-center rounded-md transition-all duration-300",
-                    selectedNav === item.title 
-                      ? "bg-[hsl(var(--primary-foreground)/0.3)] text-primary-foreground shadow-inner" 
-                      : "bg-[hsl(var(--muted)/0.5)] text-muted-foreground"
-                  )}>
-                    {item.icon}
-                  </div>
-                  <span className="truncate font-medium">{item.title}</span>
-                  {selectedNav === item.title && (
-                    <ChevronRight className="ml-auto h-4 w-4 text-primary-foreground/70" />
-                  )}
-                </Button>
-              ))}
-            </div>
-          </ScrollArea>
-          
-          {/* Fixed logout button at bottom */}
-          <div className="p-4">
-            <Button
-              variant="outline"
-              size="sm"
-              className="w-full justify-start gap-3 px-3 py-5 font-medium transition-all duration-300 bg-gradient-to-r hover:from-red-500/10 hover:to-red-600/10 hover:text-red-600 hover:border-red-200 rounded-lg group"
-              onClick={() => logout()}
-            >
-              <div className="w-9 h-9 flex items-center justify-center rounded-md bg-red-50 text-red-500 group-hover:bg-red-100 transition-colors duration-300">
-                <LogOut className="h-4 w-4" />
-              </div>
-              <span className="font-medium">Logout</span>
-            </Button>
-          </div>
-        </ResizablePanel>
+      
+      {/* Mobile menu button - only visible on small screens */}
+      {isMobileView && (
+        <div className="fixed top-4 left-4 z-50">
+          <Button
+            variant="outline"
+            size="icon"
+            onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+            className="h-10 w-10 rounded-full bg-background/80 backdrop-blur-sm border border-border shadow-md"
+          >
+            {isSidebarOpen ? (
+              <X className="h-5 w-5" />
+            ) : (
+              <Menu className="h-5 w-5" />
+            )}
+          </Button>
+        </div>
+      )}
 
-        <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
+      {/* Mobile view */}
+      {isMobileView ? (
+        <div className="h-screen flex flex-col">
+          {/* Sidebar for mobile - conditionally shown */}
+          <div 
+            className={cn(
+              "bg-[hsl(var(--background))] flex flex-col shadow-md z-40 fixed inset-y-0 left-0 w-[280px] transition-transform duration-300 ease-in-out",
+              isSidebarOpen ? "translate-x-0" : "-translate-x-full"
+            )}
+          >
+            {/* Sidebar content */}
+            {renderSidebarContent()}
+          </div>
 
-        {/* Main content area */}
-        <ResizablePanel defaultSize={78} minSize={70} maxSize={85} className="bg-[hsl(var(--background))] h-screen flex flex-col">
-          {/* Main content header with breadcrumb */}
-        
-          
-          {/* Main content with independent scrolling */}
-          <ScrollArea className="flex-1 thin-scrollbar">
-            <div className="p-6">
-              {/* Conditional rendering based on selected navigation item */}
-              {selectedNav === "Dashboard" && <DashboardOverview />}
-              {selectedNav === "Tasks" && <TaskManager /> }
-              {selectedNav === "Notes" && <NotesBoard />}
-              {selectedNav === "Pomodoro" && <PomodoroTimer />}
-              {selectedNav === "Calendar" && <Calendar />}
-              {selectedNav === "Meetings" && <Meetings />}
-              {selectedNav === "Settings" && <Settings />}
-              {selectedNav === "Profile" && <Profile />}
-              {selectedNav === "Help" && <Help />}
-            </div>
-          </ScrollArea>
-        </ResizablePanel>
-      </ResizablePanelGroup>
+          {/* Overlay for mobile */}
+          {isSidebarOpen && (
+            <div 
+              className="fixed inset-0 bg-black/50 z-30 backdrop-blur-sm"
+              onClick={() => setIsSidebarOpen(false)}
+            />
+          )}
+
+          {/* Main content for mobile */}
+          <div className="flex-1 bg-[hsl(var(--background))] h-screen flex flex-col overflow-hidden">
+            <ScrollArea className="flex-1 thin-scrollbar">
+              <div className="p-4 md:p-6">
+                {renderMainContent()}
+              </div>
+            </ScrollArea>
+          </div>
+        </div>
+      ) : (
+        /* Desktop view with resizable panels */
+        <ResizablePanelGroup
+          direction="horizontal"
+          className="h-screen items-stretch"
+        >
+          {/* Resizable sidebar */}
+          <ResizablePanel 
+            defaultSize={22} 
+            minSize={15} 
+            maxSize={30} 
+            className="bg-[hsl(var(--background))] flex flex-col h-screen shadow-sm"
+          >
+            {renderSidebarContent()}
+          </ResizablePanel>
+
+          <ResizableHandle withHandle className="w-2 bg-[hsl(var(--border))]" />
+
+          {/* Main content area */}
+          <ResizablePanel 
+            defaultSize={78} 
+            minSize={70} 
+            maxSize={85} 
+            className="bg-[hsl(var(--background))] h-screen flex flex-col"
+          >
+            <ScrollArea className="flex-1 thin-scrollbar">
+              <div className="p-6">
+                {renderMainContent()}
+              </div>
+            </ScrollArea>
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      )}
     </NotificationsProvider>
   );
+
+  // Helper function to render sidebar content
+  function renderSidebarContent() {
+    return (
+      <>
+        {/* App branding - now clickable */}
+        <div className="px-4 py-4">
+          <div className="flex items-center justify-between">
+            <div 
+              className="flex items-center gap-2.5 cursor-pointer justify-center group" 
+              onClick={() => {
+                setSelectedNav("Dashboard");
+                if (isMobileView) setIsSidebarOpen(false);
+              }}
+            >
+              <div className="flex items-center justify-center
+                rounded-full
+                bg-gradient-to-br from-yellow-500 to-amber-700
+                p-1
+                shadow-lg
+                group-hover:from-yellow-400 group-hover:to-amber-600
+                transition-all
+                duration-300
+                transform group-hover:scale-105
+                border-2 border-yellow-400/40
+              ">
+                <img 
+                  src="/assets/tiger_logo.png" 
+                  alt="Tiger" 
+                  className="h-8 w-8 drop-shadow-md" 
+                />
+              </div>
+              <div className="flex items-center">
+                <h2 className="text-xl
+                  font-extrabold
+                  bg-gradient-to-r from-yellow-500 to-amber-700
+                  bg-clip-text text-transparent
+                  group-hover:from-yellow-400 group-hover:to-amber-600
+                  transition-colors
+                  duration-300
+                  cursor-pointer
+                ">Tiger</h2>
+                <span className="text-xs text-amber-500 ml-0.5">
+                  <sup className="font-semibold">TM</sup>
+                </span>
+              </div>
+            </div>
+            
+            {/* Add a theme toggle button */}
+            <div className="flex items-center">
+              {theme === "dark" ? (
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setTheme("light")}
+                  className="h-8 w-8 rounded-full hover:bg-yellow-100/10 transition-colors duration-200"
+                >
+                  <Sun className="h-4 w-4 text-yellow-400" />
+                </Button>
+              ) : (
+                <Button 
+                  variant="ghost" 
+                  size="icon" 
+                  onClick={() => setTheme("dark")}
+                  className="h-8 w-8 rounded-full hover:bg-slate-200 transition-colors duration-200"
+                >
+                  <Moon className="h-4 w-4 text-slate-700" />
+                </Button>
+              )}
+            </div>
+          </div>
+        </div>
+        {/* add divider for light and dark theme */}
+        {theme === "light" ? (
+          <div className="h-[1px] bg-gray-200" />
+        ) : (
+          <div className="h-[1px] bg-gray-700" />
+        )}
+        {/* User Profile Section */}
+        <div className="px-4 py-3">
+          <div className="flex items-center justify-between">
+            <ProfileDropdown />
+            {theme === "light" ? (
+              <div className="w-[1px] h-10 bg-gray-200" /> 
+            ) : (
+              <div className="w-[1px] h-10 bg-gray-700" />
+            )}
+            <NotificationsDropdown />
+          </div>
+        </div>
+        {/* add divider for light and dark theme */}
+        {theme === "light" ? (
+          <div className="h-[1px] bg-gray-200" />
+        ) : (
+          <div className="h-[1px] bg-gray-700" />
+        )}
+        {/* Navigation - independently scrollable */}
+        <ScrollArea className="flex-1 thin-scrollbar px-3">
+          <div className="space-y-1.5 py-4">
+            {navItems.map((item) => (
+              <Button
+                key={item.title}
+                variant={selectedNav === item.title ? "default" : "ghost"}
+                size="sm"
+                className={cn(
+                  "w-full justify-start gap-3 mb-1 px-3 py-5 font-medium transition-all duration-300 rounded-lg",
+                  {
+                    "bg-gradient-to-r from-primary/90 to-primary text-primary-foreground shadow-md": selectedNav === item.title,
+                    "hover:bg-[hsl(var(--primary)/0.08)] hover:text-primary hover:translate-x-1": selectedNav !== item.title,
+                  }
+                )}
+                onClick={() => {
+                  setSelectedNav(item.title);
+                  if (isMobileView) setIsSidebarOpen(false);
+                }}
+              >
+                <div className={cn(
+                  "w-9 h-9 flex items-center justify-center rounded-md transition-all duration-300",
+                  selectedNav === item.title 
+                    ? "bg-[hsl(var(--primary-foreground)/0.3)] text-primary-foreground shadow-inner" 
+                    : "bg-[hsl(var(--muted)/0.5)] text-muted-foreground"
+                )}>
+                  {item.icon}
+                </div>
+                <span className="truncate font-medium">{item.title}</span>
+                {selectedNav === item.title && (
+                  <ChevronRight className="ml-auto h-4 w-4 text-primary-foreground/70" />
+                )}
+              </Button>
+            ))}
+          </div>
+        </ScrollArea>
+        
+        {/* Fixed logout button at bottom */}
+        <div className="p-4">
+          <Button
+            variant="outline"
+            size="sm"
+            className="w-full justify-start gap-3 px-3 py-5 font-medium transition-all duration-300 bg-gradient-to-r hover:from-red-500/10 hover:to-red-600/10 hover:text-red-600 hover:border-red-200 rounded-lg group"
+            onClick={() => logout()}
+          >
+            <div className="w-9 h-9 flex items-center justify-center rounded-md bg-red-50 text-red-500 group-hover:bg-red-100 transition-colors duration-300">
+              <LogOut className="h-4 w-4" />
+            </div>
+            <span className="font-medium">Logout</span>
+          </Button>
+        </div>
+      </>
+    );
+  }
+
+  // Helper function to render main content
+  function renderMainContent() {
+    console.log("Selected navigation item:", selectedNav);
+    
+    // Find the matching nav item
+    const navItem = navItems.find(item => item.title === selectedNav);
+    console.log("Found nav item:", navItem?.title);
+    
+    // If we found a matching nav item, render its component
+    if (navItem) {
+      return (
+        <div className="w-full">
+          {navItem.component}
+        </div>
+      );
+    }
+    
+    // Fallback to Dashboard if no matching nav item
+    return <DashboardOverview />;
+  }
 }
 
 // Helper function to get greeting based on time of day
 const getGreeting = () => {
-  const hour = new Date().getHours();
+  // Get the current date in the user's timezone
+  const timezone = getUserTimezone();
+  const now = new Date();
+  
+  // Format the date in the user's timezone to get the correct hour
+  const timeString = formatDate(now, 'HH');
+  const hour = parseInt(timeString, 10);
+  
   if (hour < 12) return "Good morning";
   if (hour < 18) return "Good afternoon";
   return "Good evening";

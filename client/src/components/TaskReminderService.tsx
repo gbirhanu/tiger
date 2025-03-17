@@ -1,82 +1,56 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { getTasks } from '@/lib/api';
+import { getTasks, getAppointments, getMeetings } from '@/lib/api';
 import { useNotifications } from '@/hooks/use-notifications';
 
-// Define the task interface for reminders
-interface TaskForReminder {
+// Define interfaces to match the context interfaces
+interface Task {
   id: string;
   title: string;
   description?: string | null;
-  due_date?: number | null; // Unix timestamp
+  due_date?: number | null;
   priority?: string;
-  completed?: boolean;
+  completed: boolean;
+  is_recurring?: boolean;
+  recurrence_pattern?: string | null;
+  recurrence_interval?: number | null;
+  recurrence_end_date?: number | null;
+}
+
+interface Meeting {
+  id: string;
+  title: string;
+  description?: string | null;
+  start_time: number;
+  end_time: number;
+  meeting_link?: string | null;
+}
+
+interface Appointment {
+  id: string;
+  title: string;
+  description?: string | null;
+  due_date: number;
+  location?: string | null;
+  contact?: string | null;
 }
 
 /**
- * Checks tasks for upcoming due dates and returns tasks that need reminders
- */
-function checkTasksForReminders(tasks: TaskForReminder[]): TaskForReminder[] {
-  if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
-    return [];
-  }
-
-  const now = new Date();
-  const tasksNeedingReminders: TaskForReminder[] = [];
-
-  tasks.forEach(task => {
-    // Skip completed tasks or tasks without due dates
-    if (task.completed || !task.due_date) {
-      return;
-    }
-
-    const dueDate = new Date(task.due_date * 1000); // Convert Unix timestamp to Date
-    
-    // Check if the task is due within the next 24 hours
-    const hoursUntilDue = Math.floor((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60));
-    
-    // Add reminders for tasks due in 1 hour, 3 hours, or 24 hours
-    if (hoursUntilDue > 0 && (hoursUntilDue === 1 || hoursUntilDue === 3 || hoursUntilDue === 24)) {
-      tasksNeedingReminders.push(task);
-    }
-  });
-
-  return tasksNeedingReminders;
-}
-
-/**
- * Creates a reminder message based on the time until the task is due
- */
-function createReminderMessage(task: TaskForReminder): { title: string; message: string } {
-  const dueDate = new Date(task.due_date! * 1000);
-  const now = new Date();
-  const hoursUntilDue = Math.floor((dueDate.getTime() - now.getTime()) / (1000 * 60 * 60));
-  
-  let title = '';
-  let message = '';
-  
-  if (hoursUntilDue <= 1) {
-    title = 'Task Due Soon';
-    message = `"${task.title}" is due in less than an hour`;
-  } else if (hoursUntilDue <= 3) {
-    title = 'Task Due Soon';
-    message = `"${task.title}" is due in about ${hoursUntilDue} hours`;
-  } else {
-    title = 'Upcoming Task';
-    message = `"${task.title}" is due tomorrow`;
-  }
-  
-  return { title, message };
-}
-
-/**
- * This component doesn't render anything visible but provides task reminder functionality
+ * This component doesn't render anything visible but provides reminder functionality
  * It should be included once in your app, typically in a layout component
  */
 export function TaskReminderService() {
-  const { addNotification } = useNotifications();
+  const { addNotification, checkTaskReminders, checkMeetingReminders, checkAppointmentReminders } = useNotifications();
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const [userInteracted, setUserInteracted] = useState(false);
+  const [initialized, setInitialized] = useState(false);
+  
+  // Generate a unique session ID on component mount
+  useEffect(() => {
+    const sessionId = Date.now().toString();
+    localStorage.setItem('currentSessionId', sessionId);
+    setInitialized(true);
+  }, []);
   
   // Check for user interaction
   useEffect(() => {
@@ -137,7 +111,7 @@ export function TaskReminderService() {
   };
   
   // Fetch tasks
-  const { data: tasks = [] } = useQuery({
+  const { data: tasksData = [] } = useQuery({
     queryKey: ['tasks'],
     queryFn: async () => {
       const response = await getTasks();
@@ -145,41 +119,100 @@ export function TaskReminderService() {
     },
   });
   
-  // Helper function to convert tasks to the format needed for reminders
-  const formatTaskForReminders = (task: any): TaskForReminder => {
-    return {
+  // Fetch appointments
+  const { data: appointmentsData = [] } = useQuery({
+    queryKey: ['appointments'],
+    queryFn: async () => {
+      const response = await getAppointments();
+      return response;
+    },
+  });
+  
+  // Fetch meetings
+  const { data: meetingsData = [] } = useQuery({
+    queryKey: ['meetings'],
+    queryFn: async () => {
+      const response = await getMeetings();
+      return response;
+    },
+  });
+  
+  // Helper functions to convert API data to the correct format
+  const formatTasks = (tasks: any[]): Task[] => {
+    return tasks.map(task => ({
       id: String(task.id),
       title: task.title,
-      description: task.description || null,
+      description: task.description,
       due_date: task.due_date,
       priority: task.priority,
-      completed: task.completed
-    };
+      completed: Boolean(task.completed),
+      is_recurring: Boolean(task.is_recurring),
+      recurrence_pattern: task.recurrence_pattern,
+      recurrence_interval: task.recurrence_interval,
+      recurrence_end_date: task.recurrence_end_date
+    }));
   };
   
-  // Check for task reminders whenever tasks change
+  const formatMeetings = (meetings: any[]): Meeting[] => {
+    return meetings.map(meeting => ({
+      id: String(meeting.id),
+      title: meeting.title,
+      description: meeting.description,
+      start_time: meeting.start_time,
+      end_time: meeting.end_time,
+      meeting_link: meeting.meeting_link
+    }));
+  };
+  
+  const formatAppointments = (appointments: any[]): Appointment[] => {
+    return appointments.map(appointment => ({
+      id: String(appointment.id),
+      title: appointment.title,
+      description: appointment.description,
+      // Use start_time as due_date for appointments
+      due_date: appointment.start_time,
+      location: appointment.location,
+      contact: appointment.attendees
+    }));
+  };
+  
+  // Set up a listener for notifications to play sound
   useEffect(() => {
-    if (tasks && Array.isArray(tasks)) {
-      const formattedTasks = tasks.map(formatTaskForReminders);
-      const tasksNeedingReminders = checkTasksForReminders(formattedTasks);
-      
-      // Create notifications for tasks needing reminders
-      tasksNeedingReminders.forEach(task => {
-        const { title, message } = createReminderMessage(task);
-        addNotification({
-          title,
-          message,
-          type: 'task',
-          link: 'Tasks'
-        });
-        
-        // Play notification sound with a small delay to ensure it works
-        setTimeout(() => {
-          playNotificationSound();
-        }, 100);
-      });
+    // Create a custom event listener for notifications
+    const handleNotification = () => {
+      playNotificationSound();
+    };
+    
+    // Add event listener
+    document.addEventListener('tigerNotification', handleNotification);
+    
+    // Cleanup
+    return () => {
+      document.removeEventListener('tigerNotification', handleNotification);
+    };
+  }, []);
+  
+  // Check for reminders whenever data changes
+  useEffect(() => {
+    if (!initialized) return;
+    
+    // Use the context functions to check for reminders
+    if (tasksData && Array.isArray(tasksData)) {
+      const formattedTasks = formatTasks(tasksData);
+      checkTaskReminders(formattedTasks);
     }
-  }, [tasks, addNotification]);
+    
+    if (meetingsData && Array.isArray(meetingsData)) {
+      const formattedMeetings = formatMeetings(meetingsData);
+      checkMeetingReminders(formattedMeetings);
+    }
+    
+    if (appointmentsData && Array.isArray(appointmentsData)) {
+      const formattedAppointments = formatAppointments(appointmentsData);
+      checkAppointmentReminders(formattedAppointments);
+    }
+    
+  }, [tasksData, appointmentsData, meetingsData, checkTaskReminders, checkMeetingReminders, checkAppointmentReminders, initialized]);
   
   // This component doesn't render anything visible
   return null;

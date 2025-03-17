@@ -7,7 +7,7 @@ import type { UserSettings } from '@shared/schema';
  */
 export function getUserTimezone(): string {
   try {
-    const userSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.SETTINGS]);
+    const userSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS]);
     if (userSettings && userSettings.timezone) {
       return userSettings.timezone;
     }

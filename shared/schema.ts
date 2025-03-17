@@ -127,6 +127,36 @@ export const userSettings = sqliteTable("user_settings", {
   default_calendar_view: text("default_calendar_view").notNull().default("month"),
   show_notifications: integer("show_notifications", { mode: "boolean" }).notNull().default(true),
   notifications_enabled: integer("notifications_enabled", { mode: "boolean" }).notNull().default(true),
+  gemini_key: text("gemini_key"),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+});
+
+export const studySessions = sqliteTable("study_sessions", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  description: text("description"),
+  subject: text("subject"),
+  goal: text("goal"),
+  completed: integer("completed", { mode: "boolean" }).notNull().default(false),
+  total_focus_time: integer("total_focus_time").notNull().default(0),
+  total_breaks: integer("total_breaks").notNull().default(0),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
+  updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+});
+
+export const longNotes = sqliteTable("long_notes", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  title: text("title").notNull(),
+  content: text("content"),
+  tags: text("tags"),
+  is_favorite: integer("is_favorite", { mode: "boolean" }).notNull().default(false),
   created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
@@ -220,6 +250,24 @@ export const insertUserSettingsSchema = z.object({
   default_calendar_view: z.enum(["day", "week", "month"]).default("month"),
   show_notifications: z.boolean().default(true),
   notifications_enabled: z.boolean().default(true),
+  gemini_key: z.string().optional(),
+});
+
+export const insertStudySessionSchema = z.object({
+  title: z.string().min(1),
+  description: z.string().nullable(),
+  subject: z.string().nullable(),
+  goal: z.string().nullable(),
+  completed: z.boolean().default(false),
+  total_focus_time: z.number().default(0),
+  total_breaks: z.number().default(0),
+});
+
+export const insertLongNoteSchema = z.object({
+  title: z.string().min(1),
+  content: z.string().nullable(),
+  tags: z.string().nullable(),
+  is_favorite: z.boolean().default(false),
 });
 
 // Types
@@ -255,3 +303,9 @@ export type TaskWithSubtasks = Task & {
   completed_subtasks?: number;
   total_subtasks?: number;
 };
+
+export type StudySession = typeof studySessions.$inferSelect;
+export type NewStudySession = typeof studySessions.$inferInsert;
+
+export type LongNote = typeof longNotes.$inferSelect;
+export type NewLongNote = typeof longNotes.$inferInsert;
