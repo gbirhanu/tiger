@@ -8,6 +8,7 @@ import authRouter from "./routes/auth";
 import { setupVite, serveStatic, log } from "./vite";
 import generateSubtasksRoute from "./routes/generate-subtasks";
 import settingsRouter from "./routes/settings";
+import usersRouter from "./api/users";
 import { requireAuth } from './lib/auth';
 import {
   getStudySessions,
@@ -37,6 +38,7 @@ app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/generate", generateSubtasksRoute);
 app.use("/api/settings", settingsRouter);
+app.use("/api/users", usersRouter);
 
 // Study Sessions routes
 app.get("/api/study-sessions", async (req, res) => {

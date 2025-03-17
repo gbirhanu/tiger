@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from './db';
 import { users, sessions } from '../../shared/schema';
-import { eq } from 'drizzle-orm';
+import { eq, lt } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
@@ -75,7 +75,7 @@ export async function cleanupExpiredSessions(): Promise<number> {
     console.log(`Cleaning up sessions that expired before ${new Date(currentTimestamp * 1000).toISOString()}`);
     
     const result = await db.delete(sessions)
-      .where(eq(sessions.expires_at > currentTimestamp, false))
+      .where(lt(sessions.expires_at, currentTimestamp))
       .returning({ id: sessions.id });
     
     console.log(`Cleaned up ${result.length} expired sessions`);

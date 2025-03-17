@@ -3,7 +3,7 @@ import { queryClient, QUERY_KEYS } from './queryClient';
 import type { UserSettings } from '@shared/schema';
 
 /**
- * Gets the user's timezone from settings or falls back to system timezone
+ * Gets the user's timezone from settings or falls back to default timezone
  */
 export function getUserTimezone(): string {
   try {
@@ -15,8 +15,8 @@ export function getUserTimezone(): string {
     console.error('Error getting user timezone:', error);
   }
   
-  // Fallback to system timezone
-  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+  // Fallback to default timezone (Africa/Addis_Ababa - GMT+3)
+  return "Africa/Addis_Ababa";
 }
 
 /**

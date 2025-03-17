@@ -9,6 +9,14 @@ export const users = sqliteTable("users", {
   email: text("email").notNull().unique(),
   password: text("password").notNull(),
   name: text("name"),
+  role: text("role").notNull().default("user"),
+  status: text("status").notNull().default("active"),
+  last_login: integer("last_login"),
+  login_count: integer("login_count").notNull().default(0),
+  last_login_ip: text("last_login_ip"),
+  last_login_device: text("last_login_device"),
+  user_location: text("user_location"),
+  is_online: integer("is_online", { mode: "boolean" }).notNull().default(false),
   created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`),
   updated_at: integer("updated_at").notNull().default(sql`CURRENT_TIMESTAMP`)
 });
@@ -166,6 +174,13 @@ export const insertUserSchema = createInsertSchema(users, {
   email: z.string().email(),
   password: z.string().min(8),
   name: z.string().min(1).nullable(),
+  role: z.enum(["admin", "user"]).default("user"),
+  status: z.enum(["active", "inactive", "suspended"]).default("active"),
+  last_login: z.number().nullable(),
+  login_count: z.number().default(0),
+  last_login_ip: z.string().nullable(),
+  last_login_device: z.string().nullable(),
+  is_online: z.boolean().default(false),
 });
 
 export const insertTaskSchema = z.object({

@@ -16,6 +16,7 @@ const registerSchema = z.object({
   email: z.string().email(),
   password: z.string().min(6),
   name: z.string().optional(),
+  user_location: z.string().optional(),
 });
 
 const loginSchema = z.object({
@@ -41,8 +42,8 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
       return res.status(400).json({ error: 'No request body provided' });
     }
 
-    const { email, password, name } = registerSchema.parse(req.body);
-    console.log('Parsed registration data:', { email, name });
+    const { email, password, name, user_location } = registerSchema.parse(req.body);
+    console.log('Parsed registration data:', { email, name, user_location });
 
     // Check if user exists
     const existingUser = await db.query.users.findFirst({
@@ -57,11 +58,26 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     // Create user
     const hashedPassword = await hashPassword(password);
     console.log('Attempting to create user...');
+    
+    // Get IP and user agent
+    const userAgent = req.headers['user-agent'] || '';
+    const ip = req.ip || req.socket.remoteAddress || '';
+    
+    
     const [user] = await db.insert(users)
       .values({
         email,
         password: hashedPassword,
-        name: name || null
+        name: name || null,
+        role: "user",
+        status: "active",
+        last_login: Math.floor(Date.now() / 1000),
+        login_count: 1,
+        last_login_ip: ip,
+        last_login_device: userAgent,
+        user_location: user_location || null,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
       })
       .returning();
     console.log('User created successfully:', { id: user.id, email: user.email });
@@ -138,6 +154,17 @@ router.get('/validate-token', async (req: Request, res: Response) => {
       return res.status(401).json({ valid: false, error: 'User not found' });
     }
 
+    // Check if user is active
+    if (user.status === 'inactive' || user.status === 'suspended') {
+      console.log(`Session validation failed: User account is ${user.status}`);
+      return res.status(403).json({ valid: false, error: `Your account is ${user.status}. Please contact an administrator.` });
+    }
+
+    // Update user online status
+    await db.update(users)
+      .set({ is_online: true })
+      .where(eq(users.id, userId));
+
     console.log(`Session validation successful for user: ${user.email}`);
     return res.json({ 
       valid: true, 
@@ -145,6 +172,8 @@ router.get('/validate-token', async (req: Request, res: Response) => {
         id: user.id,
         email: user.email,
         name: user.name,
+        role: user.role,
+        status: user.status,
         session: {
           id: sessionId,
           active: true
@@ -171,11 +200,39 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
+    // Check user status before proceeding
+    if (user.status === 'inactive') {
+      return res.status(403).json({ error: 'Account is deactivated. Please contact an administrator.' });
+    }
+
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'Account is suspended. Please contact an administrator.' });
+    }
+
     // Verify password
     const isValid = await verifyPassword(password, user.password);
     if (!isValid) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+
+    // Update login information
+    const userAgent = req.headers['user-agent'] || '';
+    const ip = req.ip || req.socket.remoteAddress || '';
+    
+    // Try to get location from IP (simplified - in a real app you'd use a geolocation service)
+    let location = user.user_location || null; // Keep existing location if we can't determine a new one
+    
+    // Update user information
+    await db.update(users)
+      .set({
+        last_login: Math.floor(Date.now() / 1000),
+        login_count: (user.login_count || 0) + 1,
+        last_login_ip: ip,
+        last_login_device: userAgent,
+        user_location: location,
+        is_online: true
+      })
+      .where(eq(users.id, user.id));
 
     // Create session
     const sessionId = await createSession(user.id);
@@ -188,11 +245,18 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
       maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
     });
 
+    // Get updated user data
+    const updatedUser = await db.query.users.findFirst({
+      where: eq(users.id, user.id),
+    });
+
     res.json({
       user: {
-        id: user.id,
-        email: user.email,
-        name: user.name,
+        id: updatedUser?.id,
+        email: updatedUser?.email,
+        name: updatedUser?.name,
+        role: updatedUser?.role,
+        status: updatedUser?.status,
         session: {
           id: sessionId,
           active: true
@@ -215,47 +279,11 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
     if (error instanceof Error) {
       return res.status(400).json({ error: error.message });
     }
-    
-    res.status(400).json({ error: 'Invalid login data' });
+
+    return res.status(500).json({ error: 'An unexpected error occurred' });
   }
 });
 
-// Logout
-router.post('/logout', async (req: Request, res: Response) => {
-  try {
-    // First check header for Bearer token
-    const authHeader = req.headers.authorization;
-    let sessionId = null;
-
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-      sessionId = authHeader.split(' ')[1];
-      console.log(`Logging out session from authorization header: ${sessionId.substring(0, 10)}...`);
-    } else {
-      // Fallback to cookie
-      sessionId = req.cookies?.sessionId;
-      console.log(`Logging out session from cookie: ${sessionId ? sessionId.substring(0, 10) + '...' : 'none'}`);
-    }
-
-    if (sessionId) {
-      await deleteSession(sessionId);
-      res.clearCookie('sessionId');
-    }
-
-    console.log('Logout successful');
-    res.json({
-      message: 'Logged out successfully',
-      session: {
-        active: false
-      }
-    });
-  } catch (error) {
-    console.error('Logout error:', error);
-    if (error instanceof Error) {
-      return res.status(500).json({ error: error.message });
-    }
-    res.status(500).json({ error: 'Failed to logout' });
-  }
-});
 
 // Get current user
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
@@ -270,6 +298,15 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       res.clearCookie('sessionId');
       return res.json({ user: null });
     }
+    
+    // Check if user is active
+    if (user.status === 'inactive' || user.status === 'suspended') {
+      console.log(`User account is ${user.status}, clearing session`);
+      res.clearCookie('sessionId');
+      return res.status(403).json({ 
+        error: `Your account is ${user.status}. Please contact an administrator.` 
+      });
+    }
 
     // Get the session ID from the authorization header
     const authHeader = req.headers.authorization;
@@ -279,11 +316,18 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
        
     console.log(`Returning user data with session ID: ${sessionId?.substring(0, 10)}...`);
     
+    // Update user online status
+    await db.update(users)
+      .set({ is_online: true })
+      .where(eq(users.id, req.userId!));
+    
     res.json({
       user: {
         id: user.id,
         email: user.email,
         name: user.name,
+        role: user.role,
+        status: user.status,
         session: {
           id: sessionId,
           active: true
@@ -291,8 +335,8 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Get current user error:', error);
-    res.status(500).json({ error: 'Server error' });
+    console.error('Error fetching current user:', error);
+    res.status(500).json({ error: 'Failed to fetch user data' });
   }
 });
 
@@ -328,6 +372,15 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
         })
         .returning();
       user = newUser;
+    }
+    
+    // Check user status
+    if (user.status === 'inactive') {
+      return res.status(403).json({ error: 'Account is deactivated. Please contact an administrator.' });
+    }
+
+    if (user.status === 'suspended') {
+      return res.status(403).json({ error: 'Account is suspended. Please contact an administrator.' });
     }
 
     // Create session
@@ -370,6 +423,36 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
     }
     
     res.status(400).json({ error: 'Invalid Google credentials' });
+  }
+});
+
+// Logout
+router.post('/logout', requireAuth, async (req: Request, res: Response) => {
+  try {
+    // Get session ID from cookie or authorization header
+    const sessionId = req.cookies?.sessionId || (
+      req.headers.authorization?.startsWith('Bearer ')
+        ? req.headers.authorization.split(' ')[1]
+        : null
+    );
+
+    if (sessionId) {
+      // Delete the session
+      await deleteSession(sessionId);
+      
+      // Update user's online status
+      await db.update(users)
+        .set({ is_online: false })
+        .where(eq(users.id, req.userId!));
+    }
+
+    // Clear the cookie
+    res.clearCookie('sessionId');
+    
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Logout error:', error);
+    res.status(500).json({ error: 'Failed to logout' });
   }
 });
 
