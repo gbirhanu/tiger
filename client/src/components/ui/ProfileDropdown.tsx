@@ -1,154 +1,156 @@
-import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { 
-  User, 
-  Settings, 
-  LogOut, 
-  HelpCircle, 
-  Moon, 
-  Sun 
-} from 'lucide-react';
-
-import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import React, { useState, useEffect } from "react";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu';
-import { useAuth } from '@/contexts/AuthContext';
-import { useTheme } from '@/contexts/ThemeContext';
+  DropdownMenuGroup,
+} from "@/components/ui/dropdown-menu";
+import { Button } from "@/components/ui/button";
+import { useAuth } from "@/contexts/AuthContext";
+import { 
+  User, 
+  Settings, 
+  LogOut, 
+  HelpCircle,
+  Moon, 
+  Sun, 
+  Crown
+} from "lucide-react";
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
+import { useTheme } from "@/contexts/ThemeContext";
+import { Badge } from "../ui/badge";
+import { useQuery } from "@tanstack/react-query";
+import { getSubscriptionStatus } from "@/lib/api";
+import { useMarketingSettings } from "@/lib/hooks/useMarketingSettings";
 
 export function ProfileDropdown() {
   const { user, logout } = useAuth();
-  const { theme, setTheme } = useTheme();
-  const navigate = useNavigate();
-  
-  const [userInitials, setUserInitials] = useState('');
-  const [userName, setUserName] = useState('');
+  const { setTheme, theme } = useTheme();
+  const [userName, setUserName] = useState('User');
+  const [userInitials, setUserInitials] = useState('U');
   const [userEmail, setUserEmail] = useState('');
-  const [avatarUrl, setAvatarUrl] = useState('');
+  
+  // Get marketing settings to determine if subscription features should be shown
+  const { showSubscriptionFeatures } = useMarketingSettings();
+  
+  // Fetch subscription status
+  const { data: subscriptionData } = useQuery({
+    queryKey: ['subscription-status'],
+    queryFn: getSubscriptionStatus,
+    enabled: !!user
+  });
+  
+  const isPro = subscriptionData?.is_pro && !subscriptionData?.is_expired;
+  const showProBadge = showSubscriptionFeatures && isPro;
   
   // Get user data on component mount
   useEffect(() => {
-    // Try to get user data from localStorage if not available in context
-    const storedUser = localStorage.getItem('user');
-    const userData = user || (storedUser ? JSON.parse(storedUser) : null);
-    
-    if (userData) {
-      // Set user name (fallback to "User" if not available)
-      const name = userData.name || userData.username || 'User';
-      setUserName(name);
-      
-      // Set user email (fallback to "user@example.com" if not available)
-      setUserEmail(userData.email || 'user@example.com');
-      
-      // Generate initials from name
-      const initials = name
-        .split(' ')
-        .map((part: string) => part[0])
-        .join('')
-        .toUpperCase()
-        .substring(0, 2);
-      setUserInitials(initials);
-      
-      // Set avatar URL if available
-      if (userData.avatar) {
-        setAvatarUrl(userData.avatar);
+    if (user) {
+      // Set user name
+      if (user.name) {
+        setUserName(user.name);
+        
+        // Get initials
+        const initials = user.name
+          .split(' ')
+          .map(name => name[0])
+          .join('')
+          .toUpperCase();
+        setUserInitials(initials);
       }
-    } else {
-      // Default values if no user data is available
-      setUserName('User');
-      setUserEmail('user@example.com');
-      setUserInitials('U');
+      
+      // Set email
+      if (user.email) {
+        setUserEmail(user.email);
+      }
     }
   }, [user]);
   
-  // Handle navigation to different pages
+  // Updated navigation handler that works with the app's navigation structure
   const handleNavigation = (path: string) => {
-    // For internal navigation, update the selectedNav in localStorage
-    if (path === '/profile') {
-      localStorage.setItem('selectedNav', 'Profile');
-      window.location.reload();
-    } else if (path === '/settings') {
+    if (path === '/settings') {
+      // Set the selected nav item in localStorage to Settings
       localStorage.setItem('selectedNav', 'Settings');
+      
+      // Refresh the page to apply the nav change
       window.location.reload();
-    } else if (path === '/help') {
-      localStorage.setItem('selectedNav', 'Help');
+    } 
+    else if (path === '/profile') {
+      // Set the selected nav item in localStorage to Profile
+      localStorage.setItem('selectedNav', 'Profile');
+      
+      // Refresh the page to apply the nav change
       window.location.reload();
-    } else {
-      // For external links, use navigate
-      navigate(path);
     }
   };
   
-  // Toggle theme between light and dark
   const toggleTheme = () => {
     setTheme(theme === 'dark' ? 'light' : 'dark');
   };
   
+  // Get user's first name
+  const firstName = userName?.split(' ')[0] || 'User';
+  
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <div className="flex items-center space-x-3 cursor-pointer">
-          <Avatar>
-            <AvatarImage src={avatarUrl} alt={userName} />
-            <AvatarFallback className="bg-primary text-primary-foreground">
-              {userInitials}
-            </AvatarFallback>
-          </Avatar>
-          <div className="flex flex-col">
-            <span className="text-sm font-medium">{userName}</span>
-            <span className="text-xs text-muted-foreground truncate max-w-[120px]">
-              {userEmail}
-            </span>
+        <Button variant="ghost" className="pl-2 pr-3 py-2 h-auto">
+          <div className="flex items-center gap-2">
+            <Avatar className="h-7 w-7 border border-border flex-shrink-0">
+              <AvatarFallback className="text-xs font-medium bg-primary/10 text-primary border-0">
+                {userInitials}
+              </AvatarFallback>
+            </Avatar>
+            <div className="flex flex-col items-start">
+              <div className="flex items-center">
+                <span className="text-sm font-medium">{firstName}</span>
+                {showProBadge && (
+                  <Badge 
+                    variant="outline" 
+                    className="ml-1.5 py-0 px-1.5 h-4 text-[10px] bg-gradient-to-r from-amber-200/80 to-yellow-500/80 text-amber-900 border-amber-300/80"
+                  >
+                    <Crown className="h-2.5 w-2.5 mr-0.5 stroke-[3px]" />
+                    PRO
+                  </Badge>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
+        </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent className="w-56" align="start" forceMount>
+      <DropdownMenuContent className="w-56" align="start">
         <DropdownMenuLabel className="font-normal">
           <div className="flex flex-col space-y-1">
-            <p className="text-sm font-medium leading-none">{userName}</p>
-            <p className="text-xs leading-none text-muted-foreground">
-              {userEmail}
-            </p>
+            <p className="text-sm font-medium">{userName}</p>
+            <p className="text-xs text-muted-foreground break-all">{userEmail}</p>
+            {showProBadge && (
+              <Badge 
+                variant="outline" 
+                className="w-fit mt-1.5 bg-gradient-to-r from-amber-200/80 to-yellow-500/80 text-amber-900 border-amber-300/80"
+              >
+                <Crown className="h-3 w-3 mr-1 stroke-[3px]" />
+                Pro Subscription
+              </Badge>
+            )}
           </div>
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         <DropdownMenuGroup>
-          <DropdownMenuItem onClick={() => handleNavigation('/profile')}>
-            <User className="mr-2 h-4 w-4" />
+          <DropdownMenuItem onClick={() => handleNavigation('/profile')} className="gap-2 cursor-pointer">
+            <User className="h-4 w-4" />
             <span>Profile</span>
           </DropdownMenuItem>
-          <DropdownMenuItem onClick={() => handleNavigation('/settings')}>
-            <Settings className="mr-2 h-4 w-4" />
+          <DropdownMenuItem onClick={() => handleNavigation('/settings')} className="gap-2 cursor-pointer">
+            <Settings className="h-4 w-4" />
             <span>Settings</span>
-          </DropdownMenuItem>
-          <DropdownMenuItem onClick={toggleTheme}>
-            {theme === 'dark' ? (
-              <>
-                <Sun className="mr-2 h-4 w-4" />
-                <span>Light Mode</span>
-              </>
-            ) : (
-              <>
-                <Moon className="mr-2 h-4 w-4" />
-                <span>Dark Mode</span>
-              </>
-            )}
           </DropdownMenuItem>
         </DropdownMenuGroup>
         <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={() => handleNavigation('/help')}>
-          <HelpCircle className="mr-2 h-4 w-4" />
-          <span>Help</span>
-        </DropdownMenuItem>
-        <DropdownMenuSeparator />
-        <DropdownMenuItem onClick={logout}>
-          <LogOut className="mr-2 h-4 w-4" />
+        <DropdownMenuItem onClick={() => logout()} className="gap-2 cursor-pointer">
+          <LogOut className="h-4 w-4" />
           <span>Log out</span>
         </DropdownMenuItem>
       </DropdownMenuContent>

@@ -67,13 +67,9 @@ export function TaskList() {
     queryFn: async () => {
       const data = await getTasks();
       
-      // Debug the raw data
-      console.log("Raw tasks data from API:", data);
-      
       return data.map((task: any) => {
         // Add extra validation and logging for debugging date issues
         if (task.due_date) {
-          console.log(`Task ${task.id} raw due_date:`, task.due_date, typeof task.due_date);
           
           // Handle different potential formats of due_date from the API
           let processedDueDate = task.due_date;
@@ -92,11 +88,8 @@ export function TaskList() {
           
           // Additional validation: ensure the timestamp is valid (not 0 or too small)
           if (processedDueDate === 0 || processedDueDate < 1000000) {
-            console.warn(`Task ${task.id} has an invalid timestamp:`, processedDueDate);
             processedDueDate = null; // Set to null instead of keeping invalid timestamp
           }
-          
-          console.log(`Task ${task.id} processed due_date:`, processedDueDate);
           
           return {
             ...task,
@@ -114,11 +107,33 @@ export function TaskList() {
   });
 
   // Filter tasks - exclude recurring tasks and child tasks
-  const activeTasks = tasks.filter(task => 
-    task.completed === 0 && 
-    !task.is_recurring && 
-    !task.parent_task_id
-  );
+  const activeTasks = tasks.filter(task => {
+    // Non-recurring normal tasks that are active
+    if (task.completed === 0 && !task.is_recurring && !task.parent_task_id) {
+      return true;
+    }
+    
+    // For child tasks of recurring tasks (instances of recurring tasks)
+    if (task.completed === 0 && !task.is_recurring && task.parent_task_id) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      
+      // Only show if it has a due date
+      if (!task.due_date) return false;
+      
+      const dueDate = new Date(task.due_date * 1000);
+      
+      // Get next week's end
+      const nextWeekEnd = new Date(today);
+      nextWeekEnd.setDate(today.getDate() + 7);
+      
+      // Include the task if it's due within the current week or next week
+      return dueDate >= today && dueDate <= nextWeekEnd;
+    }
+    
+    return false;
+  });
+  
   const completedTasks = tasks.filter(task => 
     task.completed === 1 && 
     !task.is_recurring && 
@@ -225,35 +240,25 @@ export function TaskList() {
   const formatDueDate = (timestamp: number | null) => {
     if (!timestamp) return null;
     
-    try {
-      // Debug the raw timestamp
-      console.log("Raw timestamp:", timestamp, typeof timestamp);
-      
-      // Ensure timestamp is a valid number
-      if (isNaN(timestamp) || !isFinite(timestamp) || timestamp < 1000000) {
-        console.warn('Invalid timestamp:', timestamp);
-        return 'Invalid date';
-      }
-      
-      // Convert Unix timestamp (seconds) to milliseconds
-      const date = new Date(timestamp * 1000);
-      
-      // Check if date is valid
-      if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
-        console.error("Invalid date after conversion:", date);
-        return 'Invalid date';
-      }
-      
-      // Format the date using the user's timezone
-      return formatInTimeZone(
-        date,
-        userSettings?.timezone || 'Africa/Addis_Ababa',
-        'PPP'
-      );
-    } catch (error) {
-      console.error("Error formatting date:", error);
-      return "Invalid date";
+    // Ensure timestamp is a valid number
+    if (isNaN(timestamp) || !isFinite(timestamp) || timestamp < 1000000) {
+      return 'Invalid date';
     }
+    
+    // Convert Unix timestamp (seconds) to milliseconds
+    const date = new Date(timestamp * 1000);
+    
+    // Check if date is valid
+    if (isNaN(date.getTime()) || date.getFullYear() === 1970) {
+      return 'Invalid date';
+    }
+    
+    // Format the date using the user's timezone
+    return formatInTimeZone(
+      date,
+      userSettings?.timezone || 'Africa/Addis_Ababa',
+      'PPP'
+    );
   };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {

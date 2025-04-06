@@ -38,25 +38,25 @@ export async function createSession(userId: number): Promise<string> {
 
 export async function validateSession(sessionId: string): Promise<number | null> {
   try {
-    console.log(`Validating session: ${sessionId.substring(0, 10)}...`);
+    
     const session = await db.query.sessions.findFirst({
       where: eq(sessions.id, sessionId),
     });
 
     if (!session) {
-      console.log('Session not found in database');
+      
       return null;
     }
 
     const currentTimestamp = Math.floor(Date.now() / 1000);
     if (currentTimestamp > session.expires_at) {
-      console.log(`Session expired at ${new Date(session.expires_at * 1000).toISOString()}`);
+      
       // Clean up expired session
       await deleteSession(sessionId);
       return null;
     }
 
-    console.log(`Valid session found for user ID: ${session.user_id}`);
+    
     return session.user_id;
   } catch (error) {
     console.error('Error validating session:', error);
@@ -72,13 +72,13 @@ export async function deleteSession(sessionId: string): Promise<void> {
 export async function cleanupExpiredSessions(): Promise<number> {
   try {
     const currentTimestamp = Math.floor(Date.now() / 1000);
-    console.log(`Cleaning up sessions that expired before ${new Date(currentTimestamp * 1000).toISOString()}`);
+    
     
     const result = await db.delete(sessions)
       .where(lt(sessions.expires_at, currentTimestamp))
       .returning({ id: sessions.id });
     
-    console.log(`Cleaned up ${result.length} expired sessions`);
+    
     return result.length;
   } catch (error) {
     console.error('Error cleaning up expired sessions:', error);
@@ -94,19 +94,52 @@ export const requireAuth = async (req: Request, res: Response, next: NextFunctio
     }
 
     const sessionId = authHeader.split(' ')[1];
-    console.log(`Auth middleware: Received token ${sessionId.substring(0, 10)}...`);
+    
 
     const userId = await validateSession(sessionId);
     if (!userId) {
-      console.log('Auth middleware: Invalid or expired session');
+      
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
-    console.log(`Auth middleware: Authenticated user ID: ${userId}`);
+    
     req.userId = userId;
     next();
   } catch (error) {
     console.error('Authentication middleware error:', error);
     return res.status(500).json({ error: 'Server error during authentication' });
+  }
+};
+
+/**
+ * Middleware to require admin role
+ * Must be used after requireAuth middleware
+ */
+export const requireAdmin = async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    // requireAuth must have set userId
+    if (!req.userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+
+    // Get the user details
+    const user = await db.select({ role: users.role })
+      .from(users)
+      .where(eq(users.id, req.userId))
+      .limit(1)
+      .get();
+
+    if (!user) {
+      return res.status(401).json({ error: 'User not found' });
+    }
+
+    if (user.role !== 'admin') {
+      return res.status(403).json({ error: 'Admin access required' });
+    }
+
+    next();
+  } catch (error) {
+    console.error('Admin middleware error:', error);
+    return res.status(500).json({ error: 'Server error during authorization' });
   }
 }; 

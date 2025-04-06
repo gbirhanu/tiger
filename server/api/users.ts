@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../lib/db';
-import { users } from '../../shared/schema';
+import { users, userSettings } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
 import { requireAuth } from '../lib/auth';
 import { z } from 'zod';
@@ -176,6 +176,148 @@ router.put('/:id/role', requireAuth, async (req: Request, res: Response) => {
     }
     
     return res.status(500).json({ error: 'Failed to update user role' });
+  }
+});
+
+// Update user subscription (admin only)
+const updateSubscriptionSchema = z.object({
+  subscription_plan: z.enum(['free', 'pro', 'enterprise']),
+  subscription_expiry: z.number().optional()
+});
+
+router.put('/:id/subscription', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id);
+    const { subscription_plan, subscription_expiry } = updateSubscriptionSchema.parse(req.body);
+    
+    // Check if user is admin
+    const currentUser = await db.query.users.findFirst({
+      where: eq(users.id, req.userId!),
+    });
+
+    if (!currentUser || currentUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden: Admin access required' });
+    }
+
+    // Check if user exists
+    const userToUpdate = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!userToUpdate) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get the current user settings
+    const currentUserSettings = await db.query.userSettings.findFirst({
+      where: eq(userSettings.user_id, userId),
+    });
+
+    // Calculate expiry if provided or use default (30 days)
+    const expiry = subscription_expiry || 
+      (subscription_plan !== 'free' ? Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60) : null);
+
+    if (currentUserSettings) {
+      // Update existing user settings
+      await db.update(userSettings)
+        .set({ 
+          subscription_plan,
+          subscription_expiry: expiry 
+        })
+        .where(eq(userSettings.user_id, userId));
+    } else {
+      // Create new user settings
+      await db.insert(userSettings)
+        .values({
+          user_id: userId,
+          subscription_plan,
+          subscription_expiry: expiry,
+          gemini_calls_count: 0,
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000)
+        });
+    }
+
+    return res.json({
+      success: true,
+      message: `User subscription updated to ${subscription_plan}`,
+      userId,
+      subscription_plan,
+      subscription_expiry: expiry
+    });
+  } catch (error) {
+    console.error('Error updating user subscription:', error);
+    
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ 
+        error: 'Invalid subscription data', 
+        details: error.errors 
+      });
+    }
+    
+    return res.status(500).json({ error: 'Failed to update user subscription' });
+  }
+});
+
+// Reset user's Gemini API usage (admin only)
+router.post('/:id/reset-gemini-usage', requireAuth, async (req: Request, res: Response) => {
+  try {
+    const userId = parseInt(req.params.id);
+    
+    // Check if user is admin
+    const currentUser = await db.query.users.findFirst({
+      where: eq(users.id, req.userId!),
+    });
+
+    if (!currentUser || currentUser.role !== 'admin') {
+      return res.status(403).json({ error: 'Forbidden: Admin access required' });
+    }
+
+    // Check if user exists
+    const userToUpdate = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!userToUpdate) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+
+    // Get the current user settings
+    const currentUserSettings = await db.query.userSettings.findFirst({
+      where: eq(userSettings.user_id, userId),
+    });
+
+    if (currentUserSettings) {
+      // Update existing user settings
+      await db.update(userSettings)
+        .set({ 
+          gemini_calls_count: 0,
+          updated_at: Math.floor(Date.now() / 1000)
+        })
+        .where(eq(userSettings.user_id, userId));
+    } else {
+      // Create new user settings
+      await db.insert(userSettings)
+        .values({
+          user_id: userId,
+          subscription_plan: 'free',
+          gemini_calls_count: 0,
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000)
+        });
+    }
+
+    return res.json({
+      success: true,
+      message: `Gemini API usage reset for user`,
+      userId
+    });
+  } catch (error) {
+    console.error('Error resetting Gemini API usage:', error);
+    return res.status(500).json({ 
+      error: 'Failed to reset Gemini API usage',
+      details: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 });
 

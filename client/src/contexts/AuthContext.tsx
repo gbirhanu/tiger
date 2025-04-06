@@ -4,6 +4,22 @@ import { useNavigate } from 'react-router-dom';
 import { setAuthToken as setApiAuthToken } from '../lib/api';
 import { setAuthToken, getAuthToken, resetQueryCache } from '../lib/queryClient';
 
+// Add window.googleScriptLoading to global interface
+declare global {
+  interface Window {
+    googleScriptLoading?: boolean;
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: any) => void;
+          renderButton: (element: HTMLElement, config: any) => void;
+          prompt: () => void;
+        };
+      };
+    };
+  }
+}
+
 // Define the Session type based on the server response
 interface Session {
   id: string;
@@ -11,9 +27,9 @@ interface Session {
 }
 
 // Extend the User type to include session information
-interface User extends BaseUser {
+interface User extends Omit<BaseUser, 'role' | 'status'> {
   session?: Session;
-  role?: 'admin' | 'user';
+  role: 'admin' | 'user';
   status?: 'active' | 'inactive' | 'suspended';
 }
 interface AuthContextType {
@@ -167,7 +183,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
     // Initialize auth token from stored session on component mount
     const storedToken = localStorage.getItem('sessionToken');
     if (storedToken) {
-      console.debug(`[Auth] Found stored token on initialization: ${storedToken.substring(0, 5)}...`);
       
       // Verify if token format looks valid before using it
       if (typeof storedToken === 'string' && storedToken.trim() !== '') {
@@ -177,23 +192,18 @@ export function AuthProvider({ children }: AuthProviderProps) {
         (async () => {
           try {
             const isValid = await validateToken();
-            console.debug(`[Auth] Stored token validation result: ${isValid}`);
             
             // If token is invalid, clear it
             if (!isValid) {
-              console.warn('[Auth] Stored token is invalid, clearing it');
               updateToken(null);
             }
           } catch (err) {
-            console.error('[Auth] Error validating stored token:', err);
+            // Handle error silently
           }
         })();
       } else {
-        console.warn('[Auth] Stored token format is invalid, clearing it');
         localStorage.removeItem('sessionToken');
       }
-    } else {
-      console.debug('[Auth] No stored token found on initialization');
     }
     
     const fetchUserAndSettings = async () => {
@@ -214,6 +224,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
         if (userData.user) {
           setUser(userData.user);
+          
+          // Save user's name in localStorage
+          if (userData.user.name) {
+            localStorage.setItem('userName', userData.user.name);
+          }
           
           // Set the auth token from the active session
           if (userData.user.session && userData.user.session.active) {
@@ -249,7 +264,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
             console.warn('Error fetching user settings:', settingsError);
           }
         } else {
-          console.log('No authenticated user found');
+          
           setUser(null);
           updateToken(null);
         }
@@ -336,6 +351,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       // Store user information
       setUser(data.user);
       
+      // Save user's name in localStorage
+      if (data.user.name) {
+        localStorage.setItem('userName', data.user.name);
+      }
+      
       // Save and propagate the session token
       const sessionToken = data.user.session.id;
       console.debug(`[Auth] Setting session token: ${sessionToken.substring(0, 5)}...`);
@@ -383,6 +403,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       console.debug('[Auth] Registration successful, setting user and token');
       setUser(data.user);
+      
+      // Save user's name in localStorage
+      if (data.user.name) {
+        localStorage.setItem('userName', data.user.name);
+      }
+      
       updateToken(data.user.session.id);
       
       return data.user;
@@ -426,6 +452,12 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       console.debug('[Auth] Google login successful, setting user and token');
       setUser(data.user);
+      
+      // Save user's name in localStorage
+      if (data.user.name) {
+        localStorage.setItem('userName', data.user.name);
+      }
+      
       updateToken(data.user.session.id);
       
       return data.user;
@@ -442,6 +474,33 @@ export function AuthProvider({ children }: AuthProviderProps) {
     setLoading(true);
     setError(null);
     try {
+      // First clean up any existing Google sign-in related elements
+      // This helps prevent the "removeChild" error on re-login
+      const googleScript = document.getElementById('google-signin-script');
+      if (googleScript && googleScript.parentNode) {
+        try {
+          // Remove the script properly
+          googleScript.parentNode.removeChild(googleScript);
+        } catch (e) {
+          console.warn('Error removing Google script:', e);
+        }
+      }
+      
+      // Reset the Google script loading flag to ensure proper reinitialization
+      window.googleScriptLoading = false;
+      
+      // Find and clean up Google sign-in containers
+      const googleButtonContainers = document.querySelectorAll('[id^="gsi_"]');
+      googleButtonContainers.forEach(container => {
+        if (container.parentNode) {
+          try {
+            container.parentNode.removeChild(container);
+          } catch (e) {
+            console.warn('Error removing Google container:', e);
+          }
+        }
+      });
+      
       // Call the logout endpoint
       const response = await fetch('/api/auth/logout', {
         method: 'POST',
@@ -455,40 +514,107 @@ export function AuthProvider({ children }: AuthProviderProps) {
       if (!response.ok) {
         console.warn('Server logout failed, clearing session locally');
       }
+      
       // Clear local state
       console.debug('[Auth] Logging out user, clearing user data and token');
       setUser(null);
       setSettings(null);
       updateToken(null);
-      // Reset theme to default
-      setTheme('light');
-      document.documentElement.className = 'light';
+      
+      // Preserve the user's theme preference from localStorage instead of resetting
+      // Try to get the theme from localStorage
+      try {
+        const savedTheme = localStorage.getItem('theme');
+        // Only update if the theme isn't already set in localStorage
+        if (!savedTheme || !['light', 'dark', 'system'].includes(savedTheme)) {
+          // If no valid theme in localStorage, check system preference
+          const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const preferredTheme = systemPrefersDark ? 'dark' : 'light';
+          
+          // Set theme based on system preference
+          document.documentElement.classList.remove('light', 'dark');
+          document.documentElement.classList.add(preferredTheme);
+        } else {
+          // Theme exists in localStorage, use it
+          const resolvedTheme = savedTheme === 'system' 
+            ? window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+            : savedTheme;
+            
+          // Apply the theme
+          document.documentElement.classList.remove('light', 'dark');
+          document.documentElement.classList.add(resolvedTheme);
+        }
+      } catch (e) {
+        console.warn('Error accessing theme preference:', e);
+        // Fallback in case of error
+        document.documentElement.classList.remove('light', 'dark');
+        document.documentElement.classList.add('light');
+      }
+      
       // Reset query cache to clear any authenticated data
       resetQueryCache();
+      
+      // Clear any localStorage items that might cause issues on re-login
+      localStorage.removeItem('editAppointmentId');
+      localStorage.removeItem('profileActiveTab');
+      localStorage.removeItem('userName');
       
       // Add a small delay to ensure state updates before navigation
       setTimeout(() => {
         navigate('/auth');
         setLoading(false);
-      }, 50);
+      }, 100);
     } catch (err) {
       console.error('Logout error:', err);
+      
       // Even if there's an error, we should still clear the local session
       console.debug('[Auth] Logout encountered an error, still clearing user data and token');
       setUser(null);
       setSettings(null);
       updateToken(null);
-      // Reset theme to default
-      setTheme('light');
-      document.documentElement.className = 'light';
+      
+      // Preserve the user's theme preference from localStorage instead of resetting
+      try {
+        const savedTheme = localStorage.getItem('theme');
+        // Only update if the theme isn't already set in localStorage
+        if (!savedTheme || !['light', 'dark', 'system'].includes(savedTheme)) {
+          // If no valid theme in localStorage, check system preference
+          const systemPrefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+          const preferredTheme = systemPrefersDark ? 'dark' : 'light';
+          
+          // Set theme based on system preference
+          document.documentElement.classList.remove('light', 'dark');
+          document.documentElement.classList.add(preferredTheme);
+        } else {
+          // Theme exists in localStorage, use it
+          const resolvedTheme = savedTheme === 'system' 
+            ? window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+            : savedTheme;
+            
+          // Apply the theme
+          document.documentElement.classList.remove('light', 'dark');
+          document.documentElement.classList.add(resolvedTheme);
+        }
+      } catch (e) {
+        console.warn('Error accessing theme preference:', e);
+        // Fallback in case of error
+        document.documentElement.classList.remove('light', 'dark');
+        document.documentElement.classList.add('light');
+      }
+      
       // Reset query cache to clear any authenticated data
       resetQueryCache();
+      
+      // Clear any localStorage items that might cause issues on re-login
+      localStorage.removeItem('editAppointmentId');
+      localStorage.removeItem('profileActiveTab');
+      localStorage.removeItem('userName');
       
       // Add a small delay to ensure state updates before navigation
       setTimeout(() => {
         navigate('/auth');
         setLoading(false);
-      }, 50);
+      }, 100);
     }
   };
   // Validate token function

@@ -16,7 +16,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { getNotes, createNote as createNoteApi, updateNote as updateNoteApi, deleteNote as deleteNoteApi } from "@/lib/api";
 import { queryClient, QUERY_KEYS } from "@/lib/queryClient";
-import { Plus, X, GripVertical, StickyNote, Clock, Sparkles, Star, Heart, Pencil, Trash2 } from "lucide-react";
+import { Plus, X, GripVertical, StickyNote, Clock, Sparkles, Star, Heart, Pencil, Trash2, Pin } from "lucide-react";
 import { format } from "date-fns";
 import { cn } from "@/lib/utils";
 import { NoteCard } from "@/components/NoteCard";
@@ -42,16 +42,29 @@ export default function NotesBoard() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [selectedColor, setSelectedColor] = useState(COLORS[0]);
   const [isDragging, setIsDragging] = useState(false);
+  const [isPinned, setIsPinned] = useState(false);
 
   const { data: notes, isLoading, error } = useQuery({
     queryKey: [QUERY_KEYS.NOTES],
     queryFn: getNotes,
   });
 
-  // Sort notes by position
+  // Sort notes by pinned status first, then by position
   const sortedNotes = React.useMemo(() => {
     if (!notes) return [];
-    return [...notes].sort((a, b) => a.position - b.position);
+    
+    // First sort by position
+    const positionSorted = [...notes].sort((a, b) => a.position - b.position);
+    
+    // Then re-sort with pinned notes at the top
+    return positionSorted.sort((a, b) => {
+      // If both notes have the same pinned status, maintain their position sorting
+      if ((a.pinned && b.pinned) || (!a.pinned && !b.pinned)) {
+        return 0;
+      }
+      // Otherwise, pinned notes come first
+      return a.pinned ? -1 : 1;
+    });
   }, [notes]);
 
   // Log error if there is one
@@ -78,6 +91,7 @@ export default function NotesBoard() {
         content,
         color: selectedColor,
         position: highestPosition + 1, // Use highest position + 1 instead of length
+        pinned: isPinned, // Add pinned status
         // Convert timestamps to seconds (integer) for SQLite storage
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
@@ -85,7 +99,7 @@ export default function NotesBoard() {
       return createNoteApi(note);
     },
     onMutate: async (content) => {
-      console.log("Creating note with content:", content);
+      
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
@@ -106,6 +120,7 @@ export default function NotesBoard() {
         content,
         color: selectedColor,
         position: highestPosition + 1, // Use highest position + 1
+        pinned: isPinned, // Add pinned status
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
       };
@@ -114,7 +129,7 @@ export default function NotesBoard() {
       const updatedNotes = JSON.parse(JSON.stringify(previousNotes));
       updatedNotes.push(optimisticNote);
       
-      console.log(`Adding optimistic note. Total notes: ${updatedNotes.length}`);
+      
       
       // Update the cache with the new array that includes all previous notes plus the new one
       queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
@@ -136,12 +151,13 @@ export default function NotesBoard() {
       });
     },
     onSuccess: (newNote) => {
-      console.log("Note created successfully:", newNote);
+      
       
       // Simply fetch the notes again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
       
       setNewNoteContent("");
+      setIsPinned(false); // Reset pinned status after creating a note
       setDialogOpen(false);
       toast({
         title: "Note created",
@@ -154,7 +170,6 @@ export default function NotesBoard() {
     mutationFn: ({ id, ...data }: Partial<Note> & { id: number }) => 
       updateNoteApi(id, data),
     onMutate: async ({ id, ...updatedData }) => {
-      console.log("Updating note:", id, updatedData);
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
@@ -176,7 +191,8 @@ export default function NotesBoard() {
           updated_at: Math.floor(Date.now() / 1000) // Update the timestamp
         };
         
-        console.log(`Optimistically updated note at index ${noteIndex}`);
+        // Log what we're updating for debugging
+        console.log(`Optimistically updating note ${id}:`, updatedData);
         
         // Update the cache with the new array
         queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
@@ -187,36 +203,46 @@ export default function NotesBoard() {
       // Return the snapshot
       return { previousNotes };
     },
-    onError: (error: Error, _variables, context) => {
+    onError: (error: Error, variables, context) => {
       console.error("Error updating note:", error);
+      
+      // Show more detailed error message
+      toast({
+        variant: "destructive",
+        title: "Error updating note",
+        description: `${error.message}. Please try again.`,
+      });
       
       // If the mutation fails, use the context returned from onMutate to roll back
       if (context?.previousNotes) {
         queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], context.previousNotes);
       }
-      toast({
-        variant: "destructive",
-        title: "Error",
-        description: `Failed to update note: ${error.message}`,
-      });
     },
-    onSuccess: (updatedNote) => {
-      console.log("Note updated successfully:", updatedNote);
-      
-      // Simply fetch the notes again from the server
+    onSuccess: (updatedNote, { id }) => {
+      // Invalidate the notes query to refetch fresh data
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
       
-      toast({
-        title: "Note updated",
-        description: "Your note has been updated successfully.",
-      });
+      // When toggling pinned status, provide specific feedback
+      if ('pinned' in updatedNote) {
+        toast({
+          title: updatedNote.pinned ? "Note pinned" : "Note unpinned",
+          description: updatedNote.pinned 
+            ? "Your note has been pinned to the top." 
+            : "Your note has been unpinned.",
+        });
+      } else {
+        toast({
+          title: "Note updated",
+          description: "Your note has been updated successfully.",
+        });
+      }
     },
   });
 
   const deleteNoteMutation = useMutation({
     mutationFn: deleteNoteApi,
     onMutate: async (noteId) => {
-      console.log("Deleting note:", noteId);
+      
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.NOTES] });
@@ -228,7 +254,7 @@ export default function NotesBoard() {
       const updatedNotes = JSON.parse(JSON.stringify(previousNotes))
         .filter((note: Note) => note.id !== noteId);
       
-      console.log(`Optimistically removed note. Remaining notes: ${updatedNotes.length}`);
+      
       
       // Update the cache with the filtered array
       queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
@@ -250,7 +276,7 @@ export default function NotesBoard() {
       });
     },
     onSuccess: (_, deletedNoteId) => {
-      console.log("Note deleted successfully:", deletedNoteId);
+      
       
       // Simply fetch the notes again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
@@ -289,13 +315,19 @@ export default function NotesBoard() {
         acc[note.id] = note.position;
         return acc;
       }, {} as Record<number, number>);
+
+      // Update positions for all notes based on their new index,
+      // but maintain the pinned status segregation by tracking pinned count
+      let pinnedPosition = 1;
+      let unpinnedPosition = reorderedNotes.filter(note => note.pinned).length + 1;
       
-      // Update positions for all notes based on their new index
-      // Ensure positions are sequential integers starting from 1
-      const updatedNotes = reorderedNotes.map((note, index) => ({
-        ...note,
-        position: index + 1
-      }));
+      const updatedNotes = reorderedNotes.map(note => {
+        const position = note.pinned ? pinnedPosition++ : unpinnedPosition++;
+        return {
+          ...note,
+          position
+        };
+      });
 
       // Immediately update the UI with the new order
       queryClient.setQueryData([QUERY_KEYS.NOTES], updatedNotes);
@@ -330,8 +362,16 @@ export default function NotesBoard() {
     }
   };
 
-  const handleUpdateNote = (id: number, data: Partial<Note>) => {
-    updateNoteMutation.mutate({ id, ...data });
+  const handleUpdateNote = (id: number, data: Partial<Note>): Promise<Note> => {
+    return new Promise((resolve, reject) => {
+      updateNoteMutation.mutate(
+        { id, ...data },
+        {
+          onSuccess: (data) => resolve(data),
+          onError: (error) => reject(error)
+        }
+      );
+    });
   };
 
   if (isLoading) {
@@ -381,11 +421,29 @@ export default function NotesBoard() {
                   <ColorPicker colors={COLORS} selectedColor={selectedColor} onChange={setSelectedColor} />
                 </div>
               </div>
+              <div className="flex items-center space-x-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className={cn(
+                    "rounded-full border flex items-center gap-2",
+                    isPinned ? "bg-amber-50 text-amber-700 border-amber-300" : "border-gray-200"
+                  )}
+                  onClick={() => setIsPinned(!isPinned)}
+                >
+                  <Pin className="h-3.5 w-3.5" />
+                  {isPinned ? "Pinned" : "Pin note"}
+                </Button>
+                <span className="text-xs text-gray-500">Pinned notes appear at the top of your board</span>
+              </div>
             </div>
             <DialogFooter className="sm:justify-end">
               <Button
                 variant="outline"
-                onClick={() => setDialogOpen(false)}
+                onClick={() => {
+                  setDialogOpen(false);
+                  setIsPinned(false);
+                }}
                 className="rounded-full border-indigo-200 text-gray-600 hover:bg-gray-50"
               >
                 Cancel
@@ -411,6 +469,14 @@ export default function NotesBoard() {
           </DialogContent>
         </Dialog>
       </div>
+
+      {/* Display pinned note count if there are any */}
+      {sortedNotes.some(note => note.pinned) && (
+        <div className="flex items-center gap-2 text-sm text-amber-600 pl-2">
+          <Pin className="h-4 w-4" />
+          <span className="font-medium">{sortedNotes.filter(note => note.pinned).length} pinned notes</span>
+        </div>
+      )}
 
       <DragDropContext onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
         <Droppable 

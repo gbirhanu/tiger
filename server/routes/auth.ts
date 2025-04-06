@@ -5,6 +5,8 @@ import { eq } from 'drizzle-orm';
 import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth, validateSession } from '../lib/auth';
 import { OAuth2Client } from 'google-auth-library';
 import { z } from 'zod';
+import bcrypt from 'bcrypt';
+import { tasks, subtasks, notes, appointments, longNotes, userSettings, subscriptions, meetings } from '../../shared/schema';
 
 const router = Router();
 const googleClient = new OAuth2Client(
@@ -35,7 +37,7 @@ type GoogleLoginRequest = z.infer<typeof googleLoginSchema>;
 // Register
 router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Response) => {
   try {
-    console.log('Registration request body:', req.body);
+    
     
     if (!req.body) {
       console.error('No request body received');
@@ -43,7 +45,7 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     }
 
     const { email, password, name, user_location } = registerSchema.parse(req.body);
-    console.log('Parsed registration data:', { email, name, user_location });
+    
 
     // Check if user exists
     const existingUser = await db.query.users.findFirst({
@@ -51,13 +53,13 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     });
 
     if (existingUser) {
-      console.log('Registration failed: Email already exists');
+      
       return res.status(400).json({ error: 'Email already registered' });
     }
 
     // Create user
     const hashedPassword = await hashPassword(password);
-    console.log('Attempting to create user...');
+    
     
     // Get IP and user agent
     const userAgent = req.headers['user-agent'] || '';
@@ -80,11 +82,11 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
         updated_at: Math.floor(Date.now() / 1000),
       })
       .returning();
-    console.log('User created successfully:', { id: user.id, email: user.email });
+    
 
     // Create session
     const sessionId = await createSession(user.id);
-    console.log('Session created:', { sessionId });
+    
 
     // Set cookie
     res.cookie('sessionId', sessionId, {
@@ -137,11 +139,11 @@ router.get('/validate-token', async (req: Request, res: Response) => {
     }
 
     const sessionId = authHeader.split(' ')[1];
-    console.log(`Validating session token: ${sessionId.substring(0, 10)}...`);
+    
 
     const userId = await validateSession(sessionId);
     if (!userId) {
-      console.log('Session validation failed: Invalid or expired session');
+      
       return res.status(401).json({ valid: false, error: 'Invalid or expired session' });
     }
 
@@ -150,13 +152,13 @@ router.get('/validate-token', async (req: Request, res: Response) => {
     });
 
     if (!user) {
-      console.log('Session validation failed: User not found');
+      
       return res.status(401).json({ valid: false, error: 'User not found' });
     }
 
     // Check if user is active
     if (user.status === 'inactive' || user.status === 'suspended') {
-      console.log(`Session validation failed: User account is ${user.status}`);
+      
       return res.status(403).json({ valid: false, error: `Your account is ${user.status}. Please contact an administrator.` });
     }
 
@@ -165,7 +167,7 @@ router.get('/validate-token', async (req: Request, res: Response) => {
       .set({ is_online: true })
       .where(eq(users.id, userId));
 
-    console.log(`Session validation successful for user: ${user.email}`);
+    
     return res.json({ 
       valid: true, 
       user: {
@@ -288,20 +290,20 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
 // Get current user
 router.get('/me', requireAuth, async (req: Request, res: Response) => {
   try {
-    console.log(`Fetching current user data for user ID: ${req.userId}`);
+    
     const user = await db.query.users.findFirst({
       where: eq(users.id, req.userId!),
     });
 
     if (!user) {
-      console.log('User not found in database, clearing session');
+      
       res.clearCookie('sessionId');
       return res.json({ user: null });
     }
     
     // Check if user is active
     if (user.status === 'inactive' || user.status === 'suspended') {
-      console.log(`User account is ${user.status}, clearing session`);
+      
       res.clearCookie('sessionId');
       return res.status(403).json({ 
         error: `Your account is ${user.status}. Please contact an administrator.` 
@@ -314,7 +316,7 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       ? authHeader.split(' ')[1] 
       : req.cookies?.sessionId;
        
-    console.log(`Returning user data with session ID: ${sessionId?.substring(0, 10)}...`);
+    
     
     // Update user online status
     await db.update(users)
@@ -362,16 +364,33 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
     });
 
     if (!user) {
-      // Create new user
+      // Create new user with more Google profile data
       const [newUser] = await db.insert(users)
         .values({
           email: payload.email,
           name: payload.name || null,
+          profile_image: payload.picture || null,
+          last_login: Date.now(),
           // Set a random password since we won't use it
           password: await hashPassword(Math.random().toString(36).slice(-8)),
+          auth_provider: 'google',
+          is_online: true,
         })
         .returning();
       user = newUser;
+      
+      console.log('Created new user from Google login:', user.id);
+    } else {
+      // Update existing user with Google info if needed
+      await db.update(users)
+        .set({
+          last_login: Date.now(),
+          is_online: true,
+          // Only update these if they were empty before
+          name: user.name || payload.name || null,
+          profile_image: user.profile_image || payload.picture || null,
+        })
+        .where(eq(users.id, user.id));
     }
     
     // Check user status
@@ -399,6 +418,8 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
         id: user.id,
         email: user.email,
         name: user.name,
+        role: user.role,
+        profile_image: user.profile_image,
         session: {
           id: sessionId,
           active: true
@@ -453,6 +474,132 @@ router.post('/logout', requireAuth, async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Logout error:', error);
     res.status(500).json({ error: 'Failed to logout' });
+  }
+});
+
+// Delete account endpoint
+router.post("/delete-account", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { password } = req.body;
+    
+    if (!password) {
+      return res.status(400).json({ error: "Password is required for account deletion" });
+    }
+    
+    // Get the user from the database
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, req.userId!),
+    });
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    // Verify password
+    const isPasswordValid = await verifyPassword(password, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Invalid password" });
+    }
+    
+    // Begin transaction to delete all user data
+    await db.transaction(async (tx) => {
+      // Delete user's tasks
+      await tx.delete(tasks).where(eq(tasks.user_id, req.userId!));
+      
+      // Delete user's subtasks
+      await tx.delete(subtasks).where(eq(subtasks.user_id, req.userId!));
+      
+      // Delete user's notes
+      await tx.delete(notes).where(eq(notes.user_id, req.userId!));
+      
+      // Delete user's long notes
+      await tx.delete(longNotes).where(eq(longNotes.user_id, req.userId!));
+      
+      // Delete user's settings
+      await tx.delete(userSettings).where(eq(userSettings.user_id, req.userId!));
+      
+      // Delete user's meetings
+      await tx.delete(meetings).where(eq(meetings.user_id, req.userId!));
+      
+      // Delete user's appointments
+      await tx.delete(appointments).where(eq(appointments.user_id, req.userId!));
+      
+      // Delete user's subscription
+      await tx.delete(subscriptions).where(eq(subscriptions.user_id, req.userId!));
+      
+      // Finally, delete the user
+      await tx.delete(users).where(eq(users.id, req.userId!));
+    });
+    
+    // Delete session
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      const sessionId = authHeader.split(' ')[1];
+      await deleteSession(sessionId);
+    }
+    
+    // Send success response
+    res.json({ success: true, message: "Account successfully deleted" });
+  } catch (error) {
+    console.error("Error deleting account:", error);
+    res.status(500).json({ error: "Failed to delete account" });
+  }
+});
+
+// Update password endpoint
+router.post("/update-password", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    
+    // Validate inputs
+    if (!currentPassword) {
+      return res.status(400).json({ error: "Current password is required" });
+    }
+    
+    if (!newPassword) {
+      return res.status(400).json({ error: "New password is required" });
+    }
+    
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: "New password must be at least 6 characters" });
+    }
+    
+    // Get the user from the database
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, req.userId!),
+    });
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    // Verify current password
+    const isPasswordValid = await verifyPassword(currentPassword, user.password);
+    
+    if (!isPasswordValid) {
+      return res.status(401).json({ error: "Current password is incorrect" });
+    }
+    
+    // Hash the new password
+    const hashedPassword = await hashPassword(newPassword);
+    
+    // Update the password in the database
+    await db.update(users)
+      .set({ 
+        password: hashedPassword,
+        updated_at: Math.floor(Date.now() / 1000)
+      })
+      .where(eq(users.id, req.userId!));
+    
+    // Return success response
+    res.json({ 
+      success: true, 
+      message: "Password updated successfully" 
+    });
+  } catch (error) {
+    console.error('Error updating password:', error);
+    res.status(500).json({ error: "An unexpected error occurred" });
   }
 });
 

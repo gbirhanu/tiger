@@ -1,103 +1,288 @@
 import { Router, Request, Response } from "express";
 import { GoogleGenerativeAI } from "@google/generative-ai";
-import { db } from "../../shared/db";
-import { userSettings } from "../../shared/schema";
-import { eq } from "drizzle-orm";
 import { requireAuth } from "../lib/auth";
+import { db } from "../../shared/db";
+import { userSettings, adminSettings, subscriptions } from "../../shared/schema";
+import { eq, and, gte } from "drizzle-orm";
 
 const router = Router();
 
-// Apply auth middleware
+// Apply auth middleware - only need it once
 router.use(requireAuth);
 
 // Fallback API key (will be used only if user doesn't have their own key)
-const FALLBACK_GEMINI_API_KEY = "AIzaSyAPNehyjmuB15YYzvq2yhbDiI8769TLChE";
-if (!FALLBACK_GEMINI_API_KEY) {
-  console.error("FALLBACK_GEMINI_API_KEY is not set in environment variables");
-}
+const FALLBACK_GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "AIzaSyAPNehyjmuB15YYzvq2yhbDiI8769TLChE";
 
-router.post("/generate-subtasks", async (req: Request, res: Response) => {
-  console.log("req.body", req.body);
+// Generate subtasks endpoint
+router.post("/", async (req: Request, res: Response) => {
   try {
-    // Get user's Gemini API key from settings
+    console.log("Received generate subtasks request:", {
+      body: req.body,
+      userId: req.userId,
+      hasUserId: !!req.userId,
+      authHeader: req.headers.authorization ? "Present" : "Missing"
+    });
+    
+    // Check for user ID first - this should be set by the requireAuth middleware
+    if (!req.userId) {
+      console.error("Missing user ID in request - auth middleware may have failed");
+      return res.status(401).json({
+        error: "Authentication required - no user ID",
+        subtasks: []
+      });
+    }
+    
+    // Validate the request body
+    const { task, count = 5 } = req.body;
+    
+    if (!task || !task.title) {
+      console.error("Invalid task data in request:", req.body);
+      return res.status(400).json({ 
+        error: "Task details are required", 
+        subtasks: [] // Include empty subtasks array to prevent client-side errors
+      });
+    }
+
+    // Get user's settings to check subscription status and usage
     const userSetting = await db
       .select()
       .from(userSettings)
       .where(eq(userSettings.user_id, req.userId!))
       .get();
     
+    // Get admin settings for max free calls and marketing
+    const adminSetting = await db
+      .select()
+      .from(adminSettings)
+      .limit(1)
+      .get();
+    
+    // Get user's subscription status
+    const now = Math.floor(Date.now() / 1000);
+    const userSubscription = await db
+      .select({
+        plan: subscriptions.plan,
+        status: subscriptions.status,
+        end_date: subscriptions.end_date
+      })
+      .from(subscriptions)
+      .where(
+        and(
+          eq(subscriptions.user_id, req.userId!),
+          eq(subscriptions.status, 'active'),
+          gte(subscriptions.end_date, now)
+        )
+      )
+      .get();
+    
+    const isPro = userSubscription?.plan === 'pro';
+    
+    // Default values from admin settings or hardcoded fallbacks
+    const maxFreeCalls = adminSetting?.gemini_max_free_calls || 5;
+    const enableMarketing = adminSetting?.enable_marketing || false;
+    
+    // Check if user has their own Gemini key - users with their own keys don't need to upgrade
+    const hasOwnGeminiKey = !!userSetting?.gemini_key;
+    
+    // Only enforce limits if marketing is enabled AND user doesn't have their own key
+    const shouldEnforceLimits = enableMarketing && !hasOwnGeminiKey;
+    
+    if (shouldEnforceLimits && userSetting) {
+      // If not on pro plan, check usage limit
+      if (!isPro) {
+        const currentUsage = userSetting.gemini_calls_count || 0;
+        
+        // Strict comparison to ensure we don't exceed the limit
+        if (currentUsage >= maxFreeCalls) {
+          return res.status(403).json({
+            error: "Usage limit reached",
+            code: "USAGE_LIMIT_REACHED",
+            details: `You've reached your free limit of ${maxFreeCalls} Gemini API calls. Please upgrade to Pro to continue using AI features.`,
+            showUpgrade: true,
+            maxFreeCalls,
+            currentUsage,
+            subtasks: [] // Include empty subtasks array to prevent client-side errors
+          });
+        }
+      }
+    }
+    
+    // If the user doesn't exist yet, create a user settings record
+    if (!userSetting) {
+      await db.insert(userSettings).values({
+        user_id: req.userId!,
+        gemini_calls_count: 0,
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000)
+      });
+    }
+    
     // Use user's key if available, otherwise use fallback
     const GEMINI_API_KEY = userSetting?.gemini_key || FALLBACK_GEMINI_API_KEY;
     
-    console.log("Using Gemini API key:", GEMINI_API_KEY ? "Key is set" : "No key available");
-    
     // Verify API key is available
     if (!GEMINI_API_KEY) {
+      console.error("No Gemini API key available");
       return res.status(500).json({ 
-        error: "Gemini API key is not configured",
-        details: "Please set your Gemini API key in Settings"
+        error: "Gemini API key is not configured", 
+        details: "Please set your Gemini API key in Settings",
+        subtasks: [] // Include empty subtasks array to prevent client-side errors
       });
     }
 
-    const { prompt } = req.body;
-    if (!prompt) {
-      return res.status(400).json({ error: "Prompt is required" });
-    }
+    // Ensure safe task title and description access
+    const taskTitle = task.title || "Untitled Task";
+    const taskDescription = task.description || "";
 
     // Initialize Gemini API with the appropriate key
     const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
     
-    // Get the generative model
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
-
-    // Check if this is a request for markdown content generation
-    const isMarkdownRequest = prompt.toLowerCase().includes("markdown") || 
-                             prompt.toLowerCase().includes("generate a detailed note");
-
-    // Create a more specific prompt for better results
-    let enhancedPrompt = prompt;
-    if (isMarkdownRequest) {
-      enhancedPrompt = `${prompt}
+    // Get the generative model - prioritize 1.5 Pro if available
+    const model = genAI.getGenerativeModel({ model: "gemini-1.5-pro" });
+    
+    // Create a prompt for generating subtasks
+    const prompt = `
+      Please generate ${count} specific, actionable subtasks for the following task: "${taskTitle}".
       
-      Please format your response as clean Markdown with:
-      1. A clear title using # heading
-      2. An introduction paragraph
-      3. Several ## subheadings for key sections
-      4. Bullet points using - for lists where appropriate
-      5. Code blocks with proper syntax highlighting if relevant
-      6. A brief conclusion
+      ${taskDescription ? `Additional task context: "${taskDescription}"` : ''}
       
-      Make the content informative, accurate, and well-structured.`;
-    }
-
-    console.log("Enhanced prompt:", enhancedPrompt);
+      Each subtask should:
+      1. Be clear and specific
+      2. Be actionable (start with a verb when possible)
+      3. Be reasonable in scope (completable in one sitting)
+      4. Collectively help complete the main task
+      5. Be of similar scale/scope to each other
+      
+      Format your response as a simple array of strings, e.g. ["Subtask 1", "Subtask 2"]. 
+      DO NOT include any numbering, additional formatting, or explanation.
+    `;
+    
+    console.log("Sending prompt to Gemini API:", { taskTitle, taskDescription, count });
     
     // Generate content
-    const result = await model.generateContent(enhancedPrompt);
-    const response = await result.response;
-    let text = response.text();
-
-    console.log("Raw text from Gemini:", text.substring(0, 200) + "...");
-    
-    // Clean up the response text
-    // For markdown requests, preserve the formatting
-    if (!isMarkdownRequest) {
-      // Remove any JSON formatting characters if present
-      text = text
-        .replace(/^\s*\[|\]\s*$/g, '') // Remove opening/closing brackets
-        .replace(/"/g, '') // Remove quotes
-        .replace(/,\s*/g, '\n') // Replace commas with newlines
-        .replace(/\\n/g, '\n'); // Replace escaped newlines
+    try {
+      const result = await model.generateContent(prompt);
+      const response = await result.response;
+      let text = response.text();
+      
+      console.log("Raw response from Gemini API:", text);
+      
+      // Try to parse the response as JSON array
+      try {
+        // First, process text to ensure it's in valid JSON format:
+        // 1. Strip any markdown code blocks if present
+        text = text.replace(/```json\s*|\s*```/g, '');
+        // 2. Ensure we have square brackets
+        text = text.trim();
+        if (!text.startsWith('[')) text = '[' + text;
+        if (!text.endsWith(']')) text = text + ']';
+        
+        console.log("Preprocessed text before parsing:", text.substring(0, 100) + (text.length > 100 ? "..." : ""));
+        
+        // Parse as JSON
+        const subtasks = JSON.parse(text);
+        
+        console.log("Parsed subtasks array:", subtasks);
+        
+        if (!Array.isArray(subtasks)) {
+          console.error("Parsed result is not an array:", typeof subtasks);
+          throw new Error("Response is not an array");
+        }
+        
+        // IMPORTANT: Always increment the counter for ALL users (except pro with valid subscription)
+        try {
+          // Determine if we should increment the counter
+          const shouldIncrement = shouldEnforceLimits && !isPro;
+          
+          if (shouldIncrement) {
+            if (userSetting) {
+              // User exists - update their count
+              const currentCount = userSetting.gemini_calls_count || 0;
+              const newCount = currentCount + 1;
+              
+              await db
+                .update(userSettings)
+                .set({ 
+                  gemini_calls_count: newCount,
+                  updated_at: Math.floor(Date.now() / 1000)
+                })
+                .where(eq(userSettings.user_id, req.userId!));
+            } else {
+              // Create new user settings
+              await db.insert(userSettings).values({
+                user_id: req.userId!,
+                gemini_calls_count: 1,
+                created_at: Math.floor(Date.now() / 1000),
+                updated_at: Math.floor(Date.now() / 1000)
+              });
+            }
+          }
+        } catch (countError) {
+          console.error("Error incrementing counter:", countError);
+          // Continue processing request despite counter error
+        }
+        
+        console.log("Sending successful response with subtasks:", {
+          count: subtasks.length,
+          sampleItems: subtasks.slice(0, 3),
+          isArray: Array.isArray(subtasks)
+        });
+        
+        res.json({ subtasks });
+      } catch (parseError) {
+        console.error("Error parsing JSON response:", parseError);
+        // If parsing fails, return the raw text
+        const fallbackSubtasks = text.replace(/^\[|\]$/g, '').split('\n').map(s => s.trim()).filter(Boolean);
+        
+        // Increment counter despite the parse error
+        try {
+          if (shouldEnforceLimits && !isPro && userSetting) {
+            const currentCount = userSetting.gemini_calls_count || 0;
+            await db
+              .update(userSettings)
+              .set({ 
+                gemini_calls_count: currentCount + 1,
+                updated_at: Math.floor(Date.now() / 1000)
+              })
+              .where(eq(userSettings.user_id, req.userId!));
+          }
+        } catch (countError) {
+          // Ignore counter errors, still provide response
+        }
+        
+        const finalSubtasks = fallbackSubtasks.length > 0 ? fallbackSubtasks : ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"];
+        
+        console.log("Sending fallback response after parse error:", {
+          originalText: text.substring(0, 100) + (text.length > 100 ? "..." : ""),
+          parsedSubtasks: finalSubtasks,
+          count: finalSubtasks.length,
+          isArray: Array.isArray(finalSubtasks)
+        });
+        
+        res.json({ subtasks: finalSubtasks });
+      }
+    } catch (generationError) {
+      console.error("Error generating content with Gemini API:", generationError);
+      // Provide fallback subtasks
+      const fallbackSubtasks = ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"];
+      
+      console.log("Sending error response with fallback subtasks due to generation error:", {
+        error: generationError instanceof Error ? generationError.message : "Unknown error",
+        fallbackSubtasks,
+        count: fallbackSubtasks.length
+      });
+      
+      res.json({ 
+        subtasks: fallbackSubtasks,
+        error: "Failed to generate personalized subtasks" 
+      });
     }
-    
-    console.log("Cleaned text (first 200 chars):", text.substring(0, 200) + "...");
-
-    res.json({ subtasks: text });
   } catch (error) {
-    console.error("Error generating subtasks:", error);
+    console.error("Unexpected error in generate-subtasks route:", error);
     res.status(500).json({ 
       error: "Failed to generate subtasks",
-      details: error instanceof Error ? error.message : "Unknown error"
+      details: error instanceof Error ? error.message : "Unknown error",
+      subtasks: ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"]
     });
   }
 });

@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Mail, Calendar, Clock, Shield, Edit, Save, X, Upload, Camera } from 'lucide-react';
+import { User, Mail, Calendar, Clock, Shield, Edit, Save, X, Upload, Camera, Trash2, AlertTriangle, Loader2 } from 'lucide-react';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -9,25 +9,80 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/hooks/use-toast';
-import { Switch } from '@/components/ui/switch';
+import { getUserTimezone } from '@/lib/timezone';
+import { formatDistanceToNow, format } from 'date-fns';
+import { useQuery } from '@tanstack/react-query';
+import { getUserSettings, getAuthToken } from '@/lib/api';
+import { QUERY_KEYS, apiRequest } from '@/lib/queryClient';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { useNavigate } from 'react-router-dom';
 
 export default function Profile() {
-  const { user } = useAuth();
+  console.log('Profile component mounted - checking avatar persistence');
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
   const [userName, setUserName] = useState('');
   const [userEmail, setUserEmail] = useState('');
   const [userInitials, setUserInitials] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
-  const [joinDate, setJoinDate] = useState('');
+  const [joinDate, setJoinDate] = useState<number | string>('');
   
-  // Notification preferences
-  const [emailNotifications, setEmailNotifications] = useState(true);
-  const [desktopNotifications, setDesktopNotifications] = useState(true);
-  const [taskReminders, setTaskReminders] = useState(true);
-  const [meetingReminders, setMeetingReminders] = useState(true);
+  // Delete account states
+  const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
+  const [deletePassword, setDeletePassword] = useState('');
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+  
+  // Password update states
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  
+  // Track the current tab and persist it
+  const [activeTab, setActiveTab] = useState('profile');
+  
+  // Get user settings for timezone
+  const { data: userSettings } = useQuery({
+    queryKey: [QUERY_KEYS.USER_SETTINGS],
+    queryFn: getUserSettings
+  });
+  
+  // Get the user's timezone - either from settings or auto-detected
+  const userTimezone = userSettings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
+  
+  // Load the active tab from localStorage on component mount
+  useEffect(() => {
+    const savedTab = localStorage.getItem('profileActiveTab');
+    if (savedTab) {
+      setActiveTab(savedTab);
+    }
+  }, []);
+  
+  // Save the active tab to localStorage when it changes
+  const handleTabChange = (value: string) => {
+    setActiveTab(value);
+    localStorage.setItem('profileActiveTab', value);
+  };
   
   // Get user data on component mount
   useEffect(() => {
+    // Check for dedicated avatar storage first
+    const storedAvatar = localStorage.getItem('userAvatar');
+    if (storedAvatar) {
+      console.log('Found avatar in dedicated storage:', storedAvatar);
+      setAvatarUrl(storedAvatar);
+    }
+    
     // Try to get user data from localStorage if not available in context
     const storedUser = localStorage.getItem('user');
     const userData = user || (storedUser ? JSON.parse(storedUser) : null);
@@ -49,35 +104,57 @@ export default function Profile() {
         .substring(0, 2);
       setUserInitials(initials);
       
-      // Set avatar URL if available
-      if (userData.avatar) {
+      // Set avatar URL if available and not already set from dedicated storage
+      if (userData.avatar && !storedAvatar) {
         setAvatarUrl(userData.avatar);
+        
+        // Ensure we update the auth user with the avatar if it's coming from localStorage
+        if (user && userData.avatar) {
+          // Type assertion to treat user as a generic object
+          const userObj = user as Record<string, any>;
+          const shouldUpdateUser = !userObj.avatar;
+          
+          if (shouldUpdateUser) {
+            // Update the user object in context with the avatar from localStorage
+            const updatedUserData = { ...userObj, avatar: userData.avatar };
+            localStorage.setItem('user', JSON.stringify(updatedUserData));
+            console.log('Updated user with avatar from localStorage:', updatedUserData);
+          }
+        }
+        
+        // Also save to the dedicated avatar storage for better persistence
+        localStorage.setItem('userAvatar', userData.avatar);
       }
       
-      // Set join date (fallback to current date if not available)
-      setJoinDate(userData.joinDate || new Date().toISOString().split('T')[0]);
+      // Set join date (use created_at timestamp if available)
+      setJoinDate(userData.created_at || userData.joinDate || Date.now());
     } else {
       // Default values if no user data is available
       setUserName('User');
       setUserEmail('user@example.com');
       setUserInitials('U');
-      setJoinDate(new Date().toISOString().split('T')[0]);
-    }
-    
-    // Load notification preferences from localStorage
-    const storedPreferences = localStorage.getItem('notificationPreferences');
-    if (storedPreferences) {
-      try {
-        const preferences = JSON.parse(storedPreferences);
-        setEmailNotifications(preferences.email ?? true);
-        setDesktopNotifications(preferences.desktop ?? true);
-        setTaskReminders(preferences.tasks ?? true);
-        setMeetingReminders(preferences.meetings ?? true);
-      } catch (error) {
-        console.error('Failed to parse notification preferences', error);
-      }
+      setJoinDate(Date.now());
     }
   }, [user]);
+  
+  // Format the join date in a human-readable format
+  const formattedJoinDate = React.useMemo(() => {
+    if (!joinDate) return 'Unknown';
+    
+    try {
+      // Convert to number if it's a timestamp as string
+      const timestamp = typeof joinDate === 'string' ? parseInt(joinDate, 10) : joinDate;
+      
+      // If it's a Unix timestamp in seconds (typically less than year 2100), convert to milliseconds
+      const dateObj = timestamp < 20000000000 ? new Date(timestamp * 1000) : new Date(timestamp);
+      
+      // Format as "X time ago (actual date)"
+      return `${formatDistanceToNow(dateObj, { addSuffix: true })} (${format(dateObj, 'MMMM d, yyyy')})`;
+    } catch (error) {
+      console.error('Error formatting join date:', error);
+      return 'Unknown date';
+    }
+  }, [joinDate]);
   
   // Save profile changes
   const saveProfile = () => {
@@ -89,18 +166,16 @@ export default function Profile() {
       joinDate: joinDate
     };
     
-    // Save to localStorage
+    // Save to localStorage - both user object and dedicated avatar storage
     localStorage.setItem('user', JSON.stringify(updatedUser));
     localStorage.setItem('userName', userName);
     
-    // Save notification preferences
-    const preferences = {
-      email: emailNotifications,
-      desktop: desktopNotifications,
-      tasks: taskReminders,
-      meetings: meetingReminders
-    };
-    localStorage.setItem('notificationPreferences', JSON.stringify(preferences));
+    // Save avatar to dedicated storage for better persistence
+    if (avatarUrl) {
+      localStorage.setItem('userAvatar', avatarUrl);
+    }
+    
+    console.log('Profile saved with avatar:', avatarUrl);
     
     // Show success toast
     toast({
@@ -135,11 +210,142 @@ export default function Profile() {
     const randomAvatar = `https://api.dicebear.com/7.x/avataaars/svg?seed=${Math.random().toString(36).substring(7)}`;
     setAvatarUrl(randomAvatar);
     
+    // Ensure we update both the localStorage user and the auth context user
+    
+    // Update localStorage user
+    const storedUser = localStorage.getItem('user');
+    let updatedUser;
+    
+    if (storedUser) {
+      const userData = JSON.parse(storedUser);
+      updatedUser = {
+        ...userData,
+        avatar: randomAvatar
+      };
+    } else {
+      // Create a new user object if none exists
+      updatedUser = {
+        name: userName,
+        email: userEmail,
+        avatar: randomAvatar,
+        joinDate: joinDate
+      };
+    }
+    
+    // Save to localStorage (both in the 'user' object and as a separate 'userAvatar' key for redundancy)
+    localStorage.setItem('user', JSON.stringify(updatedUser));
+    localStorage.setItem('userAvatar', randomAvatar);
+    
+    console.log('Avatar updated and saved to localStorage:', randomAvatar);
+    
     toast({
       title: "Avatar Updated",
-      description: "Your profile picture has been updated.",
+      description: "Your profile picture has been updated and saved.",
       variant: "default"
     });
+  };
+  
+  // Handle delete account
+  const handleDeleteAccount = async () => {
+    setIsDeleting(true);
+    setDeleteError('');
+    
+    try {
+      const response = await apiRequest(
+        'POST',
+        '/auth/delete-account',
+        { password: deletePassword }
+      );
+      
+      if (!response.ok) {
+        const data = await response.json();
+        setDeleteError(data.error || 'Failed to delete account');
+        setIsDeleting(false);
+        return;
+      }
+      
+      // Success - clear everything and redirect
+      toast({
+        title: "Account Deleted",
+        description: "Your account has been successfully deleted.",
+      });
+      
+      // Logout the user
+      logout();
+      
+      // Redirect to home page
+      navigate('/');
+    } catch (error) {
+      console.error('Error deleting account:', error);
+      setDeleteError('An unexpected error occurred');
+      setIsDeleting(false);
+    }
+  };
+  
+  // Handle password update
+  const handleUpdatePassword = async () => {
+    // Reset error state
+    setPasswordError('');
+    
+    // Validate inputs
+    if (!currentPassword) {
+      setPasswordError('Current password is required');
+      return;
+    }
+    
+    if (!newPassword) {
+      setPasswordError('New password is required');
+      return;
+    }
+    
+    if (newPassword.length < 6) {
+      setPasswordError('New password must be at least 6 characters');
+      return;
+    }
+    
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New passwords do not match');
+      return;
+    }
+    
+    // Set loading state
+    setIsUpdatingPassword(true);
+    
+    try {
+      // Call the API to update password using apiRequest utility
+      const response = await apiRequest(
+        'POST',
+        '/auth/update-password',
+        {
+          currentPassword,
+          newPassword
+        }
+      );
+      
+      if (!response.ok) {
+        const data = await response.json();
+        setPasswordError(data.error || 'Failed to update password');
+        setIsUpdatingPassword(false);
+        return;
+      }
+      
+      // Success - clear form and show toast
+      setCurrentPassword('');
+      setNewPassword('');
+      setConfirmPassword('');
+      
+      toast({
+        title: "Password Updated",
+        description: "Your password has been successfully changed.",
+      });
+      
+      // End loading state
+      setIsUpdatingPassword(false);
+    } catch (error) {
+      console.error('Error updating password:', error);
+      setPasswordError('An unexpected error occurred');
+      setIsUpdatingPassword(false);
+    }
   };
   
   return (
@@ -151,10 +357,9 @@ export default function Profile() {
         </p>
       </div>
       
-      <Tabs defaultValue="profile" className="space-y-4">
+      <Tabs value={activeTab} onValueChange={handleTabChange} className="space-y-4">
         <TabsList>
           <TabsTrigger value="profile">Profile</TabsTrigger>
-          <TabsTrigger value="notifications">Notifications</TabsTrigger>
           <TabsTrigger value="security">Security</TabsTrigger>
         </TabsList>
         
@@ -268,7 +473,7 @@ export default function Profile() {
                       <Label>Member Since</Label>
                       <div className="flex items-center h-10 px-3 rounded-md border border-input bg-background">
                         <Calendar className="h-4 w-4 text-muted-foreground mr-2" />
-                        <span>{new Date(joinDate).toLocaleDateString()}</span>
+                        <span className="text-sm">{formattedJoinDate}</span>
                       </div>
                     </div>
                     
@@ -276,7 +481,7 @@ export default function Profile() {
                       <Label>Time Zone</Label>
                       <div className="flex items-center h-10 px-3 rounded-md border border-input bg-background">
                         <Clock className="h-4 w-4 text-muted-foreground mr-2" />
-                        <span>{Intl.DateTimeFormat().resolvedOptions().timeZone}</span>
+                        <span className="text-sm">{userTimezone}</span>
                       </div>
                     </div>
                   </div>
@@ -332,139 +537,145 @@ export default function Profile() {
           </Card>
         </TabsContent>
         
-        <TabsContent value="notifications" className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle>Notification Preferences</CardTitle>
-              <CardDescription>
-                Choose how you want to be notified about activity.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-4">
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-base">Email Notifications</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Receive notifications via email.
-                    </p>
-                  </div>
-                  <Switch 
-                    checked={emailNotifications} 
-                    onCheckedChange={setEmailNotifications} 
-                  />
-                </div>
-                
-                <Separator />
-                
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-base">Desktop Notifications</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Receive notifications on your desktop.
-                    </p>
-                  </div>
-                  <Switch 
-                    checked={desktopNotifications} 
-                    onCheckedChange={setDesktopNotifications} 
-                  />
-                </div>
-                
-                <Separator />
-                
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-base">Task Reminders</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Get reminders for upcoming and overdue tasks.
-                    </p>
-                  </div>
-                  <Switch 
-                    checked={taskReminders} 
-                    onCheckedChange={setTaskReminders} 
-                  />
-                </div>
-                
-                <Separator />
-                
-                <div className="flex items-center justify-between">
-                  <div className="space-y-0.5">
-                    <Label className="text-base">Meeting Reminders</Label>
-                    <p className="text-sm text-muted-foreground">
-                      Get reminders for upcoming meetings.
-                    </p>
-                  </div>
-                  <Switch 
-                    checked={meetingReminders} 
-                    onCheckedChange={setMeetingReminders} 
-                  />
-                </div>
-              </div>
-            </CardContent>
-            <CardFooter>
-              <Button onClick={saveProfile}>Save Preferences</Button>
-            </CardFooter>
-          </Card>
-        </TabsContent>
-        
         <TabsContent value="security" className="space-y-4">
           <Card>
             <CardHeader>
               <CardTitle>Security Settings</CardTitle>
               <CardDescription>
-                Manage your account security and privacy.
+                Manage your account security and password.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label htmlFor="current-password">Current Password</Label>
-                <Input id="current-password" type="password" placeholder="••••••••" />
+                <Input 
+                  id="current-password" 
+                  type="password" 
+                  placeholder="••••••••" 
+                  value={currentPassword}
+                  onChange={(e) => setCurrentPassword(e.target.value)}
+                />
               </div>
               
               <div className="space-y-2">
                 <Label htmlFor="new-password">New Password</Label>
-                <Input id="new-password" type="password" placeholder="••••••••" />
+                <Input 
+                  id="new-password" 
+                  type="password" 
+                  placeholder="••••••••" 
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
               </div>
               
               <div className="space-y-2">
                 <Label htmlFor="confirm-password">Confirm New Password</Label>
-                <Input id="confirm-password" type="password" placeholder="••••••••" />
+                <Input 
+                  id="confirm-password" 
+                  type="password" 
+                  placeholder="••••••••" 
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                />
               </div>
               
-              <Separator />
-              
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-base">Two-Factor Authentication</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Add an extra layer of security to your account.
-                  </p>
+              {passwordError && (
+                <div className="text-sm text-destructive mt-1">
+                  {passwordError}
                 </div>
-                <Button variant="outline">Set Up</Button>
-              </div>
-              
-              <Separator />
-              
-              <div className="flex items-center justify-between">
-                <div className="space-y-0.5">
-                  <Label className="text-base">Data Privacy</Label>
-                  <p className="text-sm text-muted-foreground">
-                    Manage how your data is used and stored.
-                  </p>
-                </div>
-                <Button variant="outline">Manage</Button>
-              </div>
+              )}
             </CardContent>
             <CardFooter className="flex justify-between">
-              <Button variant="outline" className="gap-1 text-destructive hover:bg-destructive/10 hover:text-destructive">
+              <Button 
+                variant="outline" 
+                className="gap-1 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                onClick={() => setIsDeleteDialogOpen(true)}
+              >
                 <Shield className="h-4 w-4" />
                 Delete Account
               </Button>
-              <Button>Save Changes</Button>
+              <Button 
+                onClick={handleUpdatePassword}
+                disabled={isUpdatingPassword}
+                className="gap-1"
+              >
+                {isUpdatingPassword ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                    <span>Updating...</span>
+                  </>
+                ) : (
+                  <span>Update Password</span>
+                )}
+              </Button>
             </CardFooter>
           </Card>
         </TabsContent>
       </Tabs>
+      
+      {/* Delete Account Confirmation Dialog */}
+      <Dialog open={isDeleteDialogOpen} onOpenChange={setIsDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <AlertTriangle className="h-5 w-5" /> 
+              Delete Account
+            </DialogTitle>
+            <DialogDescription>
+              This action cannot be undone. All your data will be permanently deleted.
+            </DialogDescription>
+          </DialogHeader>
+          
+          <div className="space-y-4 py-4">
+            <p className="text-sm text-muted-foreground">
+              To confirm, please enter your password:
+            </p>
+            
+            <div className="space-y-2">
+              <Label htmlFor="delete-password" className="sr-only">Password</Label>
+              <Input
+                id="delete-password"
+                type="password"
+                placeholder="Enter your password"
+                value={deletePassword}
+                onChange={(e) => setDeletePassword(e.target.value)}
+              />
+              
+              {deleteError && (
+                <p className="text-sm text-destructive mt-1">{deleteError}</p>
+              )}
+            </div>
+          </div>
+          
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsDeleteDialogOpen(false)}
+              disabled={isDeleting}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteAccount}
+              disabled={!deletePassword || isDeleting}
+              className="gap-1"
+            >
+              {isDeleting ? (
+                <>
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-current border-t-transparent" />
+                  Deleting...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="h-4 w-4" />
+                  Delete Account
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 } 

@@ -5,9 +5,11 @@ import cookieParser from "cookie-parser";
 import dotenv from "dotenv";
 import apiRouter from "./routes/api";
 import authRouter from "./routes/auth";
-import { setupVite, serveStatic, log } from "./vite";
+import { setupVite, serveStatic } from "./vite";
 import generateSubtasksRoute from "./routes/generate-subtasks";
+import generateContentRoute from "./routes/generate-content";
 import settingsRouter from "./routes/settings";
+
 import usersRouter from "./api/users";
 import { requireAuth } from './lib/auth';
 import {
@@ -17,6 +19,10 @@ import {
   updateStudySession,
   deleteStudySession
 } from "./api/studySessions";
+import subscriptionRoutes from './routes/subscription';
+import emailRoutes from "./routes/email.js";
+import session from "express-session";
+import MemoryStore from "memorystore";
 
 // Load environment variables from .env file
 dotenv.config();
@@ -37,8 +43,11 @@ app.use(cors({
 app.use("/api/auth", authRouter);
 app.use("/api", apiRouter);
 app.use("/api/generate", generateSubtasksRoute);
+app.use("/api/generate-content", generateContentRoute);
 app.use("/api/settings", settingsRouter);
 app.use("/api/users", usersRouter);
+app.use("/api/subscription", subscriptionRoutes);
+app.use("/api/email", emailRoutes);
 
 // Study Sessions routes
 app.get("/api/study-sessions", async (req, res) => {
@@ -48,7 +57,6 @@ app.get("/api/study-sessions", async (req, res) => {
     const body = await response.json();
     res.status(status).json(body);
   } catch (error) {
-    console.error("Error in study sessions route:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -61,7 +69,6 @@ app.get("/api/study-sessions/:id", async (req, res) => {
     const body = await response.json();
     res.status(status).json(body);
   } catch (error) {
-    console.error("Error in get study session route:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -73,7 +80,6 @@ app.post("/api/study-sessions", async (req, res) => {
     const body = await response.json();
     res.status(status).json(body);
   } catch (error) {
-    console.error("Error in create study session route:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -86,7 +92,6 @@ app.put("/api/study-sessions/:id", async (req, res) => {
     const body = await response.json();
     res.status(status).json(body);
   } catch (error) {
-    console.error("Error in update study session route:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -99,7 +104,6 @@ app.delete("/api/study-sessions/:id", async (req, res) => {
     const body = await response.json();
     res.status(status).json(body);
   } catch (error) {
-    console.error("Error in delete study session route:", error);
     res.status(500).json({ error: "Internal server error" });
   }
 });
@@ -111,6 +115,4 @@ if (process.env.NODE_ENV === "development") {
   serveStatic(app);
 }
 
-server.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+server.listen(port);

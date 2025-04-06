@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useEffect, useState } from 'react';
+import React, { createContext, useContext, useEffect, useState, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUserSettings, updateUserSettings } from '@/lib/api';
 import { type UserSettings } from '@shared/schema';
@@ -25,16 +25,26 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   });
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('light');
   const queryClient = useQueryClient();
+  
+  // Use a ref to track if settings have been applied to prevent loops
+  const settingsApplied = useRef(false);
+  // Use a ref to track the current theme to avoid unnecessary updates
+  const themeRef = useRef(theme);
 
   // Fetch user settings from the server
   const { data: settings, isLoading } = useQuery<UserSettings>({
-    queryKey: [QUERY_KEYS.SETTINGS],
+    queryKey: [QUERY_KEYS.USER_SETTINGS],
     queryFn: getUserSettings,
   });
 
   // Apply theme from settings when they load
   useEffect(() => {
-    if (settings?.theme && ['light', 'dark', 'system'].includes(settings.theme)) {
+    if (settings?.theme && 
+        ['light', 'dark', 'system'].includes(settings.theme) && 
+        !settingsApplied.current && 
+        settings.theme !== themeRef.current) {
+      settingsApplied.current = true;
+      themeRef.current = settings.theme as Theme;
       setThemeState(settings.theme as Theme);
     }
   }, [settings]);
@@ -46,14 +56,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     },
     onMutate: async (newTheme) => {
       // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.SETTINGS] });
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.USER_SETTINGS] });
       
       // Snapshot the previous value
-      const previousSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.SETTINGS]);
+      const previousSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS]);
       
       // Optimistically update to the new value
       if (previousSettings) {
-        queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], {
+        queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], {
           ...previousSettings,
           theme: newTheme
         });
@@ -64,13 +74,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     onError: (_error, _newTheme, context) => {
       // If the mutation fails, use the context returned from onMutate to roll back
       if (context?.previousSettings) {
-        queryClient.setQueryData<UserSettings>([QUERY_KEYS.SETTINGS], context.previousSettings);
+        queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], context.previousSettings);
       }
     }
   });
 
   // Function to set theme and update settings
   const setTheme = (newTheme: Theme) => {
+    // Prevent unnecessary updates and infinite loops
+    if (themeRef.current === newTheme) return;
+    
+    themeRef.current = newTheme;
     setThemeState(newTheme);
     localStorage.setItem('theme', newTheme);
     
