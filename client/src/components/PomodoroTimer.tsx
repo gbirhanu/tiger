@@ -265,11 +265,11 @@ export default function PomodoroTimer() {
         sessions_before_long_break: Number(data.sessions_before_long_break)
       };
       
-      console.log("Calling updatePomodoroSettings with:", cleanData);
+      
       return updatePomodoroSettings(cleanData);
     },
     onMutate: async (data) => {
-      console.log("Optimistically updating pomodoro settings in cache");
+      
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: ["settings", "pomodoro"] });
@@ -288,7 +288,7 @@ export default function PomodoroTimer() {
         sessions_before_long_break: Number(data.sessions_before_long_break)
       };
       
-      console.log("Optimistic settings:", optimisticSettings);
+      
       
       // Update the cache with the optimistic data
       queryClient.setQueryData(["settings", "pomodoro"], optimisticSettings);
@@ -300,7 +300,7 @@ export default function PomodoroTimer() {
       
       // Rollback to previous state if available
       if (context?.previousSettings) {
-        console.log("Rolling back to previous settings state");
+        
         queryClient.setQueryData(["settings", "pomodoro"], context.previousSettings);
       }
       
@@ -311,7 +311,7 @@ export default function PomodoroTimer() {
       });
     },
     onSuccess: (data) => {
-      console.log("Settings update successful:", data);
+      
       
       // Update timer immediately if not running
       if (!isRunning) {
@@ -374,7 +374,7 @@ export default function PomodoroTimer() {
       if (playPromise !== undefined) {
         playPromise
           .then(() => {
-            console.log(`Successfully played ${type} sound notification`);
+            
           })
           .catch(error => {
             console.error("Error playing sound:", error);

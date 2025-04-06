@@ -27,7 +27,7 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { queryClient } from '@/lib/queryClient';
-import { Loader2, Pencil, Trash2, Plus, Calendar as CalendarIcon, Clock, Users, MapPin, Video } from 'lucide-react';
+import { Loader2, Pencil, Trash2, Plus, Calendar as CalendarIcon, Clock, Users, MapPin, Video, Check } from 'lucide-react';
 import { format, parseISO } from 'date-fns';
 import { formatInTimeZone, toZonedTime } from 'date-fns-tz';
 import { getUserTimezone, formatDate, getNow } from '@/lib/timezone';
@@ -70,6 +70,10 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Checkbox } from "@/components/ui/checkbox";
 import Appointments from "@/components/Appointments";
+// Add a MeetingWithAllDay interface at the top of the file
+interface MeetingWithAllDay extends Meeting {
+  all_day?: boolean;
+}
 
 // Define event types for visual distinction
 enum EventType {
@@ -94,6 +98,12 @@ interface CalendarEvent {
     type: EventType;
     location?: string;
     attendees?: string;
+    is_recurring?: boolean;
+    recurrence_pattern?: string | null;
+    recurrence_interval?: number | null;
+    recurrence_end_date?: number | null;
+    isRecurringInstance?: boolean;
+    originalEventId?: number | string;
   };
 }
 
@@ -122,6 +132,11 @@ const meetingFormSchema = z.object({
   endDate: z.date({
     required_error: "End date is required",
   }),
+  isRecurring: z.boolean().default(false),
+  recurrencePattern: z.enum(["daily", "weekly", "monthly", "yearly"]).optional().nullable(),
+  recurrenceInterval: z.number().optional().nullable(),
+  recurrenceEndDate: z.date().optional().nullable(),
+  update_all_recurring: z.boolean().optional(),
 });
 
 // Appointment form schema
@@ -137,6 +152,11 @@ const appointmentFormSchema = z.object({
   startMinute: z.number().min(0).max(59),
   endHour: z.number().min(0).max(23),
   endMinute: z.number().min(0).max(59),
+  isRecurring: z.boolean().default(false),
+  recurrencePattern: z.enum(["daily", "weekly", "monthly", "yearly"]).optional().nullable(),
+  recurrenceInterval: z.number().optional().nullable(),
+  recurrenceEndDate: z.date().optional().nullable(),
+  update_all_recurring: z.boolean().optional(),
 });
 
 type MeetingFormValues = z.infer<typeof meetingFormSchema>;
@@ -149,7 +169,24 @@ interface AppointmentMutationInput {
   title?: string;
   description?: string;
   all_day?: boolean;
+  is_recurring?: boolean;
+  recurrence_pattern?: string | null;
+  recurrence_interval?: number | null;
+  recurrence_end_date?: number | null;
+  update_all_recurring?: boolean;
 }
+
+// Extend the Meeting and Appointment types with the update_all_recurring field
+type MeetingExtended = Meeting & { 
+  update_all_recurring?: boolean;
+  description?: string | null;
+  location?: string | null;
+  recurrence_pattern?: string | null;
+  recurrence_interval?: number | null;
+  recurrence_end_date?: number | null;
+};
+
+type AppointmentExtended = Appointment & { update_all_recurring?: boolean };
 
 export default function CalendarView() {
   const { toast } = useToast();
@@ -176,6 +213,10 @@ export default function CalendarView() {
   const [meetingDialogOpen, setMeetingDialogOpen] = useState(false);
   const [isEditingMeeting, setIsEditingMeeting] = useState(false);
   const [selectedMeetingId, setSelectedMeetingId] = useState<number | null>(null);
+  
+  // Add delete confirmation dialog state
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [meetingToDelete, setMeetingToDelete] = useState<MeetingWithAllDay | null>(null);
   
   // Appointment state
   const [appointmentDialogOpen, setAppointmentDialogOpen] = useState(false);
@@ -217,21 +258,31 @@ export default function CalendarView() {
       meetingLink: "",
       startDate: selectedDate || new Date(),
       endDate: selectedDate ? new Date(selectedDate.getTime() + 60 * 60 * 1000) : new Date(Date.now() + 60 * 60 * 1000),
+      isRecurring: false,
+      recurrencePattern: "weekly",
+      recurrenceInterval: 1,
+      recurrenceEndDate: null,
+      update_all_recurring: false,
     },
   });
   
-  // Appointment form
+  // Create appointment form
   const appointmentForm = useForm<AppointmentFormValues>({
     resolver: zodResolver(appointmentFormSchema),
     defaultValues: {
       title: "",
       description: "",
-      date: selectedDate || new Date(),
+      date: new Date(),
       allDay: false,
       startHour: new Date().getHours(),
       startMinute: 0,
       endHour: new Date().getHours() + 1,
       endMinute: 0,
+      isRecurring: false,
+      recurrencePattern: "weekly",
+      recurrenceInterval: 1,
+      recurrenceEndDate: null,
+      update_all_recurring: false,
     },
   });
 
@@ -250,9 +301,9 @@ export default function CalendarView() {
   // Create meeting mutation
   const createMeetingMutation = useMutation({
     mutationFn: async (data: MeetingFormValues) => {
-      console.log("Meeting mutation called with data:", data);
-      console.log("isEditingMeeting:", isEditingMeeting);
-      console.log("selectedMeetingId:", selectedMeetingId);
+      
+      
+      
       
       // Validate dates exist
       if (!data.startDate || !data.endDate) {
@@ -273,12 +324,19 @@ export default function CalendarView() {
         end_time: Math.floor(data.endDate.getTime() / 1000),
         attendees: null,
         created_at: Math.floor(Date.now() / 1000),
-        updated_at: Math.floor(Date.now() / 1000)
+        updated_at: Math.floor(Date.now() / 1000),
+        completed: false,
+        is_recurring: data.isRecurring || false,
+        recurrence_pattern: data.isRecurring && data.recurrencePattern ? data.recurrencePattern : null,
+        recurrence_interval: data.isRecurring && data.recurrenceInterval ? data.recurrenceInterval : null,
+        recurrence_end_date: data.isRecurring && data.recurrenceEndDate ? Math.floor(data.recurrenceEndDate.getTime() / 1000) : null,
+        parent_meeting_id: null,
+        update_all_recurring: data.update_all_recurring || false,
       };
       
       // If we're editing an existing meeting, update it
       if (isEditingMeeting && selectedMeetingId) {
-        console.log("Updating existing meeting with ID:", selectedMeetingId);
+        
         
         try {
           // Use the updateMeeting function from the API
@@ -287,7 +345,7 @@ export default function CalendarView() {
             id: selectedMeetingId
           });
           
-          console.log("API update successful:", updatedMeeting);
+          
           return updatedMeeting;
         } catch (error) {
           console.error("Error updating meeting via API:", error);
@@ -296,11 +354,11 @@ export default function CalendarView() {
       }
       
       // Otherwise, create a new meeting
-      console.log("Creating new meeting");
+      
       return createMeeting(meeting);
     },
     onMutate: async (data) => {
-      console.log("Optimistically updating meetings cache");
+      
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
@@ -323,7 +381,14 @@ export default function CalendarView() {
           end_time: Math.floor(data.endDate!.getTime() / 1000),
           attendees: null,
           created_at: Math.floor(Date.now() / 1000),
-          updated_at: Math.floor(Date.now() / 1000)
+          updated_at: Math.floor(Date.now() / 1000),
+          completed: false,
+          is_recurring: false,
+          recurrence_pattern: null,
+          recurrence_interval: null,
+          recurrence_end_date: null,
+          parent_meeting_id: null,
+          update_all_recurring: data.update_all_recurring || false,
         };
         
         // Create a deep copy of the meetings array
@@ -340,7 +405,7 @@ export default function CalendarView() {
           };
           
           // Update the cache with the new array
-          queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
+          queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings as Meeting[]);
         }
       } else {
         // Create an optimistic new meeting
@@ -354,7 +419,14 @@ export default function CalendarView() {
           end_time: Math.floor(data.endDate!.getTime() / 1000),
           attendees: null,
           created_at: Math.floor(Date.now() / 1000),
-          updated_at: Math.floor(Date.now() / 1000)
+          updated_at: Math.floor(Date.now() / 1000),
+          completed: false,
+          is_recurring: false,
+          recurrence_pattern: null,
+          recurrence_interval: null,
+          recurrence_end_date: null,
+          parent_meeting_id: null,
+          update_all_recurring: data.update_all_recurring || false,
         };
         
         // Create a deep copy of the meetings array and add the new meeting
@@ -362,7 +434,7 @@ export default function CalendarView() {
         updatedMeetings.push(optimisticMeeting);
         
         // Update the cache with the new array
-        queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
+        queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings as Meeting[]);
       }
       
       return { previousMeetings: previousMeetingsCopy };
@@ -372,7 +444,7 @@ export default function CalendarView() {
       
       // If the mutation fails, use the context to roll back
       if (context?.previousMeetings) {
-        console.log("Rolling back to previous meetings state");
+        
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], context.previousMeetings);
       }
       
@@ -383,7 +455,7 @@ export default function CalendarView() {
       });
     },
     onSuccess: (data) => {
-      console.log("Meeting mutation successful with data:", data);
+      
       
       // Invalidate queries to refresh data from server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
@@ -410,11 +482,11 @@ export default function CalendarView() {
   // Add delete meeting mutation
   const deleteMeetingMutation = useMutation({
     mutationFn: async (meetingId: number) => {
-      console.log("Deleting meeting with ID:", meetingId);
+      
       try {
         // Use the deleteMeeting function from the API
         await deleteMeeting(meetingId);
-        console.log("Meeting deleted successfully");
+        
         return { success: true };
       } catch (error) {
         console.error("Error deleting meeting:", error);
@@ -422,7 +494,7 @@ export default function CalendarView() {
       }
     },
     onMutate: async (meetingId) => {
-      console.log("Optimistically deleting meeting from cache:", meetingId);
+      
       
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
@@ -437,10 +509,10 @@ export default function CalendarView() {
       const updatedMeetings = JSON.parse(JSON.stringify(previousMeetings))
         .filter((meeting: Meeting) => meeting.id !== meetingId);
       
-      console.log(`Optimistically removed meeting. Remaining meetings: ${updatedMeetings.length}`);
+      
       
       // Update the cache with the filtered array
-      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
+      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings as Meeting[]);
       
       return { previousMeetings: previousMeetingsCopy };
     },
@@ -449,7 +521,7 @@ export default function CalendarView() {
       
       // If the mutation fails, use the context to roll back
       if (context?.previousMeetings) {
-        console.log("Rolling back to previous meetings state");
+        
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], context.previousMeetings);
       }
       
@@ -460,7 +532,7 @@ export default function CalendarView() {
       });
     },
     onSuccess: () => {
-      console.log("Delete meeting mutation successful");
+      
       
       // Invalidate queries to refresh data from server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
@@ -480,15 +552,28 @@ export default function CalendarView() {
 
   // Add update meeting mutation
   const updateMeetingMutation = useMutation({
-    mutationFn: async (updateData: { id: number; start_time: number; end_time: number }) => {
-      console.log("Updating meeting with data:", updateData);
+    mutationFn: async (updateData: { 
+      id: number | string; 
+      start_time?: number; 
+      end_time?: number;
+      title?: string;
+      description?: string | null;
+      all_day?: boolean;
+      location?: string | null;
+      is_recurring?: boolean;
+      recurrence_pattern?: string | null;
+      recurrence_interval?: number | null;
+      recurrence_end_date?: number | null;
+      update_all_recurring?: boolean;
+    }) => {
       try {
+        // Cast id to number if it's a string
+        const id = typeof updateData.id === 'string' ? parseInt(updateData.id) : updateData.id;
+        const { id: _, ...rest } = updateData;
+        
         // Use the updateMeeting function from the API
-        const updatedMeeting = await updateMeeting(updateData.id, {
-          start_time: updateData.start_time,
-          end_time: updateData.end_time
-        });
-        console.log("Meeting updated successfully:", updatedMeeting);
+        const updatedMeeting = await updateMeeting(id, rest);
+        
         return updatedMeeting;
       } catch (error) {
         console.error("Error updating meeting:", error);
@@ -510,15 +595,23 @@ export default function CalendarView() {
         if (meeting.id === updateData.id) {
           return {
             ...meeting,
-            start_time: updateData.start_time,
-            end_time: updateData.end_time
+            start_time: updateData.start_time ?? meeting.start_time,
+            end_time: updateData.end_time ?? meeting.end_time
+          };
+        }
+        // If we're updating all recurring instances, also update child meetings
+        if (updateData.update_all_recurring && meeting.parent_meeting_id === updateData.id) {
+          return {
+            ...meeting,
+            start_time: updateData.start_time ?? meeting.start_time,
+            end_time: updateData.end_time ?? meeting.end_time
           };
         }
         return meeting;
       });
       
       // Update the cache with the optimistic update
-      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings);
+      queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], updatedMeetings as Meeting[]);
       
       // Return the previous meetings for potential rollback
       return { previousMeetings: previousMeetingsCopy };
@@ -528,7 +621,7 @@ export default function CalendarView() {
       
       // If the mutation fails, use the context to roll back
       if (context?.previousMeetings) {
-        console.log("Rolling back to previous meetings state");
+        
         queryClient.setQueryData<Meeting[]>([QUERY_KEYS.MEETINGS], context.previousMeetings);
       }
       
@@ -539,7 +632,7 @@ export default function CalendarView() {
       });
     },
     onSuccess: (updatedMeeting) => {
-      console.log("Meeting update successful with data:", updatedMeeting);
+      
       
       // Invalidate queries to refresh data from server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.MEETINGS] });
@@ -584,7 +677,7 @@ export default function CalendarView() {
 
   // Get user settings for timezone
   const { data: userSettings } = useQuery<UserSettings>({
-    queryKey: [QUERY_KEYS.SETTINGS],
+    queryKey: [QUERY_KEYS.USER_SETTINGS],
     staleTime: 1000 * 60 * 5, // 5 minutes
   });
   
@@ -613,7 +706,7 @@ export default function CalendarView() {
       });
     },
     onSuccess: (newTask) => {
-      console.log("Task created successfully:", newTask);
+      
       
       // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -655,7 +748,16 @@ export default function CalendarView() {
   });
 
   const updateTaskMutation = useMutation({
-    mutationFn: updateTask,
+    mutationFn: async (updatedTaskData: any) => {
+      // Extract update_all_recurring from the data
+      const { update_all_recurring, ...taskData } = updatedTaskData;
+      
+      // Include update_all_recurring flag in the API call
+      return updateTask({
+        ...taskData,
+        update_all_recurring
+      });
+    },
     onMutate: async (updatedTask) => {
       // Don't do any optimistic updates - they're causing issues
       // Just return the previous tasks for potential rollback
@@ -677,7 +779,7 @@ export default function CalendarView() {
       });
     },
     onSuccess: (updatedTask) => {
-      console.log("Task updated successfully:", updatedTask);
+      
       
       // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -761,7 +863,7 @@ export default function CalendarView() {
       });
     },
     onSuccess: (_, taskId) => {
-      console.log("Task deleted successfully:", taskId);
+      
       
       // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -792,8 +894,14 @@ export default function CalendarView() {
         start_time: Math.floor(startDate.getTime() / 1000),
         end_time: Math.floor(endDate.getTime() / 1000),
         all_day: data.allDay,
-        created_at: Date.now(),
-        updated_at: Date.now()
+        created_at: Math.floor(Date.now() / 1000),
+        updated_at: Math.floor(Date.now() / 1000),
+        completed: false,
+        is_recurring: data.isRecurring || false,
+        recurrence_pattern: data.isRecurring && data.recurrencePattern ? data.recurrencePattern : null,
+        recurrence_interval: data.isRecurring && data.recurrenceInterval ? data.recurrenceInterval : null,
+        recurrence_end_date: data.isRecurring && data.recurrenceEndDate ? Math.floor(data.recurrenceEndDate.getTime() / 1000) : null,
+        parent_appointment_id: null
       });
     }
   });
@@ -806,7 +914,12 @@ export default function CalendarView() {
         description: data.description,
         start_time: data.start_time,
         end_time: data.end_time,
-        all_day: data.all_day
+        all_day: data.all_day,
+        is_recurring: data.is_recurring || false,
+        recurrence_pattern: data.is_recurring && data.recurrence_pattern ? data.recurrence_pattern : null,
+        recurrence_interval: data.is_recurring && data.recurrence_interval ? data.recurrence_interval : null,
+        recurrence_end_date: data.is_recurring && data.recurrence_end_date ? data.recurrence_end_date : null,
+        update_all_recurring: data.update_all_recurring
       });
     },
     onSuccess: () => {
@@ -833,64 +946,39 @@ export default function CalendarView() {
     // Process tasks
     if (tasks) {
       const taskEvents = tasks.map(task => {
-        // Determine color based on priority
-        let backgroundColor, borderColor;
-        if (task.priority === 'high') {
-          backgroundColor = '#DC2626'; // Bright red for high priority
-          borderColor = '#B91C1C';
-        } else if (task.priority === 'medium') {
-          backgroundColor = '#F59E0B'; // Amber for medium priority
-          borderColor = '#D97706';
-        } else {
-          backgroundColor = '#10B981'; // Emerald for low priority
-          borderColor = '#059669';
-        }
-
-        // If the task is completed
+        // Determine the appropriate color based on task status and priority
+        let backgroundColor;
+        let borderColor;
+        
         if (task.completed) {
-          backgroundColor = '#6B7280'; // Gray for completed tasks
-          borderColor = '#4B5563';
-        }
-        
-        // Check if task is overdue
-        let isOverdue = false;
-        if (!task.completed && task.due_date) {
-          const dueDate = typeof task.due_date === 'number' 
-            ? new Date(task.due_date * 1000) 
-            : new Date(task.due_date as string);
-            
-          isOverdue = dueDate < new Date();
-        }
-        
-        // If the task is overdue and not completed
-        if (isOverdue) {
-          backgroundColor = '#991B1B'; // Dark red for overdue
-          borderColor = '#7F1D1D';
-        }
-
-        // Safely parse the date
-        let startDate = '';
-        if (task.due_date) {
-          try {
-            // Handle different types of due_date values
-            if (typeof task.due_date === 'number') {
-              // If it's a timestamp in seconds (from SQLite)
-              startDate = new Date(task.due_date * 1000).toISOString();
-            } else if (typeof task.due_date === 'string') {
-              // If it's a string date representation
-              startDate = new Date(task.due_date).toISOString();
-            } else if (typeof task.due_date === 'object' && task.due_date !== null && 'toISOString' in task.due_date) {
-              // If it's already a Date object somehow
-              startDate = (task.due_date as any).toISOString();
-            }
-          } catch (error) {
-            console.error(`Error parsing date for task ${task.id}:`, error);
-            // Fallback to empty string if date can't be parsed
-            startDate = '';
+          // Completed tasks are gray
+          backgroundColor = '#6B7280'; // gray-500
+          borderColor = '#4B5563'; // gray-600
+        } else {
+          // Tasks that aren't completed are colored by priority
+          switch (task.priority) {
+            case 'high':
+              backgroundColor = '#DC2626'; // red-600
+              borderColor = '#B91C1C'; // red-700
+              break;
+            case 'medium':
+              backgroundColor = '#F59E0B'; // amber-500
+              borderColor = '#D97706'; // amber-600
+              break;
+            case 'low':
+            default:
+              backgroundColor = '#10B981'; // emerald-500
+              borderColor = '#059669'; // emerald-600
+              break;
           }
         }
 
-        return {
+        // Only create an event if the task has a due date
+        if (!task.due_date) return null;
+        
+        const startDate = new Date(task.due_date * 1000).toISOString();
+
+        const taskEvent = {
           id: `task_${task.id}`,
           title: task.title,
           start: startDate,
@@ -902,20 +990,140 @@ export default function CalendarView() {
             description: task.description || undefined,
             priority: task.priority,
             completed: task.completed,
-            type: EventType.TASK
+            type: EventType.TASK,
+            is_recurring: task.is_recurring || false,
+            recurrence_pattern: task.recurrence_pattern,
+            recurrence_interval: task.recurrence_interval
           },
         };
-      }).filter(event => event.start);
+
+        return taskEvent;
+      })
+      .filter(Boolean) // Filter out null values
+      .filter(event => event!.start) as CalendarEvent[]; // Type assertion to CalendarEvent[]
 
       calendarEvents = [...calendarEvents, ...taskEvents];
+      
+      // Generate additional instances for recurring tasks
+      const recurringTaskEvents: CalendarEvent[] = [];
+      
+      // Create a Set to track dates that already have tasks (to avoid duplicates)
+      const existingTaskDates = new Set<string>();
+      
+      // First, collect all dates where tasks already exist
+      tasks.forEach(task => {
+        if (task.due_date) {
+          // Format date as YYYY-MM-DD for easier comparison
+          const date = new Date(task.due_date * 1000);
+          const dateStr = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+          existingTaskDates.add(dateStr);
+        }
+      });
+      
+      // Only generate recurring tasks for the parent tasks
+      const parentTasks = tasks.filter(task => !task.parent_task_id);
+      
+      parentTasks.forEach(task => {
+        if (task.is_recurring && task.recurrence_pattern && task.recurrence_interval && task.due_date) {
+          // Get calendar view start and end dates (3 months range for visibility)
+          const calendarStart = new Date();
+          const calendarEnd = new Date();
+          calendarEnd.setMonth(calendarEnd.getMonth() + 3);
+          
+          // Calculate occurrences
+          const startDate = new Date(task.due_date * 1000);
+          const endDate = task.recurrence_end_date ? new Date(task.recurrence_end_date * 1000) : null;
+          let currentDate = new Date(startDate);
+          
+          // Create recurring instances
+          while (currentDate <= calendarEnd && (!endDate || currentDate <= endDate)) {
+            // Skip the original event
+            if (currentDate.getTime() !== startDate.getTime()) {
+              // Format date as YYYY-MM-DD for checking against existing tasks
+              const dateStr = `${currentDate.getFullYear()}-${currentDate.getMonth() + 1}-${currentDate.getDate()}`;
+              
+              // Only add the recurring instance if there isn't already a task on this date
+              if (!existingTaskDates.has(dateStr)) {
+                // Determine color based on task priority
+                let backgroundColor;
+                let borderColor;
+                
+                if (task.completed) {
+                  backgroundColor = '#6B7280'; // gray-500
+                  borderColor = '#4B5563'; // gray-600
+                } else {
+                  switch (task.priority) {
+                    case 'high':
+                      backgroundColor = '#DC2626'; // red-600
+                      borderColor = '#B91C1C'; // red-700
+                      break;
+                    case 'medium':
+                      backgroundColor = '#F59E0B'; // amber-500
+                      borderColor = '#D97706'; // amber-600
+                      break;
+                    case 'low':
+                    default:
+                      backgroundColor = '#10B981'; // emerald-500
+                      borderColor = '#059669'; // emerald-600
+                      break;
+                  }
+                }
+                
+                // Add recurring instance
+                recurringTaskEvents.push({
+                  id: `task_${task.id}_recur_${currentDate.getTime()}`,
+                  title: task.title,
+                  start: currentDate.toISOString(),
+                  allDay: task.all_day,
+                  backgroundColor,
+                  borderColor,
+                  textColor: '#ffffff',
+                  extendedProps: {
+                    description: task.description || undefined,
+                    priority: task.priority,
+                    completed: task.completed,
+                    type: EventType.TASK,
+                    is_recurring: true,
+                    recurrence_pattern: task.recurrence_pattern,
+                    recurrence_interval: task.recurrence_interval,
+                    isRecurringInstance: true, // Mark as a recurring instance
+                    originalEventId: task.id
+                  },
+                });
+                
+                // Add this date to existingTaskDates to avoid duplicates
+                existingTaskDates.add(dateStr);
+              }
+            }
+            
+            // Calculate next occurrence
+            switch (task.recurrence_pattern) {
+              case 'daily':
+                currentDate.setDate(currentDate.getDate() + (task.recurrence_interval || 1));
+                break;
+              case 'weekly':
+                currentDate.setDate(currentDate.getDate() + (task.recurrence_interval || 1) * 7);
+                break;
+              case 'monthly':
+                currentDate.setMonth(currentDate.getMonth() + (task.recurrence_interval || 1));
+                break;
+              case 'yearly':
+                currentDate.setFullYear(currentDate.getFullYear() + (task.recurrence_interval || 1));
+                break;
+            }
+          }
+        }
+      });
+      
+      calendarEvents = [...calendarEvents, ...recurringTaskEvents];
     }
 
     // Process meetings
     if (meetings) {
       const meetingEvents = meetings.map(meeting => {
-        // Meeting-specific styling
-        const backgroundColor = '#4F46E5'; // Indigo for meetings
-        const borderColor = '#4338CA';
+        // Meeting-specific styling - Changed to a more distinct blue color
+        const backgroundColor = '#0284c7'; // Bright sky blue for meetings
+        const borderColor = '#0369a1'; // Darker sky blue
 
         return {
           id: `meeting_${meeting.id}`,
@@ -930,20 +1138,118 @@ export default function CalendarView() {
             description: meeting.description || undefined,
             type: EventType.MEETING,
             location: meeting.location || undefined,
-            attendees: meeting.attendees || undefined
+            attendees: meeting.attendees || undefined,
+            completed: false, // Add missing property
+            is_recurring: meeting.is_recurring || false,
+            recurrence_pattern: meeting.recurrence_pattern,
+            recurrence_interval: meeting.recurrence_interval
           },
         };
       });
 
       calendarEvents = [...calendarEvents, ...meetingEvents];
+      
+      // Generate additional instances for recurring meetings
+      const recurringMeetingEvents: CalendarEvent[] = [];
+      
+      // Create a Set to track time slots that already have meetings (to avoid duplicates)
+      const existingMeetingSlots = new Set<string>();
+      
+      // First, collect all dates and times where meetings already exist
+      meetings.forEach(meeting => {
+        if (meeting.start_time) {
+          // Format date as YYYY-MM-DD HH:MM for easier comparison
+          const date = new Date(meeting.start_time * 1000);
+          const dateStr = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
+          existingMeetingSlots.add(dateStr);
+        }
+      });
+      
+      // Only generate recurring meetings for the parent meetings
+      const parentMeetings = meetings.filter(meeting => !meeting.parent_meeting_id);
+      
+      parentMeetings.forEach(meeting => {
+        if (meeting.is_recurring && meeting.recurrence_pattern && meeting.recurrence_interval) {
+          // Get calendar view start and end dates (3 months range for visibility)
+          const calendarStart = new Date();
+          const calendarEnd = new Date();
+          calendarEnd.setMonth(calendarEnd.getMonth() + 3);
+          
+          // Calculate occurrences
+          const startDate = new Date(meeting.start_time * 1000);
+          const endDate = meeting.recurrence_end_date ? new Date(meeting.recurrence_end_date * 1000) : null;
+          let currentStartDate = new Date(startDate);
+          
+          // Create recurring instances
+          while (currentStartDate <= calendarEnd && (!endDate || currentStartDate <= endDate)) {
+            // Skip the original event
+            if (currentStartDate.getTime() !== startDate.getTime()) {
+              // Format date as YYYY-MM-DD HH:MM for checking against existing meetings
+              const dateStr = `${currentStartDate.getFullYear()}-${currentStartDate.getMonth() + 1}-${currentStartDate.getDate()}-${currentStartDate.getHours()}-${currentStartDate.getMinutes()}`;
+              
+              // Only add the recurring instance if there isn't already a meeting in this slot
+              if (!existingMeetingSlots.has(dateStr)) {
+                // Calculate end time based on same duration
+                const duration = meeting.end_time - meeting.start_time;
+                const currentEndDate = new Date(currentStartDate.getTime() + duration * 1000);
+                
+                // Add recurring instance
+                recurringMeetingEvents.push({
+                  id: `meeting_${meeting.id}_recur_${currentStartDate.getTime()}`,
+                  title: meeting.title,
+                  start: currentStartDate.toISOString(),
+                  end: currentEndDate.toISOString(),
+                  allDay: false,
+                  backgroundColor: '#0284c7',
+                  borderColor: '#0369a1',
+                  textColor: '#ffffff',
+                  extendedProps: {
+                    description: meeting.description || undefined,
+                    type: EventType.MEETING,
+                    location: meeting.location || undefined,
+                    attendees: meeting.attendees || undefined,
+                    completed: false,
+                    is_recurring: true,
+                    recurrence_pattern: meeting.recurrence_pattern,
+                    recurrence_interval: meeting.recurrence_interval,
+                    isRecurringInstance: true, // Mark as a recurring instance
+                    originalEventId: meeting.id
+                  },
+                });
+                
+                // Add this time slot to existingMeetingSlots to avoid duplicates
+                existingMeetingSlots.add(dateStr);
+              }
+            }
+            
+            // Calculate next occurrence
+            switch (meeting.recurrence_pattern) {
+              case 'daily':
+                currentStartDate.setDate(currentStartDate.getDate() + (meeting.recurrence_interval || 1));
+                break;
+              case 'weekly':
+                currentStartDate.setDate(currentStartDate.getDate() + (meeting.recurrence_interval || 1) * 7);
+                break;
+              case 'monthly':
+                currentStartDate.setMonth(currentStartDate.getMonth() + (meeting.recurrence_interval || 1));
+                break;
+              case 'yearly':
+                currentStartDate.setFullYear(currentStartDate.getFullYear() + (meeting.recurrence_interval || 1));
+                break;
+            }
+          }
+        }
+      });
+      
+      calendarEvents = [...calendarEvents, ...recurringMeetingEvents];
     }
 
     // Process appointments
     if (appointments) {
       const appointmentEvents = appointments.map(appointment => {
-        // Appointment-specific styling
-        const backgroundColor = '#8B5CF6'; // Purple for appointments
-        const borderColor = '#7C3AED';
+        // Appointment-specific styling - Changed to a more distinct purple color
+        const backgroundColor = '#a855f7'; // Bright purple for appointments
+        const borderColor = '#9333ea'; // Darker purple
 
         return {
           id: `appointment_${appointment.id}`,
@@ -956,12 +1262,108 @@ export default function CalendarView() {
           textColor: '#ffffff',
           extendedProps: {
             description: appointment.description || undefined,
-            type: EventType.APPOINTMENT
+            type: EventType.APPOINTMENT,
+            completed: false, // Add missing property
+            is_recurring: appointment.is_recurring || false,
+            recurrence_pattern: appointment.recurrence_pattern,
+            recurrence_interval: appointment.recurrence_interval
           },
         };
       });
 
       calendarEvents = [...calendarEvents, ...appointmentEvents];
+      
+      // Generate additional instances for recurring appointments
+      const recurringAppointmentEvents: CalendarEvent[] = [];
+      
+      // Create a Set to track time slots that already have appointments (to avoid duplicates)
+      const existingAppointmentSlots = new Set<string>();
+      
+      // First, collect all dates and times where appointments already exist
+      appointments.forEach(appointment => {
+        if (appointment.start_time) {
+          // Format date as YYYY-MM-DD HH:MM for easier comparison
+          const date = new Date(appointment.start_time * 1000);
+          const dateStr = `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}-${date.getHours()}-${date.getMinutes()}`;
+          existingAppointmentSlots.add(dateStr);
+        }
+      });
+      
+      // Only generate recurring appointments for the parent appointments
+      const parentAppointments = appointments.filter(appointment => !appointment.parent_appointment_id);
+      
+      parentAppointments.forEach(appointment => {
+        if (appointment.is_recurring && appointment.recurrence_pattern && appointment.recurrence_interval) {
+          // Get calendar view start and end dates (3 months range for visibility)
+          const calendarStart = new Date();
+          const calendarEnd = new Date();
+          calendarEnd.setMonth(calendarEnd.getMonth() + 3);
+          
+          // Calculate occurrences
+          const startDate = new Date(appointment.start_time * 1000);
+          const endDate = appointment.recurrence_end_date ? new Date(appointment.recurrence_end_date * 1000) : null;
+          let currentStartDate = new Date(startDate);
+          
+          // Create recurring instances
+          while (currentStartDate <= calendarEnd && (!endDate || currentStartDate <= endDate)) {
+            // Skip the original event
+            if (currentStartDate.getTime() !== startDate.getTime()) {
+              // Format date as YYYY-MM-DD HH:MM for checking against existing appointments
+              const dateStr = `${currentStartDate.getFullYear()}-${currentStartDate.getMonth() + 1}-${currentStartDate.getDate()}-${currentStartDate.getHours()}-${currentStartDate.getMinutes()}`;
+              
+              // Only add the recurring instance if there isn't already an appointment in this slot
+              if (!existingAppointmentSlots.has(dateStr)) {
+                // Calculate end time based on same duration
+                const duration = appointment.end_time - appointment.start_time;
+                const currentEndDate = new Date(currentStartDate.getTime() + duration * 1000);
+                
+                // Add recurring instance
+                recurringAppointmentEvents.push({
+                  id: `appointment_${appointment.id}_recur_${currentStartDate.getTime()}`,
+                  title: appointment.title,
+                  start: currentStartDate.toISOString(),
+                  end: currentEndDate.toISOString(),
+                  allDay: appointment.all_day,
+                  backgroundColor: '#a855f7',
+                  borderColor: '#9333ea',
+                  textColor: '#ffffff',
+                  extendedProps: {
+                    description: appointment.description || undefined,
+                    type: EventType.APPOINTMENT,
+                    completed: false,
+                    is_recurring: true,
+                    recurrence_pattern: appointment.recurrence_pattern,
+                    recurrence_interval: appointment.recurrence_interval,
+                    isRecurringInstance: true, // Mark as a recurring instance
+                    originalEventId: appointment.id
+                  },
+                });
+                
+                // Add this time slot to existingAppointmentSlots to avoid duplicates
+                existingAppointmentSlots.add(dateStr);
+              }
+            }
+            
+            // Calculate next occurrence
+            switch (appointment.recurrence_pattern) {
+              case 'daily':
+                currentStartDate.setDate(currentStartDate.getDate() + (appointment.recurrence_interval || 1));
+                break;
+              case 'weekly':
+                currentStartDate.setDate(currentStartDate.getDate() + (appointment.recurrence_interval || 1) * 7);
+                break;
+              case 'monthly':
+                currentStartDate.setMonth(currentStartDate.getMonth() + (appointment.recurrence_interval || 1));
+                break;
+              case 'yearly':
+                currentStartDate.setFullYear(currentStartDate.getFullYear() + (appointment.recurrence_interval || 1));
+                break;
+            }
+          }
+        }
+      });
+      
+      calendarEvents = [...calendarEvents, ...recurringAppointmentEvents];
     }
 
     // Filter events based on active tab
@@ -1015,6 +1417,9 @@ export default function CalendarView() {
       const meeting = meetings.find(m => m.id === meetingId);
       
       if (meeting) {
+        // Cast meeting to the extended type with update_all_recurring
+        const extendedMeeting = meeting as MeetingExtended;
+        
         // Set the meeting form data
         meetingForm.reset({
           title: meeting.title,
@@ -1022,6 +1427,11 @@ export default function CalendarView() {
           meetingLink: meeting.location || "",
           startDate: new Date(meeting.start_time * 1000),
           endDate: new Date(meeting.end_time * 1000),
+          isRecurring: meeting.is_recurring || false,
+          recurrencePattern: (meeting.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly") || "weekly",
+          recurrenceInterval: meeting.recurrence_interval || 1,
+          recurrenceEndDate: meeting.recurrence_end_date ? new Date(meeting.recurrence_end_date * 1000) : null,
+          update_all_recurring: extendedMeeting.update_all_recurring || false,
         });
         
         // Set editing mode
@@ -1199,6 +1609,10 @@ export default function CalendarView() {
       priority: newTask.priority,
       due_date: newTask.due_date ? Math.floor(newTask.due_date.getTime() / 1000) : null,
       all_day: newTask.all_day,  // Send as boolean
+      is_recurring: newTask.is_recurring,
+      recurrence_pattern: newTask.recurrence_pattern,
+      recurrence_interval: newTask.recurrence_interval,
+      recurrence_end_date: newTask.recurrence_end_date ? Math.floor(newTask.recurrence_end_date.getTime() / 1000) : null
     });
     
     // Close the dialog - the mutation success handler will handle the UI update
@@ -1282,12 +1696,16 @@ export default function CalendarView() {
       .fc-event.meeting-event {
         border-radius: 6px !important;
         padding: 3px 6px !important;
+        background-color: #0284c7 !important;
+        border-color: #0369a1 !important;
       }
       
       /* Appointment event styling */
       .fc-event.appointment-event {
-        border-radius: 8px !important;
+        border-radius: 6px !important;
         padding: 3px 6px !important;
+        background-color: #a855f7 !important;
+        border-color: #9333ea !important;
       }
       
       /* Priority-based styling */
@@ -1395,24 +1813,68 @@ export default function CalendarView() {
   const handleEventDrop = (info: any) => {
     const event = info.event;
     const eventType = event.extendedProps?.type;
+    const isRecurringInstance = event.extendedProps?.isRecurringInstance;
+    const originalEventId = event.extendedProps?.originalEventId;
     
     if (eventType === EventType.TASK) {
-      updateTaskMutation.mutate({
-        id: event.id,
-        due_date: Math.floor(event.start.getTime() / 1000)
-      });
+      // Extract ID from the event ID
+      const taskId = event.id.replace('task_', '').split('_recur_')[0];
+      
+      // If this is a recurring instance, update the original task and all its instances
+      if (isRecurringInstance && originalEventId) {
+        updateTaskMutation.mutate({
+          id: originalEventId,
+          due_date: Math.floor(event.start.getTime() / 1000),
+          update_all_recurring: true
+        });
+      } else {
+        updateTaskMutation.mutate({
+          id: taskId,
+          due_date: Math.floor(event.start.getTime() / 1000)
+        });
+      }
     } else if (eventType === EventType.MEETING) {
-      updateMeetingMutation.mutate({
-        id: event.id,
+      // Extract ID from the event ID
+      const meetingId = event.id.replace('meeting_', '').split('_recur_')[0];
+      
+      // Create partial meeting object with only required fields
+      const updateParams = {
+        id: meetingId,
         start_time: Math.floor(event.start.getTime() / 1000),
         end_time: Math.floor(event.end.getTime() / 1000)
-      });
+      };
+      
+      // If this is a recurring instance, update all instances
+      if (isRecurringInstance && originalEventId) {
+        updateMeetingMutation.mutate({
+          ...updateParams,
+          id: originalEventId,
+          update_all_recurring: true
+        } as MeetingExtended & {id: number | string});
+      } else {
+        updateMeetingMutation.mutate(updateParams as MeetingExtended & {id: number | string});
+      }
     } else if (eventType === EventType.APPOINTMENT) {
-      updateAppointmentMutation.mutate({
-        id: event.id.replace('appointment_', ''),
+      // Extract ID from the event ID
+      const appointmentId = event.id.replace('appointment_', '').split('_recur_')[0];
+      
+      // Create partial appointment object with only required fields
+      const updateParams = {
+        id: appointmentId,
         start_time: Math.floor(event.start.getTime() / 1000),
         end_time: Math.floor(event.end.getTime() / 1000)
-      });
+      };
+      
+      // If this is a recurring instance, update the original appointment and all its instances
+      if (isRecurringInstance && originalEventId) {
+        updateAppointmentMutation.mutate({
+          ...updateParams,
+          id: originalEventId,
+          update_all_recurring: true
+        });
+      } else {
+        updateAppointmentMutation.mutate(updateParams);
+      }
     }
   };
 
@@ -1420,19 +1882,51 @@ export default function CalendarView() {
   const handleEventResize = (info: any) => {
     const event = info.event;
     const eventType = event.extendedProps?.type;
+    const isRecurringInstance = event.extendedProps?.isRecurringInstance;
+    const originalEventId = event.extendedProps?.originalEventId;
     
     if (eventType === EventType.MEETING) {
-      updateMeetingMutation.mutate({
-        id: event.id,
+      // Extract ID from the event ID
+      const meetingId = event.id.replace('meeting_', '').split('_recur_')[0];
+      
+      // Create partial meeting object with only required fields
+      const updateParams = {
+        id: meetingId,
         start_time: Math.floor(event.start.getTime() / 1000),
         end_time: Math.floor(event.end.getTime() / 1000)
-      });
+      };
+      
+      // If this is a recurring instance, update all instances
+      if (isRecurringInstance && originalEventId) {
+        updateMeetingMutation.mutate({
+          ...updateParams,
+          id: originalEventId,
+          update_all_recurring: true
+        } as MeetingExtended & {id: number | string});
+      } else {
+        updateMeetingMutation.mutate(updateParams as MeetingExtended & {id: number | string});
+      }
     } else if (eventType === EventType.APPOINTMENT) {
-      updateAppointmentMutation.mutate({
-        id: event.id.replace('appointment_', ''),
+      // Extract ID from the event ID
+      const appointmentId = event.id.replace('appointment_', '').split('_recur_')[0];
+      
+      // Create partial appointment object with only required fields
+      const updateParams = {
+        id: appointmentId,
         start_time: Math.floor(event.start.getTime() / 1000),
         end_time: Math.floor(event.end.getTime() / 1000)
-      });
+      };
+      
+      // If this is a recurring instance, update all instances
+      if (isRecurringInstance && originalEventId) {
+        updateAppointmentMutation.mutate({
+          ...updateParams,
+          id: originalEventId,
+          update_all_recurring: true
+        });
+      } else {
+        updateAppointmentMutation.mutate(updateParams);
+      }
     }
   };
 
@@ -1517,7 +2011,7 @@ export default function CalendarView() {
       if (eventType) {
         info.el.classList.add(`${eventType}-event`);
         
-        // Apply background and border colors directly to the event element
+        // Apply colors directly to the event element
         if (eventType === EventType.TASK) {
           // Apply colors directly to the event element
           info.el.style.backgroundColor = info.event.backgroundColor;
@@ -1542,24 +2036,54 @@ export default function CalendarView() {
             timeEl.style.color = '#ffffff';
           }
         } else if (eventType === EventType.MEETING) {
-          info.el.style.backgroundColor = '#4F46E5';
-          info.el.style.borderColor = '#4338CA';
+          info.el.style.backgroundColor = '#0284c7';
+          info.el.style.borderColor = '#0369a1';
+          info.el.style.borderWidth = '1px';
+          info.el.style.borderStyle = 'solid';
+          info.el.style.borderRadius = '6px';
           
           // Also apply to inner elements
           const eventMainEl = info.el.querySelector('.fc-event-main');
           if (eventMainEl) {
-            eventMainEl.style.backgroundColor = '#4F46E5';
-            eventMainEl.style.borderColor = '#4338CA';
+            eventMainEl.style.backgroundColor = '#0284c7';
+            eventMainEl.style.borderColor = '#0369a1';
+          }
+          
+          // Make text white for better contrast
+          const titleEl = info.el.querySelector('.fc-event-title');
+          if (titleEl) {
+            titleEl.style.color = '#ffffff';
+            titleEl.style.fontWeight = 'bold';
+          }
+          
+          const timeEl = info.el.querySelector('.fc-event-time');
+          if (timeEl) {
+            timeEl.style.color = '#ffffff';
           }
         } else if (eventType === EventType.APPOINTMENT) {
-          info.el.style.backgroundColor = '#8B5CF6';
-          info.el.style.borderColor = '#7C3AED';
+          info.el.style.backgroundColor = '#a855f7';
+          info.el.style.borderColor = '#9333ea';
+          info.el.style.borderWidth = '1px';
+          info.el.style.borderStyle = 'solid';
+          info.el.style.borderRadius = '6px';
           
           // Also apply to inner elements
           const eventMainEl = info.el.querySelector('.fc-event-main');
           if (eventMainEl) {
-            eventMainEl.style.backgroundColor = '#8B5CF6';
-            eventMainEl.style.borderColor = '#7C3AED';
+            eventMainEl.style.backgroundColor = '#a855f7';
+            eventMainEl.style.borderColor = '#9333ea';
+          }
+          
+          // Make text white for better contrast
+          const titleEl = info.el.querySelector('.fc-event-title');
+          if (titleEl) {
+            titleEl.style.color = '#ffffff';
+            titleEl.style.fontWeight = 'bold';
+          }
+          
+          const timeEl = info.el.querySelector('.fc-event-time');
+          if (timeEl) {
+            timeEl.style.color = '#ffffff';
           }
         }
       }
@@ -1651,6 +2175,9 @@ export default function CalendarView() {
         const startDate = new Date(appointment.start_time * 1000);
         const endDate = new Date(appointment.end_time * 1000);
         
+        // Cast appointment to the extended type with update_all_recurring
+        const extendedAppointment = appointment as AppointmentExtended;
+        
         appointmentForm.reset({
           title: appointment.title,
           description: appointment.description || "",
@@ -1660,6 +2187,11 @@ export default function CalendarView() {
           startMinute: startDate.getMinutes(),
           endHour: endDate.getHours(),
           endMinute: endDate.getMinutes(),
+          isRecurring: appointment.is_recurring,
+          recurrencePattern: appointment.recurrence_pattern as "daily" | "weekly" | "monthly" | "yearly" | null,
+          recurrenceInterval: appointment.recurrence_interval,
+          recurrenceEndDate: appointment.recurrence_end_date ? new Date(appointment.recurrence_end_date * 1000) : null,
+          update_all_recurring: extendedAppointment.update_all_recurring || false
         });
       }
     } else {
@@ -1673,6 +2205,11 @@ export default function CalendarView() {
         startMinute: 0,
         endHour: new Date().getHours() + 1,
         endMinute: 0,
+        isRecurring: false,
+        recurrencePattern: "weekly",
+        recurrenceInterval: 1,
+        recurrenceEndDate: null,
+        update_all_recurring: false,
       });
     }
   }, [selectedAppointmentId, appointments, selectedDate]);
@@ -1735,22 +2272,43 @@ export default function CalendarView() {
         <span className="text-sm">Completed Task</span>
       </div>
       <div className="flex items-center gap-1.5">
-        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-indigo-500/20">
-          <div className="w-3 h-3 rounded-full bg-[#4F46E5] shadow-sm"></div>
+        <div className="flex items-center justify-center w-5 h-5 rounded-full bg-sky-500/20">
+          <div className="w-3 h-3 rounded-full bg-[#0284c7] shadow-sm"></div>
         </div>
         <span className="text-sm">Meeting</span>
       </div>
       <div className="flex items-center gap-1.5">
         <div className="flex items-center justify-center w-5 h-5 rounded-full bg-purple-500/20">
-          <div className="w-3 h-3 rounded-full bg-[#8B5CF6] shadow-sm"></div>
+          <div className="w-3 h-3 rounded-full bg-[#a855f7] shadow-sm"></div>
         </div>
         <span className="text-sm">Appointment</span>
       </div>
     </div>
   );
 
+  // Add a function to handle delete meeting click
+  const handleDeleteMeetingClick = () => {
+    if (selectedMeetingId) {
+      // Find the meeting by id and cast as MeetingWithAllDay
+      const meeting = meetings?.find(m => m.id === selectedMeetingId) as MeetingWithAllDay;
+      if (meeting) {
+        setMeetingToDelete(meeting);
+        setDeleteDialogOpen(true);
+      }
+    }
+  };
+
+  // Add a function to handle confirm delete
+  const handleConfirmDelete = () => {
+    if (meetingToDelete?.id) {
+      deleteMeetingMutation.mutate(meetingToDelete.id);
+      setDeleteDialogOpen(false);
+      setMeetingToDelete(null);
+    }
+  };
+
   return (
-    <div className="flex-1 p-4 h-full overflow-auto">
+    <div className="h-full flex flex-col overflow-hidden">
       <div className="flex flex-col space-y-4">
         <div className="flex items-center justify-between">
           <h2 className="text-2xl font-bold tracking-tight">Calendar</h2>
@@ -1765,7 +2323,7 @@ export default function CalendarView() {
             </Button>
             <Button 
               onClick={() => handleCreateNewEvent('meeting')}
-              className="bg-[#4F46E5] hover:bg-[#4F46E5]/90 text-white font-medium"
+              className="bg-[#0284c7] hover:bg-[#0284c7]/90 text-white font-medium"
               size="sm"
             >
               <Users className="mr-1.5 h-4 w-4" />
@@ -1773,7 +2331,7 @@ export default function CalendarView() {
             </Button>
             <Button 
               onClick={() => handleCreateNewEvent('appointment')}
-              className="bg-[#8B5CF6] hover:bg-[#8B5CF6]/90 text-white font-medium"
+              className="bg-[#a855f7] hover:bg-[#a855f7]/90 text-white font-medium"
               size="sm"
             >
               <Clock className="mr-1.5 h-4 w-4" />
@@ -1798,7 +2356,7 @@ export default function CalendarView() {
               <span>Tasks</span>
             </TabsTrigger>
             <TabsTrigger value={EventType.MEETING} className="font-medium flex items-center justify-center gap-1.5">
-              <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-indigo-500/20 text-indigo-600">
+              <span className="inline-flex items-center justify-center w-3.5 h-3.5 rounded-full bg-sky-500/20 text-sky-600">
                 <svg xmlns="http://www.w3.org/2000/svg" width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
                   <circle cx="9" cy="7" r="4"></circle>
@@ -1839,13 +2397,13 @@ export default function CalendarView() {
           </Badge>
           <Badge variant="outline" className="bg-background">
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-[#4F46E5]"></div>
+              <div className="w-2 h-2 rounded-full bg-[#0284c7]"></div>
               <span>{meetings.length} Meetings</span>
             </div>
           </Badge>
           <Badge variant="outline" className="bg-background">
             <div className="flex items-center gap-1.5">
-              <div className="w-2 h-2 rounded-full bg-[#8B5CF6]"></div>
+              <div className="w-2 h-2 rounded-full bg-[#a855f7]"></div>
               <span>{appointments.length} Appointments</span>
             </div>
           </Badge>
@@ -1872,714 +2430,1397 @@ export default function CalendarView() {
                 // Create icon based on event type with enhanced styling
                 let icon = null;
                 if (eventType === EventType.TASK) {
-                  // Use a checkmark with a subtle background for tasks
+                  // Use a square check icon for tasks
                   icon = (
-                    <span className={`inline-flex items-center justify-center w-4 h-4 rounded-full mr-1.5 ${
+                    <span className={`inline-flex items-center justify-center w-4 h-4 rounded-sm mr-1.5 ${
                       isCompleted 
-                        ? 'bg-gray-400/20 text-gray-500' 
+                        ? 'bg-gray-400/20 text-white' 
                         : eventInfo.event.extendedProps?.priority === 'high'
-                          ? 'bg-red-500/20 text-red-600'
+                          ? 'bg-red-500/20 text-white'
                           : eventInfo.event.extendedProps?.priority === 'medium'
-                            ? 'bg-amber-500/20 text-amber-600'
-                            : 'bg-emerald-500/20 text-emerald-600'
+                            ? 'bg-amber-500/20 text-white'
+                            : 'bg-emerald-500/20 text-white'
                     }`}>
-                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" className="lucide lucide-square-check-big h-4 w-4"><path d="M21 10.5V19a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h12.5"></path><path d="m9 11 3 3L22 4"></path></svg>
-                      </span>
-                    );
-                  } else if (eventType === EventType.MEETING) {
-                    // Use a users icon with a subtle background for meetings
-                    icon = (
-                      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full mr-1.5 bg-indigo-500/20 text-indigo-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-                          <circle cx="9" cy="7" r="4"></circle>
-                          <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-                          <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <rect x="3" y="3" width="18" height="18" rx="2"></rect>
+                      <polyline points="9 12 12 15 15 9"></polyline>
+                    </svg>
+                  </span>
+                );
+              } else if (eventType === EventType.MEETING) {
+                // Use a users icon with a high contrast background for meetings
+                icon = (
+                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full mr-1.5 bg-sky-500/20 text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
+                      <circle cx="9" cy="7" r="4"></circle>
+                      <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
+                      <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
+                    </svg>
+                  </span>
+                );
+              } else if (eventType === EventType.APPOINTMENT) {
+                // Use a clock icon with a high contrast background for appointments
+                icon = (
+                  <span className="inline-flex items-center justify-center w-4 h-4 rounded-full mr-1.5 bg-purple-500/20 text-white">
+                    <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                      <circle cx="12" cy="12" r="10"></circle>
+                      <polyline points="12 6 12 12 16 14"></polyline>
+                    </svg>
+                  </span>
+                );
+              }
+              
+              return (
+                <div className="w-full overflow-hidden">
+                  <div className="font-medium text-xs sm:text-sm truncate flex items-center">
+                    {icon}
+                    <span className={isCompleted ? 'line-through opacity-70' : ''}>
+                      {eventInfo.event.title}
+                    </span>
+                  </div>
+                  {/* Display time information - either the default timeText or custom due time for tasks */}
+                  {!eventInfo.event.allDay && eventInfo.timeText && (
+                    <div className="text-xs opacity-80 mt-0.5 font-medium pl-5">
+                      {eventInfo.timeText}
+                    </div>
+                  )}
+                  {/* Display due time for tasks only if timeText is not present */}
+                  {eventType === EventType.TASK && eventInfo.event.start && !eventInfo.timeText && (
+                    <div className="text-xs opacity-80 mt-0.5 font-medium pl-5 flex items-center">
+                      <span className="mr-1">Due:</span> {new Date(eventInfo.event.start).toLocaleTimeString([], {hour: 'numeric', minute: '2-digit', hour12: true})}
+                      {eventInfo.event.extendedProps?.is_recurring && (
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3 ml-1.5 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                          <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                          <path d="M3 8v4h4" />
+                          <path d="M3 12a9 9 0 0 0 9 9c2.8 0 5.2-1.16 7-3" />
                         </svg>
-                      </span>
-                    );
-                  } else if (eventType === EventType.APPOINTMENT) {
-                    // Use a clock icon with a subtle background for appointments
-                    icon = (
-                      <span className="inline-flex items-center justify-center w-4 h-4 rounded-full mr-1.5 bg-purple-500/20 text-purple-600">
-                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-                          <circle cx="12" cy="12" r="10"></circle>
-                          <polyline points="12 6 12 12 16 14"></polyline>
-                        </svg>
-                      </span>
-                    );
-                  }
-                  
-                  return (
-                    <div className="w-full overflow-hidden">
-                      <div className="font-medium text-xs sm:text-sm truncate flex items-center">
-                        {icon}
-                        <span className={isCompleted ? 'line-through opacity-70' : ''}>
-                          {eventInfo.event.title}
-                        </span>
-                      </div>
-                      {!eventInfo.event.allDay && eventInfo.timeText && (
-                        <div className="text-xs opacity-80 mt-0.5 font-medium pl-5">
-                          {eventInfo.timeText}
-                        </div>
                       )}
                     </div>
-                  );
-                }}
-                editable={true}
-                selectable={true}
-                selectMirror={true}
-                dayMaxEvents={true}
-                nowIndicator={true}
-                eventResizableFromStart={true}
-                eventDurationEditable={true}
-                eventTimeFormat={{
-                  hour: 'numeric',
-                  minute: '2-digit',
-                  meridiem: 'short'
-                }}
-                eventClick={handleEventClick}
-                dateClick={handleDateClick}
-                eventDrop={handleEventDrop}
-                eventResize={handleEventResize}
-                eventClassNames={(arg) => {
-                  const eventType = arg.event.extendedProps?.type;
-                  const priority = arg.event.extendedProps?.priority;
-                  const completed = arg.event.extendedProps?.completed;
+                  )}
+                </div>
+              );
+            }}
+            editable={true}
+            selectable={true}
+            selectMirror={true}
+            dayMaxEvents={true}
+            nowIndicator={true}
+            eventResizableFromStart={true}
+            eventDurationEditable={true}
+            eventTimeFormat={{
+              hour: 'numeric',
+              minute: '2-digit',
+              meridiem: 'short'
+            }}
+            eventClick={handleEventClick}
+            dateClick={handleDateClick}
+            eventDrop={handleEventDrop}
+            eventResize={handleEventResize}
+            eventClassNames={(arg) => {
+              const eventType = arg.event.extendedProps?.type;
+              const priority = arg.event.extendedProps?.priority;
+              const completed = arg.event.extendedProps?.completed;
+              
+              let classes = [];
+              
+              if (eventType === EventType.TASK) {
+                classes.push('task-event');
+                
+                if (completed) {
+                  classes.push('completed-task');
+                } else if (priority === 'high') {
+                  classes.push('high-priority');
+                } else if (priority === 'medium') {
+                  classes.push('medium-priority');
+                } else if (priority === 'low') {
+                  classes.push('low-priority');
+                }
+              } else if (eventType === EventType.MEETING) {
+                classes.push('meeting-event');
+              } else if (eventType === EventType.APPOINTMENT) {
+                classes.push('appointment-event');
+              }
+              
+              return classes;
+            }}
+            eventBackgroundColor="#3788d8"
+            eventBorderColor="#2c6cb0"
+            eventTextColor="#FFFFFF"
+          />
+        </CardContent>
+      </Card>
+
+      {/* Meeting Dialog */}
+      <Dialog open={meetingDialogOpen} onOpenChange={setMeetingDialogOpen}>
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-lg font-semibold">
+              {isEditingMeeting ? (
+                <>
+                  <Pencil className="h-5 w-5 mr-2 text-sky-500" />
+                  Edit Meeting
+                </>
+              ) : (
+                <>
+                  <Users className="h-5 w-5 mr-2 text-sky-500" />
+                  Schedule Meeting
+                </>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <Form {...meetingForm}>
+            <form
+              onSubmit={meetingForm.handleSubmit((data) => {
+                // Additional validation before submitting
+                if (!data.startDate || !data.endDate) {
+                  toast({
+                    variant: "destructive",
+                    title: "Missing date information",
+                    description: "Please select both start and end times",
+                  });
+                  return;
+                }
+                
+                if (data.endDate <= data.startDate) {
+                  toast({
+                    variant: "destructive",
+                    title: "Invalid time range",
+                    description: "End time must be after start time",
+                  });
+                  return;
+                }
+                
+                if (isEditingMeeting && selectedMeetingId) {
+                  // Extract update_all_recurring from data or default to false
+                  const { update_all_recurring = false, ...formData } = data;
                   
-                  let classes = [];
-                  
-                  if (eventType === EventType.TASK) {
-                    classes.push('task-event');
-                    
-                    if (completed) {
-                      classes.push('completed-task');
-                    } else if (priority === 'high') {
-                      classes.push('high-priority');
-                    } else if (priority === 'medium') {
-                      classes.push('medium-priority');
-                    } else if (priority === 'low') {
-                      classes.push('low-priority');
-                    }
-                  } else if (eventType === EventType.MEETING) {
-                    classes.push('meeting-event');
-                  } else if (eventType === EventType.APPOINTMENT) {
-                    classes.push('appointment-event');
-                  }
-                  
-                  return classes;
-                }}
-                eventBackgroundColor="#3788d8"
-                eventBorderColor="#2c6cb0"
-                eventTextColor="#FFFFFF"
+                  // Update existing meeting
+                  updateMeetingMutation.mutate({
+                    id: selectedMeetingId,
+                    start_time: Math.floor(formData.startDate.getTime() / 1000),
+                    end_time: Math.floor(formData.endDate.getTime() / 1000),
+                    title: formData.title,
+                    description: formData.description || "",
+                    all_day: false,
+                    location: formData.meetingLink || "",
+                    is_recurring: formData.isRecurring,
+                    recurrence_pattern: formData.isRecurring ? formData.recurrencePattern : null,
+                    recurrence_interval: formData.isRecurring ? formData.recurrenceInterval : null,
+                    recurrence_end_date: formData.isRecurring && formData.recurrenceEndDate 
+                      ? Math.floor(formData.recurrenceEndDate.getTime() / 1000) 
+                      : null,
+                    update_all_recurring
+                  });
+                } else {
+                  // Create new meeting
+                  createMeetingMutation.mutate(data);
+                }
+                
+                // Close the dialog and reset state
+                setMeetingDialogOpen(false);
+                setIsEditingMeeting(false);
+                setSelectedMeetingId(null);
+              })}
+              className="space-y-3 mt-2"
+            >
+              <FormField
+                control={meetingForm.control}
+                name="title"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs font-medium">Title</FormLabel>
+                    <FormControl>
+                      <Input 
+                        placeholder="Enter meeting title" 
+                        {...field} 
+                        className="h-9"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
               />
-            </CardContent>
-          </Card>
-
-          {/* Meeting Dialog */}
-          <Dialog open={meetingDialogOpen} onOpenChange={setMeetingDialogOpen}>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center text-lg font-semibold">
-                  {isEditingMeeting ? (
-                    <>
-                      <Pencil className="h-5 w-5 mr-2 text-indigo-500" />
-                      Edit Meeting
-                    </>
-                  ) : (
-                    <>
-                      <Users className="h-5 w-5 mr-2 text-indigo-500" />
-                      Schedule New Meeting
-                    </>
+              <FormField
+                control={meetingForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs font-medium">Description</FormLabel>
+                    <FormControl>
+                      <Textarea 
+                        placeholder="Enter meeting description" 
+                        {...field} 
+                        className="min-h-[60px] text-sm"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <FormField
+                control={meetingForm.control}
+                name="meetingLink"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel className="text-xs font-medium flex items-center">
+                      <Video className="h-3 w-3 mr-1.5 text-sky-500" />
+                        Meeting Link
+                    </FormLabel>
+                    <FormControl>
+                      <Input 
+                        placeholder="Enter video call link" 
+                        {...field} 
+                        className="h-9"
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              <div className="grid grid-cols-2 gap-3">
+                <FormField
+                  control={meetingForm.control}
+                  name="startDate"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-col">
+                      <FormLabel className="text-xs font-medium flex items-center">
+                        <Clock className="h-3 w-3 mr-1.5 text-indigo-500" />
+                        Start
+                      </FormLabel>
+                      <Popover open={startDatePickerOpen} onOpenChange={setStartDatePickerOpen}>
+                        <PopoverTrigger asChild>
+                          <FormControl>
+                            <Button
+                              variant="outline"
+                              className="h-9 pl-3 text-left font-normal text-xs"
+                            >
+                              {field.value ? (
+                                formatDate(field.value, "PPP p")
+                              ) : (
+                                <span>Pick a date</span>
+                              )}
+                            </Button>
+                          </FormControl>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start" side="top">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={(date) => {
+                              if (date) {
+                                const newDate = new Date(date);
+                                if (field.value) {
+                                  newDate.setHours(field.value.getHours(), field.value.getMinutes());
+                                } else {
+                                  const now = new Date();
+                                  newDate.setHours(now.getHours(), now.getMinutes());
+                                }
+                                field.onChange(newDate);
+                              } else {
+                                field.onChange(undefined);
+                                setStartDatePickerOpen(false);
+                              }
+                            }}
+                            initialFocus
+                          />
+                          {field.value && (
+                            <TimeSelect
+                              value={field.value}
+                              onChange={(newDate) => field.onChange(newDate)}
+                              onComplete={() => setStartDatePickerOpen(false)}
+                              compact={true}
+                            />
+                          )}
+                        </PopoverContent>
+                      </Popover>
+                      <FormMessage />
+                    </FormItem>
                   )}
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground">
-                  {isEditingMeeting 
-                    ? "Make changes to your meeting details below." 
-                    : "Fill in the details to schedule a new meeting."}
-                </DialogDescription>
-              </DialogHeader>
-              <Form {...meetingForm}>
-                <form
-                  onSubmit={meetingForm.handleSubmit((data) => {
-                    // Additional validation before submitting
-                    if (!data.startDate || !data.endDate) {
-                      toast({
-                        variant: "destructive",
-                        title: "Missing date information",
-                        description: "Please select both start and end times",
-                      });
-                      return;
-                    }
-                    
-                    if (data.endDate <= data.startDate) {
-                      toast({
-                        variant: "destructive",
-                        title: "Invalid time range",
-                        description: "End time must be after start time",
-                      });
-                      return;
-                    }
-                    
-                    createMeetingMutation.mutate(data);
-                  })}
-                  className="space-y-4 mt-4"
-                >
-                  <FormField
-                    control={meetingForm.control}
-                    name="title"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="flex items-center text-sm font-medium">
-                          <span className="inline-flex items-center">
-                            <span className="w-4 h-4 mr-2 flex items-center justify-center">
-                              <span className="w-1 h-4 bg-indigo-500 rounded-full"></span>
-                            </span>
-                            Title
-                          </span>
-                        </FormLabel>
-                        <FormControl>
-                          <Input 
-                            placeholder="Enter meeting title" 
-                            {...field} 
-                            className="border-input focus:ring-2 focus:ring-indigo-500/30"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={meetingForm.control}
-                    name="description"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="flex items-center text-sm font-medium">
-                          <span className="inline-flex items-center">
-                            <span className="w-4 h-4 mr-2 flex items-center justify-center">
-                              <span className="w-1 h-4 bg-indigo-500/70 rounded-full"></span>
-                            </span>
-                            Description
-                          </span>
-                        </FormLabel>
-                        <FormControl>
-                          <Textarea 
-                            placeholder="Enter meeting description" 
-                            {...field} 
-                            className="min-h-[80px] border-input focus:ring-2 focus:ring-indigo-500/30"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={meetingForm.control}
-                    name="meetingLink"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="flex items-center text-sm font-medium">
-                          <span className="inline-flex items-center">
-                            <Video className="h-3.5 w-3.5 mr-2 text-indigo-500" />
-                            Meeting Link
-                          </span>
-                        </FormLabel>
-                        <FormControl>
-                          <Input 
-                            placeholder="Enter video call link (Zoom, Meet, etc.)" 
-                            {...field} 
-                            className="border-input focus:ring-2 focus:ring-indigo-500/30"
-                          />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <div className="grid grid-cols-2 gap-4">
-                    <FormField
-                      control={meetingForm.control}
-                      name="startDate"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-col">
-                          <FormLabel className="flex items-center text-sm font-medium">
-                            <span className="inline-flex items-center">
-                              <Clock className="h-3.5 w-3.5 mr-2 text-indigo-500" />
-                              Start Time
-                            </span>
-                          </FormLabel>
-                          <Popover open={startDatePickerOpen} onOpenChange={setStartDatePickerOpen}>
-                            <PopoverTrigger asChild>
-                              <FormControl>
-                                <Button
-                                  variant="outline"
-                                  className={cn(
-                                    "w-full pl-3 text-left font-normal border-input focus:ring-2 focus:ring-indigo-500/30",
-                                    !field.value && "text-muted-foreground"
-                                  )}
-                                >
-                                  <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500" />
-                                  {field.value ? (
-                                    formatDate(field.value, "PPP p")
-                                  ) : (
-                                    <span>Pick a date</span>
-                                  )}
-                                </Button>
-                              </FormControl>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0" align="start" side="top">
-                              <Calendar
-                                mode="single"
-                                selected={field.value}
-                                onSelect={(date) => {
-                                  // If we have a date, preserve the time
-                                  if (date) {
-                                    const newDate = new Date(date);
-                                    if (field.value) {
-                                      newDate.setHours(
-                                        field.value.getHours(),
-                                        field.value.getMinutes()
-                                      );
-                                    } else {
-                                      // Default to current time
-                                      const now = new Date();
-                                      newDate.setHours(now.getHours(), now.getMinutes());
-                                    }
-                                    field.onChange(newDate);
-                                  } else {
-                                    field.onChange(undefined);
-                                    setStartDatePickerOpen(false);
-                                  }
-                                }}
-                                initialFocus
-                              />
-                              {field.value && (
-                                <TimeSelect
-                                  value={field.value}
-                                  onChange={(newDate) => {
-                                    field.onChange(newDate);
-                                    // Don't close the popover automatically
-                                  }}
-                                  onComplete={() => {
-                                    setStartDatePickerOpen(false);
-                                  }}
-                                  compact={true}
-                                />
+                />
+                <FormField
+                  control={meetingForm.control}
+                  name="endDate"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-col">
+                      <FormLabel className="text-xs font-medium flex items-center">
+                        <Clock className="h-3 w-3 mr-1.5 text-indigo-500" />
+                        End
+                      </FormLabel>
+                      <Popover open={endDatePickerOpen} onOpenChange={setEndDatePickerOpen}>
+                        <PopoverTrigger asChild>
+                          <FormControl>
+                            <Button
+                              variant="outline"
+                              className="h-9 pl-3 text-left font-normal text-xs"
+                            >
+                              {field.value ? (
+                                formatDate(field.value, "PPP p")
+                              ) : (
+                                <span>Pick a date</span>
                               )}
-                            </PopoverContent>
-                          </Popover>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                    <FormField
-                      control={meetingForm.control}
-                      name="endDate"
-                      render={({ field }) => (
-                        <FormItem className="flex flex-col">
-                          <FormLabel className="flex items-center text-sm font-medium">
-                            <span className="inline-flex items-center">
-                              <Clock className="h-3.5 w-3.5 mr-2 text-indigo-500" />
-                              End Time
-                            </span>
-                          </FormLabel>
-                          <Popover open={endDatePickerOpen} onOpenChange={setEndDatePickerOpen}>
-                            <PopoverTrigger asChild>
-                              <FormControl>
-                                <Button
-                                  variant="outline"
-                                  className={cn(
-                                    "w-full pl-3 text-left font-normal border-input focus:ring-2 focus:ring-indigo-500/30",
-                                    !field.value && "text-muted-foreground"
-                                  )}
-                                >
-                                  <CalendarIcon className="mr-2 h-4 w-4 text-indigo-500" />
-                                  {field.value ? (
-                                    formatDate(field.value, "PPP p")
-                                  ) : (
-                                    <span>Pick a date</span>
-                                  )}
-                                </Button>
-                              </FormControl>
-                            </PopoverTrigger>
-                            <PopoverContent className="w-auto p-0" align="start" side="top">
-                              <Calendar
-                                mode="single"
-                                selected={field.value}
-                                onSelect={(date) => {
-                                  // If we have a date, preserve the time
-                                  if (date) {
-                                    const newDate = new Date(date);
-                                    if (field.value) {
-                                      newDate.setHours(
-                                        field.value.getHours(),
-                                        field.value.getMinutes()
-                                      );
-                                    } else {
-                                      // Default to current time + 1 hour
-                                      const now = new Date();
-                                      newDate.setHours(now.getHours() + 1, now.getMinutes());
-                                    }
-                                    field.onChange(newDate);
-                                  } else {
-                                    field.onChange(undefined);
-                                    setEndDatePickerOpen(false);
-                                  }
-                                }}
-                                initialFocus
-                              />
-                              {field.value && (
-                                <TimeSelect
-                                  value={field.value}
-                                  onChange={(newDate) => {
-                                    field.onChange(newDate);
-                                    // Don't close the popover automatically
-                                  }}
-                                  onComplete={() => {
-                                    setEndDatePickerOpen(false);
-                                  }}
-                                  compact={true}
-                                />
-                              )}
-                            </PopoverContent>
-                          </Popover>
-                          <FormMessage />
-                        </FormItem>
-                      )}
-                    />
-                  </div>
-                  <div className="pt-4">
-                    {isEditingMeeting && selectedMeetingId ? (
-                      <div className="flex gap-2">
-                        <Button 
-                          type="button" 
-                          variant="destructive" 
-                          className="flex-1 bg-red-600 hover:bg-red-700"
-                          onClick={() => {
-                            if (selectedMeetingId) {
-                              deleteMeetingMutation.mutate(selectedMeetingId);
-                            }
-                          }}
-                          disabled={deleteMeetingMutation.isPending}
-                        >
-                          {deleteMeetingMutation.isPending ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Deleting...
-                            </>
-                          ) : (
-                            <>
-                              <Trash2 className="mr-2 h-4 w-4" />
-                              Delete
-                            </>
+                            </Button>
+                          </FormControl>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-auto p-0" align="start" side="top">
+                          <Calendar
+                            mode="single"
+                            selected={field.value}
+                            onSelect={(date) => {
+                              if (date) {
+                                const newDate = new Date(date);
+                                if (field.value) {
+                                  newDate.setHours(field.value.getHours(), field.value.getMinutes());
+                                } else {
+                                  const now = new Date();
+                                  newDate.setHours(now.getHours() + 1, now.getMinutes());
+                                }
+                                field.onChange(newDate);
+                              } else {
+                                field.onChange(undefined);
+                                setEndDatePickerOpen(false);
+                              }
+                            }}
+                            initialFocus
+                          />
+                          {field.value && (
+                            <TimeSelect
+                              value={field.value}
+                              onChange={(newDate) => field.onChange(newDate)}
+                              onComplete={() => setEndDatePickerOpen(false)}
+                              compact={true}
+                            />
                           )}
-                        </Button>
-                        <Button 
-                          type="submit" 
-                          disabled={createMeetingMutation.isPending} 
-                          className="flex-1 bg-[#4F46E5] hover:bg-[#4F46E5]/90 text-white font-medium"
-                        >
-                          {createMeetingMutation.isPending ? (
-                            <>
-                              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                              Updating...
-                            </>
-                          ) : (
-                            <>
-                              <Pencil className="mr-2 h-4 w-4" />
-                              Update
-                            </>
-                          )}
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button 
-                        type="submit" 
-                        disabled={createMeetingMutation.isPending} 
-                        className="w-full bg-[#4F46E5] hover:bg-[#4F46E5]/90 text-white font-medium"
-                      >
-                        {createMeetingMutation.isPending ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Creating...
-                          </>
-                        ) : (
-                          <>
-                            <Users className="mr-2 h-4 w-4" />
-                            Schedule Meeting
-                          </>
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                </form>
-              </Form>
-            </DialogContent>
-          </Dialog>
-
-          {/* Event Type Selection Dialog */}
-          <Dialog open={eventTypeSelectOpen} onOpenChange={setEventTypeSelectOpen}>
-            <DialogContent className="sm:max-w-[400px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center text-lg font-semibold">
-                  <CalendarIcon className="h-5 w-5 mr-2 text-primary" />
-                  Create New Event
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground">
-                  Select the type of event you want to create
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <Button 
-                  onClick={() => handleEventTypeSelect(EventType.TASK)}
-                  className="bg-[#10B981] hover:bg-[#10B981]/90 text-white font-medium flex items-center justify-start h-14 rounded-lg transition-all hover:translate-y-[-2px] hover:shadow-md"
-                >
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4">
-                    <span className="text-xl font-bold">✓</span>
-                  </div>
-                  <div className="flex flex-col items-start">
-                    <span className="text-base font-semibold">Create Task</span>
-                    <span className="text-xs text-white/80">Add a new task to your calendar</span>
-                  </div>
-                </Button>
-                <Button 
-                  onClick={() => handleEventTypeSelect(EventType.MEETING)}
-                  className="bg-[#4F46E5] hover:bg-[#4F46E5]/90 text-white font-medium flex items-center justify-start h-14 rounded-lg transition-all hover:translate-y-[-2px] hover:shadow-md"
-                >
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4">
-                    <Users className="h-5 w-5" />
-                  </div>
-                  <div className="flex flex-col items-start">
-                    <span className="text-base font-semibold">Create Meeting</span>
-                    <span className="text-xs text-white/80">Schedule a meeting with others</span>
-                  </div>
-                </Button>
-                <Button 
-                  onClick={() => handleEventTypeSelect(EventType.APPOINTMENT)}
-                  className="bg-[#8B5CF6] hover:bg-[#8B5CF6]/90 text-white font-medium flex items-center justify-start h-14 rounded-lg transition-all hover:translate-y-[-2px] hover:shadow-md"
-                >
-                  <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4">
-                    <Clock className="h-5 w-5" />
-                  </div>
-                  <div className="flex flex-col items-start">
-                    <span className="text-base font-semibold">Create Appointment</span>
-                    <span className="text-xs text-white/80">Schedule a personal appointment</span>
-                  </div>
-                </Button>
+                        </PopoverContent>
+                      </Popover>
+                      <FormMessage />
+                    </FormItem>
+                  )}
+                />
               </div>
-            </DialogContent>
-          </Dialog>
-
-          {/* Task Dialog */}
-          <Dialog open={showNewTaskDialog && newTaskDialogOpen} onOpenChange={(open) => {
-            setShowNewTaskDialog(open);
-            setNewTaskDialogOpen(open);
-          }}>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center text-lg font-semibold">
-                  {newTask.eventType === EventType.APPOINTMENT ? (
-                    <>
-                      <Clock className="h-5 w-5 mr-2 text-purple-500" />
-                      Create New Appointment
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-5 w-5 mr-2 text-primary" />
-                      Create New Task
-                    </>
-                  )}
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground">
-                  {newTask.eventType === EventType.APPOINTMENT 
-                    ? 'Add a new appointment to your calendar' 
-                    : 'Add a new task to your calendar'}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="title" className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <span className="w-4 h-4 mr-2 flex items-center justify-center">
-                        <span className="w-1 h-4 bg-purple-500 rounded-full"></span>
-                      </span>
-                      Title
-                    </span>
-                  </Label>
-                  <Input
-                    id="title"
-                    value={newTask.title}
-                    onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
-                    placeholder={newTask.eventType === EventType.APPOINTMENT ? "Appointment title" : "Task title"}
-                    className="border-input focus:ring-2 focus:ring-primary/30"
+              
+              {/* Recurring Meeting Options */}
+              <FormField
+                control={meetingForm.control}
+                name="isRecurring"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-3">
+                    <FormControl>
+                      <Checkbox
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                    <div className="space-y-1 leading-none">
+                      <FormLabel className="text-xs">This is a recurring meeting</FormLabel>
+                    </div>
+                  </FormItem>
+                )}
+              />
+              
+              {/* Recurring meeting options */}
+              {meetingForm.watch("isRecurring") && (
+                <div className="grid grid-cols-2 gap-3">
+                  <FormField
+                    control={meetingForm.control}
+                    name="recurrencePattern"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Frequency</FormLabel>
+                        <Select
+                          value={field.value || undefined}
+                          onValueChange={(value) => {
+                            field.onChange(value);
+                          }}
+                        >
+                          <SelectTrigger className="h-9 text-xs">
+                            <SelectValue placeholder="Select frequency" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="daily">Daily</SelectItem>
+                            <SelectItem value="weekly">Weekly</SelectItem>
+                            <SelectItem value="monthly">Monthly</SelectItem>
+                            <SelectItem value="yearly">Yearly</SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  
+                  <FormField
+                    control={meetingForm.control}
+                    name="recurrenceInterval"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-xs">Interval</FormLabel>
+                        <Input
+                          type="number"
+                          min={1}
+                          placeholder="Every..."
+                          className="h-9 text-xs"
+                          {...field}
+                          value={field.value || "1"}
+                          onChange={(e) => {
+                            const value = parseInt(e.target.value);
+                            field.onChange(isNaN(value) ? 1 : value);
+                          }}
+                        />
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                  
+                  <FormField
+                    control={meetingForm.control}
+                    name="recurrenceEndDate"
+                    render={({ field }) => (
+                      <FormItem className="col-span-2">
+                        <FormLabel className="text-xs">Until</FormLabel>
+                        <Popover>
+                          <PopoverTrigger asChild>
+                            <FormControl>
+                              <Button
+                                variant="outline"
+                                className="h-9 w-full pl-3 text-left font-normal text-xs"
+                              >
+                                {field.value ? (
+                                  format(field.value, "PPP")
+                                ) : (
+                                  <span>No end date</span>
+                                )}
+                                <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                              </Button>
+                            </FormControl>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0" align="start">
+                            <Calendar
+                              mode="single"
+                              selected={field.value || undefined}
+                              onSelect={(date) => field.onChange(date)}
+                              initialFocus
+                            />
+                            <div className="p-2 border-t border-border">
+                              <Button
+                                variant="ghost"
+                                className="w-full text-xs"
+                                onClick={() => field.onChange(null)}
+                              >
+                                Clear end date
+                              </Button>
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                        <FormMessage />
+                      </FormItem>
+                    )}
                   />
                 </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="description" className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <span className="w-4 h-4 mr-2 flex items-center justify-center">
-                        <span className="w-1 h-4 bg-purple-500/70 rounded-full"></span>
-                      </span>
-                      Description (Optional)
-                    </span>
-                  </Label>
-                  <Textarea
-                    id="description"
-                    value={newTask.description}
-                    onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
-                    placeholder={newTask.eventType === EventType.APPOINTMENT ? "Appointment description" : "Task description"}
-                    className="min-h-[100px] border-input focus:ring-2 focus:ring-primary/30"
+              )}
+              
+              {/* Show update all recurring checkbox when editing a recurring meeting */}
+              {meetingForm.watch("isRecurring") && isEditingMeeting && selectedMeetingId && (
+                <FormField
+                  control={meetingForm.control}
+                  name="update_all_recurring"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-3 bg-amber-50">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel className="text-xs">Update all recurring meetings</FormLabel>
+                        <p className="text-xs text-muted-foreground">
+                          When checked, this will apply changes to all instances of this meeting.
+                        </p>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+              )}
+              
+              <div className="pt-2">
+                {isEditingMeeting && selectedMeetingId ? (
+                  <div className="flex gap-2">
+                    <Button 
+                      type="button" 
+                      variant="destructive" 
+                      className="flex-1 h-9 text-xs"
+                      onClick={handleDeleteMeetingClick}
+                      disabled={deleteMeetingMutation.isPending}
+                    >
+                      {deleteMeetingMutation.isPending ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                          Deleting...
+                        </>
+                      ) : (
+                        <>
+                          <Trash2 className="mr-1.5 h-3 w-3" />
+                          Delete
+                        </>
+                      )}
+                    </Button>
+                    <Button 
+                      type="submit" 
+                      disabled={createMeetingMutation.isPending} 
+                      className="flex-1 h-9 bg-[#0284c7] hover:bg-[#0284c7]/90 text-xs"
+                    >
+                      {createMeetingMutation.isPending ? (
+                        <>
+                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                          Updating...
+                        </>
+                      ) : (
+                        <>
+                          <Pencil className="mr-1.5 h-3 w-3" />
+                          Update
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  <Button 
+                    type="submit" 
+                    disabled={createMeetingMutation.isPending} 
+                    className="w-full h-9 bg-[#0284c7] hover:bg-[#0284c7]/90 text-xs"
+                  >
+                    {createMeetingMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                        Creating...
+                      </>
+                    ) : (
+                      <>
+                        <Users className="mr-1.5 h-3 w-3" />
+                        Schedule Meeting
+                      </>
+                    )}
+                  </Button>
+                )}
+              </div>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Event Type Selection Dialog */}
+      <Dialog open={eventTypeSelectOpen} onOpenChange={setEventTypeSelectOpen}>
+        <DialogContent className="sm:max-w-[400px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-lg font-semibold">
+              <CalendarIcon className="h-5 w-5 mr-2 text-primary" />
+              Create New Event
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Select the type of event you want to create
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <Button 
+              onClick={() => handleEventTypeSelect(EventType.TASK)}
+              className="bg-[#10B981] hover:bg-[#10B981]/90 text-white font-medium flex items-center justify-start h-14 rounded-lg transition-all hover:translate-y-[-2px] hover:shadow-md"
+            >
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4">
+                <span className="text-xl font-bold">✓</span>
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="text-base font-semibold">Create Task</span>
+                <span className="text-xs text-white/80">Add a new task to your calendar</span>
+              </div>
+            </Button>
+            <Button 
+              onClick={() => handleEventTypeSelect(EventType.MEETING)}
+              className="bg-[#0284c7] hover:bg-[#0284c7]/90 text-white font-medium flex items-center justify-start h-14 rounded-lg transition-all hover:translate-y-[-2px] hover:shadow-md"
+            >
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4">
+                <Users className="h-5 w-5" />
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="text-base font-semibold">Create Meeting</span>
+                <span className="text-xs text-white/80">Schedule a meeting with others</span>
+              </div>
+            </Button>
+            <Button 
+              onClick={() => handleEventTypeSelect(EventType.APPOINTMENT)}
+              className="bg-[#a855f7] hover:bg-[#a855f7]/90 text-white font-medium flex items-center justify-start h-14 rounded-lg transition-all hover:translate-y-[-2px] hover:shadow-md"
+            >
+              <div className="w-10 h-10 rounded-full bg-white/20 flex items-center justify-center mr-4">
+                <Clock className="h-5 w-5" />
+              </div>
+              <div className="flex flex-col items-start">
+                <span className="text-base font-semibold">Create Appointment</span>
+                <span className="text-xs text-white/80">Schedule a personal appointment</span>
+              </div>
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Task Dialog */}
+      <Dialog open={showNewTaskDialog && newTaskDialogOpen} onOpenChange={(open) => {
+        setShowNewTaskDialog(open);
+        setNewTaskDialogOpen(open);
+      }}>
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-lg font-semibold">
+              {newTask.eventType === EventType.APPOINTMENT ? (
+                <>
+                  <Clock className="h-5 w-5 mr-2 text-purple-500" />
+                  Create Appointment
+                </>
+              ) : (
+                <>
+                  <Plus className="h-5 w-5 mr-2 text-primary" />
+                  Create New Task
+                </>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          <div className="grid gap-3 py-2">
+            <div className="grid gap-1.5">
+              <Label htmlFor="title" className="text-xs font-medium">Title</Label>
+              <Input
+                id="title"
+                value={newTask.title}
+                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                placeholder={newTask.eventType === EventType.APPOINTMENT ? "Appointment title" : "Task title"}
+                className="h-9"
+              />
+            </div>
+            <div className="grid gap-1.5">
+              <Label htmlFor="description" className="text-xs font-medium">Description</Label>
+              <Textarea
+                id="description"
+                value={newTask.description}
+                onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                placeholder={newTask.eventType === EventType.APPOINTMENT ? "Appointment details" : "Task details"}
+                className="min-h-[60px] text-sm"
+                disabled={isEditing && selectedTask?.completed}
+              />
+            </div>
+            
+            {newTask.eventType !== EventType.APPOINTMENT && (
+              <div className="grid gap-1.5">
+                <Label className="text-xs font-medium">Priority</Label>
+              <Select
+                value={newTask.priority}
+                onValueChange={(value) => setNewTask({ ...newTask, priority: value as 'low' | 'medium' | 'high' })}
+              >
+                  <SelectTrigger className="h-9">
+                  <SelectValue placeholder="Select priority" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#10B981] mr-2"></div>
+                      <span>Low</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="medium">
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#F59E0B] mr-2"></div>
+                      <span>Medium</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="high">
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#DC2626] mr-2"></div>
+                      <span>High</span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            )}
+            
+            <div className="grid gap-1.5">
+              <Label className="text-xs font-medium">Due Date</Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={"outline"}
+                    className="h-9 justify-start text-left font-normal"
+                    disabled={isEditing && selectedTask?.completed}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                    {newTask.due_date ? (
+                      formatInTimeZone(newTask.due_date, timezone, 'PPP p')
+                    ) : (
+                      <span>Pick date</span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start" side="top">
+                  <Calendar
+                    mode="single"
+                    selected={newTask.due_date instanceof Date ? newTask.due_date : undefined}
+                    onSelect={(date) => {
+                      if (date) {
+                        const newDate = new Date(date);
+                        if (newTask.due_date instanceof Date) {
+                          newDate.setHours(
+                            newTask.due_date.getHours(),
+                            newTask.due_date.getMinutes()
+                          );
+                        } else {
+                          // Default to current time
+                          const now = new Date();
+                          newDate.setHours(now.getHours(), now.getMinutes());
+                        }
+                        setNewTask({ ...newTask, due_date: newDate });
+                      } else {
+                        setNewTask({ ...newTask, due_date: null });
+                      }
+                    }}
+                    initialFocus
                     disabled={isEditing && selectedTask?.completed}
                   />
-                </div>
-                <div className="grid gap-2">
-                  <Label className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <span className="flex h-3.5 w-3.5 mr-2">
-                        <span className="relative flex h-3 w-3">
-                          <span className={cn(
-                            "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
-                            newTask.priority === 'high' ? "bg-red-500" : 
-                            newTask.priority === 'medium' ? "bg-amber-500" : "bg-emerald-500"
-                          )}></span>
-                          <span className={cn(
-                            "relative inline-flex rounded-full h-3 w-3",
-                            newTask.priority === 'high' ? "bg-red-600" : 
-                            newTask.priority === 'medium' ? "bg-amber-600" : "bg-emerald-600"
-                          )}></span>
-                        </span>
+                  {newTask.due_date && !newTask.all_day && (
+                    <TimeSelect
+                      value={newTask.due_date}
+                      onChange={(newDate) => {
+                        setNewTask({ ...newTask, due_date: newDate });
+                      }}
+                      compact={true}
+                      disabled={isEditing && selectedTask?.completed}
+                    />
+                  )}
+                </PopoverContent>
+              </Popover>
+            </div>
+            
+            <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md">
+              <Label className="flex items-center text-sm font-medium">
+                <Clock className="h-3.5 w-3.5 mr-2 text-primary" />
+                All Day
+              </Label>
+              <div className="flex-1"></div>
+              <Switch
+                checked={newTask.all_day}
+                onCheckedChange={(checked) => setNewTask(prev => ({ ...prev, all_day: checked }))}
+                aria-label="Toggle all-day"
+                disabled={isEditing && selectedTask?.completed}
+              />
+            </div>
+            
+            {isEditing && selectedTask && (
+              <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md mt-2">
+                <Label className="flex items-center text-sm font-medium">
+                  <span className="inline-flex items-center">
+                    <span className="relative flex h-3.5 w-3.5 mr-2">
+                      <span className={selectedTask.completed ? "relative inline-flex rounded-full h-3.5 w-3.5 bg-green-600" : "relative inline-flex rounded-full h-3.5 w-3.5 border-2 border-muted-foreground"}></span>
+                      {selectedTask.completed && <span className="absolute inset-0 flex items-center justify-center text-white text-[8px]">✓</span>}
+                    </span>
+                    Completed
+                  </span>
+                </Label>
+                <div className="flex-1"></div>
+                <Switch
+                  checked={selectedTask.completed}
+                  onCheckedChange={(checked) => {
+                    if (selectedTask) {
+                      updateTaskMutation.mutate({
+                        id: selectedTask.id,
+                        completed: checked
+                      });
+                    }
+                  }}
+                  aria-label="Toggle completed"
+                />
+              </div>
+            )}
+            
+            <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md">
+              <Label className="flex items-center text-sm font-medium">
+                <svg 
+                  xmlns="http://www.w3.org/2000/svg" 
+                  className="h-3.5 w-3.5 mr-2 text-primary" 
+                  viewBox="0 0 24 24" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                >
+                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                  <path d="M16 16h5v5" />
+                </svg>
+                Recurring Task
+              </Label>
+              <div className="flex-1"></div>
+              <Switch
+                checked={newTask.is_recurring}
+                onCheckedChange={(checked) => setNewTask({
+                  ...newTask,
+                  is_recurring: checked,
+                  recurrence_pattern: checked ? newTask.recurrence_pattern || 'weekly' : null,
+                  recurrence_interval: checked ? newTask.recurrence_interval || 1 : null
+                })}
+                disabled={isEditing && selectedTask?.completed}
+              />
+            </div>
+            
+            {newTask.is_recurring && (
+              <div className="space-y-3 p-2 px-3 bg-muted/20 rounded-md border border-muted/30">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-medium">Repeat</Label>
+                    <Select 
+                      value={newTask.recurrence_pattern || 'weekly'}
+                      onValueChange={(value) => setNewTask({
+                        ...newTask,
+                        recurrence_pattern: value
+                      })}
+                      disabled={isEditing && selectedTask?.completed}
+                    >
+                      <SelectTrigger className="h-8 mt-1">
+                        <SelectValue placeholder="Select pattern" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="daily">Daily</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="yearly">Yearly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div>
+                    <Label className="text-xs font-medium">Every</Label>
+                    <div className="flex items-center h-8 mt-1">
+                      <Input 
+                        type="number" 
+                        value={newTask.recurrence_interval || 1}
+                        onChange={(e) => setNewTask({
+                          ...newTask,
+                          recurrence_interval: parseInt(e.target.value) || 1
+                        })}
+                        min="1" 
+                        className="h-8 w-16"
+                        disabled={isEditing && selectedTask?.completed}
+                      />
+                      <span className="text-xs ml-2">
+                        {newTask.recurrence_pattern === 'daily' && 'day(s)'}
+                        {newTask.recurrence_pattern === 'weekly' && 'week(s)'}
+                        {newTask.recurrence_pattern === 'monthly' && 'month(s)'}
+                        {newTask.recurrence_pattern === 'yearly' && 'year(s)'}
                       </span>
-                      Priority
-                    </span>
-                  </Label>
-                  <Select
-                    value={newTask.priority}
-                    onValueChange={(value) => setNewTask({ ...newTask, priority: value as 'low' | 'medium' | 'high' })}
-                  >
-                    <SelectTrigger className="border-input focus:ring-2 focus:ring-primary/30">
-                      <SelectValue placeholder="Select priority" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 rounded-full bg-[#10B981] mr-2"></div>
-                          <span>Low</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="medium">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 rounded-full bg-[#F59E0B] mr-2"></div>
-                          <span>Medium</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="high">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 rounded-full bg-[#DC2626] mr-2"></div>
-                          <span>High</span>
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
+                    </div>
+                  </div>
                 </div>
-                <div className="grid gap-2">
-                  <Label className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <CalendarIcon className="h-3.5 w-3.5 mr-2 text-purple-500" />
-                      Due Date
-                    </span>
-                  </Label>
+                
+                <div>
+                  <Label className="text-xs font-medium">End Recurrence</Label>
                   <Popover>
                     <PopoverTrigger asChild>
                       <Button
-                        variant={"outline"}
-                        size={"sm"}
-                        className="w-full justify-start text-left font-normal border-input focus:ring-2 focus:ring-primary/30"
+                        variant="outline"
+                        className="h-8 w-full justify-start pl-3 text-left font-normal text-xs mt-1"
                         disabled={isEditing && selectedTask?.completed}
                       >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
-                        {newTask.due_date ? (
-                          formatInTimeZone(newTask.due_date, timezone, 'PPP p')
+                        <CalendarIcon className="mr-2 h-3 w-3" />
+                        {newTask.recurrence_end_date ? (
+                          formatDate(newTask.recurrence_end_date, "PPP")
                         ) : (
-                          <span>Pick date</span>
+                          <span>No end date</span>
                         )}
                       </Button>
                     </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start" side="top">
-                      <Calendar
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <div className="p-2 flex justify-between">
+                        <span className="text-xs font-medium">End Date</span>
+                        {newTask.recurrence_end_date && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs"
+                            onClick={() => setNewTask({
+                              ...newTask,
+                              recurrence_end_date: null
+                            })}
+                            disabled={isEditing && selectedTask?.completed}
+                          >
+                            Clear
+                          </Button>
+                        )}
+                      </div>
+                      <Calendar 
                         mode="single"
-                        selected={newTask.due_date instanceof Date ? newTask.due_date : undefined}
-                        onSelect={(date) => {
-                          if (date) {
-                            const newDate = new Date(date);
-                            if (newTask.due_date instanceof Date) {
-                              newDate.setHours(
-                                newTask.due_date.getHours(),
-                                newTask.due_date.getMinutes()
-                              );
-                            } else {
-                              // Default to current time
-                              const now = new Date();
-                              newDate.setHours(now.getHours(), now.getMinutes());
-                            }
-                            setNewTask({ ...newTask, due_date: newDate });
-                          } else {
-                            setNewTask({ ...newTask, due_date: null });
-                          }
-                        }}
+                        selected={newTask.recurrence_end_date || undefined}
+                        onSelect={(date) => setNewTask({
+                          ...newTask,
+                          recurrence_end_date: date || null
+                        })}
                         initialFocus
-                        disabled={isEditing && selectedTask?.completed}
+                        disabled={(date) => {
+                          if (!newTask.due_date) return false;
+                          return Boolean(date < newTask.due_date || (isEditing && selectedTask?.completed));
+                        }}
                       />
-                      {newTask.due_date && !newTask.all_day && (
-                        <TimeSelect
-                          value={newTask.due_date}
-                          onChange={(newDate) => {
-                            setNewTask({ ...newTask, due_date: newDate });
-                          }}
-                          compact={true}
-                          disabled={isEditing && selectedTask?.completed}
-                        />
-                      )}
                     </PopoverContent>
                   </Popover>
                 </div>
-                <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md">
-                  <Label className="flex items-center text-sm font-medium">
-                    <Clock className="h-3.5 w-3.5 mr-2 text-primary" />
-                    All Day
-                  </Label>
-                  <div className="flex-1"></div>
-                  <Switch
-                    checked={newTask.all_day}
-                    onCheckedChange={(checked) => setNewTask(prev => ({ ...prev, all_day: checked }))}
-                    aria-label="Toggle all-day"
+              </div>
+            )}
+          </div>
+          <DialogFooter className="flex justify-end gap-2 pt-2">
+            <Button
+              variant="outline"
+              className="h-9 text-xs"
+              onClick={() => {
+                setShowNewTaskDialog(false);
+                setNewTaskDialogOpen(false);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleCreateTask}
+              disabled={createTaskMutation.isPending && newTask.eventType !== EventType.APPOINTMENT}
+              className={`h-9 text-xs ${newTask.eventType === EventType.APPOINTMENT ? "bg-purple-600 hover:bg-purple-700" : "bg-primary hover:bg-primary/90"}`}
+            >
+              {createTaskMutation.isPending && newTask.eventType !== EventType.APPOINTMENT ? (
+                <>
+                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                newTask.eventType === EventType.APPOINTMENT ? (
+                  <>
+                    <Clock className="mr-1.5 h-3 w-3" />
+                    Create Appointment
+                  </>
+                ) : (
+                  <>
+                    <Plus className="mr-1.5 h-3 w-3" />
+                    Create Task
+                  </>
+                )
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Task Dialog */}
+      <Dialog open={showTaskDialog && taskDialogOpen} onOpenChange={(open) => {
+        setShowTaskDialog(open);
+        setTaskDialogOpen(open);
+      }}>
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-lg font-semibold">
+              {isEditing ? (
+                <>
+                  <Pencil className="h-5 w-5 mr-2 text-primary" />
+                  {selectedTask?.completed ? "View Task" : "Edit Task"}
+                </>
+              ) : (
+                <>
+                  <Plus className="h-5 w-5 mr-2 text-primary" />
+                  Create New Task
+                </>
+              )}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {isEditing 
+                ? selectedTask?.completed
+                  ? "This task has been completed and cannot be edited."
+                  : "Make changes to your task details below." 
+                : "Add a new task to your calendar"}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-4 py-4">
+            <div className="grid gap-2">
+              <Label htmlFor="edit-title" className="flex items-center text-sm font-medium">
+                <span className="inline-flex items-center">
+                  <span className="w-4 h-4 mr-2 flex items-center justify-center">
+                    <span className="w-1 h-4 bg-emerald-500 rounded-full"></span>
+                  </span>
+                  Title
+                </span>
+              </Label>
+              <Input
+                id="edit-title"
+                value={newTask.title}
+                onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
+                placeholder="Task title"
+                className="border-input focus:ring-2 focus:ring-primary/30"
+                disabled={isEditing && selectedTask?.completed}
+                readOnly={isEditing && selectedTask?.completed}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label htmlFor="edit-description" className="flex items-center text-sm font-medium">
+                <span className="inline-flex items-center">
+                  <span className="w-4 h-4 mr-2 flex items-center justify-center">
+                    <span className="w-1 h-4 bg-emerald-500/70 rounded-full"></span>
+                  </span>
+                  Description (Optional)
+                </span>
+              </Label>
+              <Textarea
+                id="edit-description"
+                value={newTask.description}
+                onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
+                placeholder="Task description"
+                className="min-h-[100px] border-input focus:ring-2 focus:ring-primary/30"
+                disabled={isEditing && selectedTask?.completed}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label className="flex items-center text-sm font-medium">
+                <span className="inline-flex items-center">
+                  <span className="flex h-3.5 w-3.5 mr-2">
+                    <span className="relative flex h-3 w-3">
+                      <span className={cn(
+                        "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
+                        newTask.priority === 'high' ? "bg-red-500" : 
+                        newTask.priority === 'medium' ? "bg-amber-500" : "bg-emerald-500"
+                      )}></span>
+                      <span className={cn(
+                        "relative inline-flex rounded-full h-3 w-3",
+                        newTask.priority === 'high' ? "bg-red-600" : 
+                        newTask.priority === 'medium' ? "bg-amber-600" : "bg-emerald-600"
+                      )}></span>
+                    </span>
+                  </span>
+                  Priority
+                </span>
+              </Label>
+              <Select
+                value={newTask.priority}
+                onValueChange={(value) => setNewTask({ ...newTask, priority: value as 'low' | 'medium' | 'high' })}
+                disabled={isEditing && selectedTask?.completed}
+              >
+                <SelectTrigger className="border-input focus:ring-2 focus:ring-primary/30">
+                  <SelectValue placeholder="Select priority" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#10B981] mr-2"></div>
+                      <span>Low</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="medium">
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#F59E0B] mr-2"></div>
+                      <span>Medium</span>
+                    </div>
+                  </SelectItem>
+                  <SelectItem value="high">
+                    <div className="flex items-center">
+                      <div className="w-2 h-2 rounded-full bg-[#DC2626] mr-2"></div>
+                      <span>High</span>
+                    </div>
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="grid gap-2">
+              <Label className="flex items-center text-sm font-medium">
+                <span className="inline-flex items-center">
+                  <CalendarIcon className="h-3.5 w-3.5 mr-2 text-primary" />
+                  Due Date
+                </span>
+              </Label>
+              <Popover>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant={"outline"}
+                    size={"sm"}
+                    className="w-full justify-start text-left font-normal border-input focus:ring-2 focus:ring-primary/30"
+                    disabled={isEditing && selectedTask?.completed}
+                  >
+                    <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                    {newTask.due_date ? (
+                      formatInTimeZone(newTask.due_date, timezone, 'PPP p')
+                    ) : (
+                      <span>Pick date</span>
+                    )}
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-auto p-0" align="start" side="top">
+                  <Calendar
+                    mode="single"
+                    selected={newTask.due_date instanceof Date ? newTask.due_date : undefined}
+                    onSelect={(date) => {
+                      if (date) {
+                        const newDate = new Date(date);
+                        if (newTask.due_date instanceof Date) {
+                          newDate.setHours(
+                            newTask.due_date.getHours(),
+                            newTask.due_date.getMinutes()
+                          );
+                        } else {
+                          // Default to current time
+                          const now = new Date();
+                          newDate.setHours(now.getHours(), now.getMinutes());
+                        }
+                        setNewTask({ ...newTask, due_date: newDate });
+                      } else {
+                        setNewTask({ ...newTask, due_date: null });
+                      }
+                    }}
+                    initialFocus
                     disabled={isEditing && selectedTask?.completed}
                   />
+                  {newTask.due_date && !newTask.all_day && (
+                    <TimeSelect
+                      value={newTask.due_date}
+                      onChange={(newDate) => {
+                        setNewTask({ ...newTask, due_date: newDate });
+                      }}
+                      compact={true}
+                      disabled={isEditing && selectedTask?.completed}
+                    />
+                  )}
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md">
+              <Label className="flex items-center text-sm font-medium">
+                <Clock className="h-3.5 w-3.5 mr-2 text-primary" />
+                All Day
+              </Label>
+              <div className="flex-1"></div>
+              <Switch
+                checked={newTask.all_day}
+                onCheckedChange={(checked) => setNewTask(prev => ({ ...prev, all_day: checked }))}
+                aria-label="Toggle all-day"
+                disabled={isEditing && selectedTask?.completed}
+              />
+            </div>
+            
+            {isEditing && selectedTask && (
+              <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md mt-2">
+                <Label className="flex items-center text-sm font-medium">
+                  <span className="inline-flex items-center">
+                    <span className="relative flex h-3.5 w-3.5 mr-2">
+                      <span className={selectedTask.completed ? "relative inline-flex rounded-full h-3.5 w-3.5 bg-green-600" : "relative inline-flex rounded-full h-3.5 w-3.5 border-2 border-muted-foreground"}></span>
+                      {selectedTask.completed && <span className="absolute inset-0 flex items-center justify-center text-white text-[8px]">✓</span>}
+                    </span>
+                    Completed
+                  </span>
+                </Label>
+                <div className="flex-1"></div>
+                <Switch
+                  checked={selectedTask.completed}
+                  onCheckedChange={(checked) => {
+                    if (selectedTask) {
+                      updateTaskMutation.mutate({
+                        id: selectedTask.id,
+                        completed: checked
+                      });
+                    }
+                  }}
+                  aria-label="Toggle completed"
+                />
+              </div>
+            )}
+            
+            <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md">
+              <Label className="flex items-center text-sm font-medium">
+                <svg 
+                  xmlns="http://www.w3.org/2000/svg" 
+                  className="h-3.5 w-3.5 mr-2 text-primary" 
+                  viewBox="0 0 24 24" 
+                  fill="none" 
+                  stroke="currentColor" 
+                  strokeWidth="2" 
+                  strokeLinecap="round" 
+                  strokeLinejoin="round"
+                >
+                  <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                  <path d="M3 3v5h5" />
+                  <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                  <path d="M16 16h5v5" />
+                </svg>
+                Recurring Task
+              </Label>
+              <div className="flex-1"></div>
+              <Switch
+                checked={newTask.is_recurring}
+                onCheckedChange={(checked) => setNewTask({
+                  ...newTask,
+                  is_recurring: checked,
+                  recurrence_pattern: checked ? newTask.recurrence_pattern || 'weekly' : null,
+                  recurrence_interval: checked ? newTask.recurrence_interval || 1 : null
+                })}
+                disabled={isEditing && selectedTask?.completed}
+              />
+            </div>
+            
+            {newTask.is_recurring && (
+              <div className="space-y-3 p-2 px-3 bg-muted/20 rounded-md border border-muted/30">
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <Label className="text-xs font-medium">Repeat</Label>
+                    <Select 
+                      value={newTask.recurrence_pattern || 'weekly'}
+                      onValueChange={(value) => setNewTask({
+                        ...newTask,
+                        recurrence_pattern: value
+                      })}
+                      disabled={isEditing && selectedTask?.completed}
+                    >
+                      <SelectTrigger className="h-8 mt-1">
+                        <SelectValue placeholder="Select pattern" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="daily">Daily</SelectItem>
+                        <SelectItem value="weekly">Weekly</SelectItem>
+                        <SelectItem value="monthly">Monthly</SelectItem>
+                        <SelectItem value="yearly">Yearly</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  
+                  <div>
+                    <Label className="text-xs font-medium">Every</Label>
+                    <div className="flex items-center h-8 mt-1">
+                      <Input 
+                        type="number" 
+                        value={newTask.recurrence_interval || 1}
+                        onChange={(e) => setNewTask({
+                          ...newTask,
+                          recurrence_interval: parseInt(e.target.value) || 1
+                        })}
+                        min="1" 
+                        className="h-8 w-16"
+                        disabled={isEditing && selectedTask?.completed}
+                      />
+                      <span className="text-xs ml-2">
+                        {newTask.recurrence_pattern === 'daily' && 'day(s)'}
+                        {newTask.recurrence_pattern === 'weekly' && 'week(s)'}
+                        {newTask.recurrence_pattern === 'monthly' && 'month(s)'}
+                        {newTask.recurrence_pattern === 'yearly' && 'year(s)'}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div>
+                  <Label className="text-xs font-medium">End Recurrence</Label>
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        className="h-8 w-full justify-start pl-3 text-left font-normal text-xs mt-1"
+                        disabled={isEditing && selectedTask?.completed}
+                      >
+                        <CalendarIcon className="mr-2 h-3 w-3" />
+                        {newTask.recurrence_end_date ? (
+                          formatDate(newTask.recurrence_end_date, "PPP")
+                        ) : (
+                          <span>No end date</span>
+                        )}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0" align="start">
+                      <div className="p-2 flex justify-between">
+                        <span className="text-xs font-medium">End Date</span>
+                        {newTask.recurrence_end_date && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="h-6 text-xs"
+                            onClick={() => setNewTask({
+                              ...newTask,
+                              recurrence_end_date: null
+                            })}
+                            disabled={isEditing && selectedTask?.completed}
+                          >
+                            Clear
+                          </Button>
+                        )}
+                      </div>
+                      <Calendar 
+                        mode="single"
+                        selected={newTask.recurrence_end_date || undefined}
+                        onSelect={(date) => setNewTask({
+                          ...newTask,
+                          recurrence_end_date: date || null
+                        })}
+                        initialFocus
+                        disabled={(date) => {
+                          if (!newTask.due_date) return false;
+                          return Boolean(date < newTask.due_date || (isEditing && selectedTask?.completed));
+                        }}
+                      />
+                    </PopoverContent>
+                  </Popover>
                 </div>
               </div>
-              <DialogFooter>
+            )}
+          </div>
+          <DialogFooter className="flex justify-between items-center">
+            <div>
+              {isEditing && selectedTask && !selectedTask.completed && (
                 <Button
-                  variant="outline"
+                  variant="destructive"
                   onClick={() => {
-                    setShowNewTaskDialog(false);
-                    setNewTaskDialogOpen(false);
+                    if (selectedTask) {
+                      deleteTaskMutation.mutate(selectedTask.id);
+                    }
                   }}
+                  disabled={deleteTaskMutation.isPending}
+                  size="sm"
+                  className="bg-red-600 hover:bg-red-700"
                 >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleCreateTask}
-                  disabled={createTaskMutation.isPending && newTask.eventType !== EventType.APPOINTMENT}
-                  className={newTask.eventType === EventType.APPOINTMENT ? "bg-purple-600 hover:bg-purple-700" : "bg-primary hover:bg-primary/90"}
-                >
-                  {createTaskMutation.isPending && newTask.eventType !== EventType.APPOINTMENT ? (
-                    <>
-                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                      Creating...
-                    </>
+                  {deleteTaskMutation.isPending ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
                   ) : (
-                    newTask.eventType === EventType.APPOINTMENT ? (
+                    <>
+                      <Trash2 className="h-4 w-4 mr-1" />
+                      Delete
+                    </>
+                  )}
+                </Button>
+              )}
+            </div>
+            <div className="flex gap-2">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowTaskDialog(false);
+                  setTaskDialogOpen(false);
+                  setIsEditing(false);
+                }}
+              >
+                {isEditing && selectedTask?.completed ? "Close" : "Cancel"}
+              </Button>
+              {(!isEditing || (isEditing && !selectedTask?.completed)) && (
+                <Button
+                  onClick={isEditing ? handleUpdateTask : handleCreateTask}
+                  disabled={isEditing ? updateTaskMutation.isPending : createTaskMutation.isPending}
+                  className="bg-primary hover:bg-primary/90"
+                >
+                  {isEditing ? (
+                    updateTaskMutation.isPending ? (
                       <>
-                        <Clock className="mr-2 h-4 w-4" />
-                        Create Appointment
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Updating...
+                      </>
+                    ) : (
+                      <>
+                        <Pencil className="mr-2 h-4 w-4" />
+                        Update Task
+                      </>
+                    )
+                  ) : (
+                    createTaskMutation.isPending ? (
+                      <>
+                        <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        Creating...
                       </>
                     ) : (
                       <>
@@ -2589,399 +3830,413 @@ export default function CalendarView() {
                     )
                   )}
                 </Button>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
+              )}
+            </div>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
-          {/* Task Dialog */}
-          <Dialog open={showTaskDialog && taskDialogOpen} onOpenChange={(open) => {
-            setShowTaskDialog(open);
-            setTaskDialogOpen(open);
-          }}>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center text-lg font-semibold">
-                  {isEditing ? (
-                    <>
-                      <Pencil className="h-5 w-5 mr-2 text-primary" />
-                      {selectedTask?.completed ? "View Task" : "Edit Task"}
-                    </>
-                  ) : (
-                    <>
-                      <Plus className="h-5 w-5 mr-2 text-primary" />
-                      Create New Task
-                    </>
-                  )}
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground">
-                  {isEditing 
-                    ? selectedTask?.completed
-                      ? "This task has been completed and cannot be edited."
-                      : "Make changes to your task details below." 
-                    : "Add a new task to your calendar"}
-                </DialogDescription>
-              </DialogHeader>
-              <div className="grid gap-4 py-4">
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-title" className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <span className="w-4 h-4 mr-2 flex items-center justify-center">
-                        <span className="w-1 h-4 bg-emerald-500 rounded-full"></span>
-                      </span>
-                      Title
-                    </span>
-                  </Label>
-                  <Input
-                    id="edit-title"
-                    value={newTask.title}
-                    onChange={(e) => setNewTask({ ...newTask, title: e.target.value })}
-                    placeholder="Task title"
-                    className="border-input focus:ring-2 focus:ring-primary/30"
-                    disabled={isEditing && selectedTask?.completed}
-                    readOnly={isEditing && selectedTask?.completed}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label htmlFor="edit-description" className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <span className="w-4 h-4 mr-2 flex items-center justify-center">
-                        <span className="w-1 h-4 bg-emerald-500/70 rounded-full"></span>
-                      </span>
-                      Description (Optional)
-                    </span>
-                  </Label>
-                  <Textarea
-                    id="edit-description"
-                    value={newTask.description}
-                    onChange={(e) => setNewTask({ ...newTask, description: e.target.value })}
-                    placeholder="Task description"
-                    className="min-h-[100px] border-input focus:ring-2 focus:ring-primary/30"
-                    disabled={isEditing && selectedTask?.completed}
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <Label className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <span className="flex h-3.5 w-3.5 mr-2">
-                        <span className="relative flex h-3 w-3">
-                          <span className={cn(
-                            "animate-ping absolute inline-flex h-full w-full rounded-full opacity-75",
-                            newTask.priority === 'high' ? "bg-red-500" : 
-                            newTask.priority === 'medium' ? "bg-amber-500" : "bg-emerald-500"
-                          )}></span>
-                          <span className={cn(
-                            "relative inline-flex rounded-full h-3 w-3",
-                            newTask.priority === 'high' ? "bg-red-600" : 
-                            newTask.priority === 'medium' ? "bg-amber-600" : "bg-emerald-600"
-                          )}></span>
-                        </span>
-                      </span>
-                      Priority
-                    </span>
-                  </Label>
-                  <Select
-                    value={newTask.priority}
-                    onValueChange={(value) => setNewTask({ ...newTask, priority: value as 'low' | 'medium' | 'high' })}
-                    disabled={isEditing && selectedTask?.completed}
-                  >
-                    <SelectTrigger className="border-input focus:ring-2 focus:ring-primary/30">
-                      <SelectValue placeholder="Select priority" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="low">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 rounded-full bg-[#10B981] mr-2"></div>
-                          <span>Low</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="medium">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 rounded-full bg-[#F59E0B] mr-2"></div>
-                          <span>Medium</span>
-                        </div>
-                      </SelectItem>
-                      <SelectItem value="high">
-                        <div className="flex items-center">
-                          <div className="w-2 h-2 rounded-full bg-[#DC2626] mr-2"></div>
-                          <span>High</span>
-                        </div>
-                      </SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <Label className="flex items-center text-sm font-medium">
-                    <span className="inline-flex items-center">
-                      <CalendarIcon className="h-3.5 w-3.5 mr-2 text-primary" />
-                      Due Date
-                    </span>
-                  </Label>
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant={"outline"}
-                        size={"sm"}
-                        className="w-full justify-start text-left font-normal border-input focus:ring-2 focus:ring-primary/30"
-                        disabled={isEditing && selectedTask?.completed}
-                      >
-                        <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
-                        {newTask.due_date ? (
-                          formatInTimeZone(newTask.due_date, timezone, 'PPP p')
-                        ) : (
-                          <span>Pick date</span>
-                        )}
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent className="w-auto p-0" align="start" side="top">
-                      <Calendar
-                        mode="single"
-                        selected={newTask.due_date instanceof Date ? newTask.due_date : undefined}
-                        onSelect={(date) => {
-                          if (date) {
-                            const newDate = new Date(date);
-                            if (newTask.due_date instanceof Date) {
-                              newDate.setHours(
-                                newTask.due_date.getHours(),
-                                newTask.due_date.getMinutes()
-                              );
-                            } else {
-                              // Default to current time
-                              const now = new Date();
-                              newDate.setHours(now.getHours(), now.getMinutes());
-                            }
-                            setNewTask({ ...newTask, due_date: newDate });
-                          } else {
-                            setNewTask({ ...newTask, due_date: null });
-                          }
-                        }}
-                        initialFocus
-                        disabled={isEditing && selectedTask?.completed}
-                      />
-                      {newTask.due_date && !newTask.all_day && (
-                        <TimeSelect
-                          value={newTask.due_date}
-                          onChange={(newDate) => {
-                            setNewTask({ ...newTask, due_date: newDate });
-                          }}
-                          compact={true}
-                          disabled={isEditing && selectedTask?.completed}
-                        />
-                      )}
-                    </PopoverContent>
-                  </Popover>
-                </div>
-                <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md">
-                  <Label className="flex items-center text-sm font-medium">
-                    <Clock className="h-3.5 w-3.5 mr-2 text-primary" />
-                    All Day
-                  </Label>
-                  <div className="flex-1"></div>
-                  <Switch
-                    checked={newTask.all_day}
-                    onCheckedChange={(checked) => setNewTask(prev => ({ ...prev, all_day: checked }))}
-                    aria-label="Toggle all-day"
-                    disabled={isEditing && selectedTask?.completed}
-                  />
-                </div>
+      {/* Appointment Dialog */}
+      <Dialog open={appointmentDialogOpen} onOpenChange={setAppointmentDialogOpen}>
+        <DialogContent className="sm:max-w-[500px] max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center text-lg font-semibold">
+              {selectedAppointmentId ? (
+                <>
+                  <Pencil className="h-5 w-5 mr-2 text-purple-500" />
+                  Edit Appointment
+                </>
+              ) : (
+                <>
+                  <Clock className="h-5 w-5 mr-2 text-purple-500" />
+                  New Appointment
+                </>
+              )}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {selectedAppointmentId 
+                ? "Make changes to your appointment details below."
+                : "Fill in the details to schedule a new appointment."}
+            </DialogDescription>
+          </DialogHeader>
+          
+          <Form {...appointmentForm}>
+            <form
+              onSubmit={appointmentForm.handleSubmit((data) => {
+                const startDate = new Date(data.date);
+                startDate.setHours(data.startHour, data.startMinute, 0, 0);
+                const endDate = new Date(data.date);
+                endDate.setHours(data.endHour, data.endMinute, 0, 0);
+
+                if (selectedAppointmentId) {
+                  // Extract update_all_recurring from data or default to false
+                  const { update_all_recurring = false, ...formData } = data;
+                  
+                  // Update existing appointment
+                  updateAppointmentMutation.mutate({
+                    id: selectedAppointmentId.toString(),
+                    title: formData.title,
+                    description: formData.description || "",
+                    start_time: Math.floor(startDate.getTime() / 1000),
+                    end_time: Math.floor(endDate.getTime() / 1000),
+                    all_day: formData.allDay,
+                    is_recurring: formData.isRecurring,
+                    recurrence_pattern: formData.isRecurring ? formData.recurrencePattern : null,
+                    recurrence_interval: formData.isRecurring ? formData.recurrenceInterval : null,
+                    recurrence_end_date: formData.isRecurring && formData.recurrenceEndDate 
+                      ? Math.floor(formData.recurrenceEndDate.getTime() / 1000) 
+                      : null,
+                    update_all_recurring: update_all_recurring
+                  });
+                } else {
+                  // Create new appointment
+                  createAppointmentMutation.mutate(data);
+                }
                 
-                {isEditing && selectedTask && (
-                  <div className="flex items-center gap-2 p-2 bg-muted/30 rounded-md mt-2">
-                    <Label className="flex items-center text-sm font-medium">
-                      <span className="inline-flex items-center">
-                        <span className="relative flex h-3.5 w-3.5 mr-2">
-                          <span className={selectedTask.completed ? "relative inline-flex rounded-full h-3.5 w-3.5 bg-green-600" : "relative inline-flex rounded-full h-3.5 w-3.5 border-2 border-muted-foreground"}></span>
-                          {selectedTask.completed && <span className="absolute inset-0 flex items-center justify-center text-white text-[8px]">✓</span>}
-                        </span>
-                        Completed
-                      </span>
-                    </Label>
-                    <div className="flex-1"></div>
-                    <Switch
-                      checked={selectedTask.completed}
-                      onCheckedChange={(checked) => {
-                        if (selectedTask) {
-                          updateTaskMutation.mutate({
-                            id: selectedTask.id,
-                            completed: checked
-                          });
-                        }
-                      }}
-                      aria-label="Toggle completed"
+                setAppointmentDialogOpen(false);
+              })}
+              className="space-y-4 mt-2"
+            >
+              <FormField
+                control={appointmentForm.control}
+                name="title"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Title</FormLabel>
+                    <FormControl>
+                      <Input placeholder="Enter appointment title" {...field} />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={appointmentForm.control}
+                name="description"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Description</FormLabel>
+                    <FormControl>
+                      <Textarea 
+                        placeholder="Enter appointment details" 
+                        {...field} 
+                        value={field.value || ""}
+                      />
+                    </FormControl>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={appointmentForm.control}
+                name="date"
+                render={({ field }) => (
+                  <FormItem className="flex flex-col">
+                    <FormLabel>Date</FormLabel>
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <FormControl>
+                          <Button
+                            variant={"outline"}
+                            className={cn(
+                              "w-full pl-3 text-left font-normal",
+                              !field.value && "text-muted-foreground"
+                            )}
+                          >
+                            {field.value ? (
+                              format(field.value, "PPP")
+                            ) : (
+                              <span>Pick a date</span>
+                            )}
+                            <CalendarIcon className="ml-auto h-4 w-4 opacity-50" />
+                          </Button>
+                        </FormControl>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-auto p-0" align="start">
+                        <Calendar
+                          mode="single"
+                          selected={field.value}
+                          onSelect={field.onChange}
+                          initialFocus
+                        />
+                      </PopoverContent>
+                    </Popover>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+              
+              <FormField
+                control={appointmentForm.control}
+                name="allDay"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4">
+                    <FormControl>
+                      <Checkbox
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                    <div className="space-y-1 leading-none">
+                      <FormLabel>All-day appointment</FormLabel>
+                    </div>
+                  </FormItem>
+                )}
+              />
+              
+              {appointmentForm.watch("isRecurring") && selectedAppointmentId && (
+                <FormField
+                  control={appointmentForm.control}
+                  name="update_all_recurring"
+                  render={({ field }) => (
+                    <FormItem className="flex flex-row items-start space-x-3 space-y-0 rounded-md border p-4 bg-amber-50">
+                      <FormControl>
+                        <Checkbox
+                          checked={field.value}
+                          onCheckedChange={field.onChange}
+                        />
+                      </FormControl>
+                      <div className="space-y-1 leading-none">
+                        <FormLabel>Update all recurring appointments</FormLabel>
+                        <p className="text-sm text-muted-foreground">
+                          When checked, this will apply changes to all instances of this recurring appointment.
+                        </p>
+                      </div>
+                    </FormItem>
+                  )}
+                />
+              )}
+              
+              {!appointmentForm.watch("allDay") && (
+                <div className="grid grid-cols-2 gap-4">
+                      <FormField
+                        control={appointmentForm.control}
+                        name="startHour"
+                        render={({ field }) => (
+                          <FormItem>
+                        <FormLabel>Start Time</FormLabel>
+                            <Select
+                              value={field.value.toString()}
+                          onValueChange={(v) => field.onChange(parseInt(v))}
+                            >
+                          <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Hour" />
+                              </SelectTrigger>
+                          </FormControl>
+                              <SelectContent>
+                            {Array.from({length: 24}, (_, i) => (
+                                  <SelectItem key={i} value={i.toString()}>
+                                    {i.toString().padStart(2, '0')}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                        <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                  
+                      <FormField
+                        control={appointmentForm.control}
+                        name="startMinute"
+                        render={({ field }) => (
+                          <FormItem>
+                        <FormLabel>Minute</FormLabel>
+                            <Select
+                              value={field.value.toString()}
+                          onValueChange={(v) => field.onChange(parseInt(v))}
+                            >
+                          <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Minute" />
+                              </SelectTrigger>
+                          </FormControl>
+                              <SelectContent>
+                            {[0, 15, 30, 45].map((minute) => (
+                                  <SelectItem key={minute} value={minute.toString()}>
+                                    {minute.toString().padStart(2, '0')}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                        <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                  
+                      <FormField
+                        control={appointmentForm.control}
+                        name="endHour"
+                        render={({ field }) => (
+                          <FormItem>
+                        <FormLabel>End Time</FormLabel>
+                            <Select
+                              value={field.value.toString()}
+                          onValueChange={(v) => field.onChange(parseInt(v))}
+                            >
+                          <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Hour" />
+                              </SelectTrigger>
+                          </FormControl>
+                              <SelectContent>
+                            {Array.from({length: 24}, (_, i) => (
+                                  <SelectItem key={i} value={i.toString()}>
+                                    {i.toString().padStart(2, '0')}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                        <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                  
+                      <FormField
+                        control={appointmentForm.control}
+                        name="endMinute"
+                        render={({ field }) => (
+                          <FormItem>
+                        <FormLabel>Minute</FormLabel>
+                            <Select
+                              value={field.value.toString()}
+                          onValueChange={(v) => field.onChange(parseInt(v))}
+                            >
+                          <FormControl>
+                              <SelectTrigger>
+                                <SelectValue placeholder="Minute" />
+                              </SelectTrigger>
+                          </FormControl>
+                              <SelectContent>
+                            {[0, 15, 30, 45].map((minute) => (
+                                  <SelectItem key={minute} value={minute.toString()}>
+                                    {minute.toString().padStart(2, '0')}
+                                  </SelectItem>
+                                ))}
+                              </SelectContent>
+                            </Select>
+                        <FormMessage />
+                          </FormItem>
+                        )}
+                      />
+                    </div>
+              )}
+              
+              {/* Recurring Appointment Options */}
+              <FormField
+                control={appointmentForm.control}
+                name="isRecurring"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-xs font-medium flex items-center">
+                        <svg 
+                          xmlns="http://www.w3.org/2000/svg" 
+                          className="h-3 w-3 mr-1.5 text-purple-500" 
+                          viewBox="0 0 24 24" 
+                          fill="none" 
+                          stroke="currentColor" 
+                          strokeWidth="2" 
+                          strokeLinecap="round" 
+                          strokeLinejoin="round"
+                        >
+                          <path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+                          <path d="M3 3v5h5" />
+                          <path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16" />
+                          <path d="M16 16h5v5" />
+                        </svg>
+                        Recurring Appointment
+                      </FormLabel>
+                  </div>
+                    <FormControl>
+                      <Switch
+                        checked={field.value}
+                        onCheckedChange={field.onChange}
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+              
+              {appointmentForm.watch("isRecurring") && (
+                <div className="space-y-3 p-2 bg-muted/30 rounded-md">
+                  <div className="grid grid-cols-2 gap-2">
+                    <FormField
+                      control={appointmentForm.control}
+                      name="recurrencePattern"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs font-medium">Repeat</FormLabel>
+                          <Select
+                            value={field.value || "weekly"}
+                            onValueChange={field.onChange}
+                          >
+                            <SelectTrigger className="h-8 text-xs">
+                              <SelectValue placeholder="Select pattern" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="daily">Daily</SelectItem>
+                              <SelectItem value="weekly">Weekly</SelectItem>
+                              <SelectItem value="monthly">Monthly</SelectItem>
+                              <SelectItem value="yearly">Yearly</SelectItem>
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                    
+                    <FormField
+                      control={appointmentForm.control}
+                      name="recurrenceInterval"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-xs font-medium">Every</FormLabel>
+                          <div className="flex items-center h-8">
+                            <FormControl>
+                              <Input 
+                                type="number" 
+                                {...field}
+                                value={field.value || 1}
+                                onChange={(e) => field.onChange(parseInt(e.target.value) || 1)}
+                                min="1" 
+                                className="h-8 w-12 text-xs"
+                              />
+                            </FormControl>
+                            <span className="text-xs ml-2">
+                              {appointmentForm.watch("recurrencePattern") === "daily" && "day(s)"}
+                              {appointmentForm.watch("recurrencePattern") === "weekly" && "week(s)"}
+                              {appointmentForm.watch("recurrencePattern") === "monthly" && "month(s)"}
+                              {appointmentForm.watch("recurrencePattern") === "yearly" && "year(s)"}
+                            </span>
+                </div>
+                          <FormMessage />
+                        </FormItem>
+                      )}
                     />
                   </div>
-                )}
-              </div>
-              <DialogFooter className="flex justify-between items-center">
-                <div>
-                  {isEditing && selectedTask && !selectedTask.completed && (
-                    <Button
-                      variant="destructive"
-                      onClick={() => {
-                        if (selectedTask) {
-                          deleteTaskMutation.mutate(selectedTask.id);
-                        }
-                      }}
-                      disabled={deleteTaskMutation.isPending}
-                      size="sm"
-                      className="bg-red-600 hover:bg-red-700"
-                    >
-                      {deleteTaskMutation.isPending ? (
-                        <Loader2 className="h-4 w-4 animate-spin" />
-                      ) : (
-                        <>
-                          <Trash2 className="h-4 w-4 mr-1" />
-                          Delete
-                        </>
-                      )}
-                    </Button>
-                  )}
-                </div>
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => {
-                      setShowTaskDialog(false);
-                      setTaskDialogOpen(false);
-                      setIsEditing(false);
-                    }}
-                  >
-                    {isEditing && selectedTask?.completed ? "Close" : "Cancel"}
-                  </Button>
-                  {(!isEditing || (isEditing && !selectedTask?.completed)) && (
-                    <Button
-                      onClick={isEditing ? handleUpdateTask : handleCreateTask}
-                      disabled={isEditing ? updateTaskMutation.isPending : createTaskMutation.isPending}
-                      className="bg-primary hover:bg-primary/90"
-                    >
-                      {isEditing ? (
-                        updateTaskMutation.isPending ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Updating...
-                          </>
-                        ) : (
-                          <>
-                            <Pencil className="mr-2 h-4 w-4" />
-                            Update Task
-                          </>
-                        )
-                      ) : (
-                        createTaskMutation.isPending ? (
-                          <>
-                            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                            Creating...
-                          </>
-                        ) : (
-                          <>
-                            <Plus className="mr-2 h-4 w-4" />
-                            Create Task
-                          </>
-                        )
-                      )}
-                    </Button>
-                  )}
-                </div>
-              </DialogFooter>
-            </DialogContent>
-          </Dialog>
-
-          {/* Appointment Dialog */}
-          <Dialog open={appointmentDialogOpen} onOpenChange={setAppointmentDialogOpen}>
-            <DialogContent className="sm:max-w-[500px]">
-              <DialogHeader>
-                <DialogTitle className="flex items-center text-lg font-semibold">
-                  {selectedAppointmentId ? (
-                    <>
-                      <Pencil className="h-5 w-5 mr-2 text-purple-500" />
-                      Edit Appointment
-                    </>
-                  ) : (
-                    <>
-                      <Clock className="h-5 w-5 mr-2 text-purple-500" />
-                      Create New Appointment
-                    </>
-                  )}
-                </DialogTitle>
-                <DialogDescription className="text-muted-foreground">
-                  {selectedAppointmentId 
-                    ? "Make changes to your appointment details below."
-                    : "Fill in the details to create a new appointment."}
-                </DialogDescription>
-              </DialogHeader>
-              <Form {...appointmentForm}>
-                <form onSubmit={appointmentForm.handleSubmit((data) => {
-                  if (selectedAppointmentId) {
-                    // Update existing appointment
-                    const startDate = new Date(data.date);
-                    startDate.setHours(data.startHour, data.startMinute, 0, 0);
-                    const endDate = new Date(data.date);
-                    endDate.setHours(data.endHour, data.endMinute, 0, 0);
-
-                    updateAppointmentMutation.mutate({
-                      id: selectedAppointmentId.toString(),
-                      start_time: Math.floor(startDate.getTime() / 1000),
-                      end_time: Math.floor(endDate.getTime() / 1000),
-                      title: data.title,
-                      description: data.description,
-                      all_day: data.allDay
-                    }, {
-                      onSuccess: () => {
-                        // Close dialog and refresh calendar
-                        setAppointmentDialogOpen(false);
-                        refreshCalendar();
-                      }
-                    });
-                  } else {
-                    // Create new appointment
-                    createAppointmentMutation.mutate(data, {
-                      onSuccess: () => {
-                        // Close dialog and refresh calendar
-                        setAppointmentDialogOpen(false);
-                        refreshCalendar();
-                      }
-                    });
-                  }
-                })} className="space-y-4 mt-4">
+                  
                   <FormField
                     control={appointmentForm.control}
-                    name="title"
+                    name="recurrenceEndDate"
                     render={({ field }) => (
                       <FormItem>
-                        <FormLabel className="flex items-center text-sm font-medium">Title</FormLabel>
-                        <FormControl>
-                          <Input {...field} placeholder="Enter appointment title" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={appointmentForm.control}
-                    name="description"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="flex items-center text-sm font-medium">Description</FormLabel>
-                        <FormControl>
-                          <Textarea {...field} placeholder="Enter appointment description" />
-                        </FormControl>
-                        <FormMessage />
-                      </FormItem>
-                    )}
-                  />
-                  <FormField
-                    control={appointmentForm.control}
-                    name="date"
-                    render={({ field }) => (
-                      <FormItem>
-                        <FormLabel className="flex items-center text-sm font-medium">Date</FormLabel>
+                        <FormLabel className="text-xs font-medium">End Recurrence</FormLabel>
                         <Popover>
                           <PopoverTrigger asChild>
                             <FormControl>
-                              <Button variant="outline" className="w-full pl-3 text-left font-normal">
+                              <Button
+                                variant="outline"
+                                className="h-8 w-full justify-start pl-3 text-left font-normal text-xs"
+                              >
+                                <CalendarIcon className="mr-2 h-3 w-3" />
                                 {field.value ? (
                                   format(field.value, "PPP")
                                 ) : (
-                                  <span>Pick a date</span>
+                                  <span>No end date</span>
                                 )}
                               </Button>
                             </FormControl>
@@ -2989,7 +4244,7 @@ export default function CalendarView() {
                           <PopoverContent className="w-auto p-0" align="start">
                             <Calendar
                               mode="single"
-                              selected={field.value}
+                              selected={field.value || undefined}
                               onSelect={field.onChange}
                               initialFocus
                             />
@@ -2999,159 +4254,108 @@ export default function CalendarView() {
                       </FormItem>
                     )}
                   />
-                  <FormField
-                    control={appointmentForm.control}
-                    name="allDay"
-                    render={({ field }) => (
-                      <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
-                        <div className="space-y-0.5">
-                          <FormLabel className="text-base">All Day</FormLabel>
-                        </div>
-                        <FormControl>
-                          <Switch
-                            checked={field.value}
-                            onCheckedChange={field.onChange}
-                          />
-                        </FormControl>
-                      </FormItem>
-                    )}
-                  />
-                  {!appointmentForm.watch("allDay") && (
-                    <div className="grid grid-cols-2 gap-4">
-                      <div className="space-y-2">
-                        <Label>Start Time</Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <FormField
-                            control={appointmentForm.control}
-                            name="startHour"
-                            render={({ field }) => (
-                              <FormItem>
-                                <Select
-                                  value={field.value.toString()}
-                                  onValueChange={(value) => field.onChange(parseInt(value))}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Hour" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {Array.from({ length: 24 }, (_, i) => (
-                                      <SelectItem key={i} value={i.toString()}>
-                                        {i.toString().padStart(2, '0')}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </FormItem>
-                            )}
-                          />
-                          <FormField
-                            control={appointmentForm.control}
-                            name="startMinute"
-                            render={({ field }) => (
-                              <FormItem>
-                                <Select
-                                  value={field.value.toString()}
-                                  onValueChange={(value) => field.onChange(parseInt(value))}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Minute" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {Array.from({ length: 12 }, (_, i) => i * 5).map((minute) => (
-                                      <SelectItem key={minute} value={minute.toString()}>
-                                        {minute.toString().padStart(2, '0')}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <Label>End Time</Label>
-                        <div className="grid grid-cols-2 gap-2">
-                          <FormField
-                            control={appointmentForm.control}
-                            name="endHour"
-                            render={({ field }) => (
-                              <FormItem>
-                                <Select
-                                  value={field.value.toString()}
-                                  onValueChange={(value) => field.onChange(parseInt(value))}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Hour" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {Array.from({ length: 24 }, (_, i) => (
-                                      <SelectItem key={i} value={i.toString()}>
-                                        {i.toString().padStart(2, '0')}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </FormItem>
-                            )}
-                          />
-                          <FormField
-                            control={appointmentForm.control}
-                            name="endMinute"
-                            render={({ field }) => (
-                              <FormItem>
-                                <Select
-                                  value={field.value.toString()}
-                                  onValueChange={(value) => field.onChange(parseInt(value))}
-                                >
-                                  <SelectTrigger>
-                                    <SelectValue placeholder="Minute" />
-                                  </SelectTrigger>
-                                  <SelectContent>
-                                    {Array.from({ length: 12 }, (_, i) => i * 5).map((minute) => (
-                                      <SelectItem key={minute} value={minute.toString()}>
-                                        {minute.toString().padStart(2, '0')}
-                                      </SelectItem>
-                                    ))}
-                                  </SelectContent>
-                                </Select>
-                              </FormItem>
-                            )}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                  <DialogFooter>
-                    {selectedAppointmentId && (
-                      <Button
-                        type="button"
-                        variant="destructive"
-                        onClick={() => {
-                          // Handle appointment deletion
-                          if (selectedAppointmentId) {
-                            deleteAppointmentMutation.mutate(selectedAppointmentId.toString(), {
-                              onSuccess: () => {
-                                setAppointmentDialogOpen(false);
-                                refreshCalendar();
-                              }
-                            });
-                          }
-                        }}
-                        className="mr-auto"
-                      >
-                        Delete
-                      </Button>
-                    )}
-                    <Button type="submit" className="bg-purple-600 hover:bg-purple-700">
+                </div>
+              )}
+              
+              <DialogFooter>
+                  <Button
+                    type="button"
+                  variant="outline" 
+                  onClick={() => setAppointmentDialogOpen(false)}
+                >
+                  Cancel
+                  </Button>
+                <Button 
+                  type="submit" 
+                  className="mr-2 bg-purple-500 hover:bg-purple-600"
+                  disabled={createAppointmentMutation.isPending}
+                >
+                  {createAppointmentMutation.isPending ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    <>
+                      <Check className="mr-2 h-4 w-4" />
                       {selectedAppointmentId ? 'Update Appointment' : 'Create Appointment'}
-                    </Button>
-                  </DialogFooter>
-                </form>
-              </Form>
-            </DialogContent>
-          </Dialog>
-        </div>
-      </div>
-  );
+                    </>
+                  )}
+                </Button>
+              </DialogFooter>
+            </form>
+          </Form>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add delete confirmation dialog */}
+      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+        <DialogContent className="sm:max-w-[425px]">
+          <DialogHeader>
+            <DialogTitle className="flex items-center">
+              <Trash2 className="h-5 w-5 mr-2 text-destructive" />
+              Confirm Deletion
+            </DialogTitle>
+            <DialogDescription>
+              Are you sure you want to delete this meeting? This action cannot be undone.
+            </DialogDescription>
+          </DialogHeader>
+          
+          {meetingToDelete && (
+            <div className="py-4">
+              <div className="rounded-lg border p-4 bg-destructive/5 text-destructive-foreground">
+                <p className="text-sm font-medium mb-2">
+                  You are about to delete:
+                </p>
+                <div className="space-y-2">
+                  <p className="text-sm font-medium">
+                    {meetingToDelete.title}
+                  </p>
+                  <p className="text-xs text-muted-foreground flex items-center">
+                    <CalendarIcon className="h-3 w-3 mr-1 opacity-70" />
+                    {formatDateForDisplay(new Date(meetingToDelete.start_time * 1000))}
+                    {!meetingToDelete.all_day && (
+                      <> • {format(new Date(meetingToDelete.start_time * 1000), "h:mm a")} - {format(new Date(meetingToDelete.end_time * 1000), "h:mm a")}</>
+                    )}
+                  </p>
+                  {meetingToDelete.location && (
+                    <p className="text-xs text-muted-foreground flex items-center mt-1">
+                      <Video className="h-3 w-3 mr-1 opacity-70" />
+                      Meeting link
+                    </p>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <DialogFooter className="flex space-x-2 mt-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                setMeetingToDelete(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={handleConfirmDelete}
+              variant="destructive"
+              disabled={deleteMeetingMutation.isPending}
+            >
+              {deleteMeetingMutation.isPending ? 
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Deleting...
+                </> : 
+                "Delete Meeting"
+              }
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  </div>
+);
 }

@@ -90,13 +90,13 @@ export async function getStudySession(req: ExpressRequest, id: string) {
 }
 
 export async function createStudySession(req: ExpressRequest) {
-  console.log("Starting createStudySession function");
+  
   
   const user = await getUserFromRequest(req);
-  console.log("User authentication result:", user);
+  
   
   if (!user) {
-    console.log("Authentication failed - no user found");
+    
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
       status: 401,
       headers: { "Content-Type": "application/json" },
@@ -104,15 +104,15 @@ export async function createStudySession(req: ExpressRequest) {
   }
 
   try {
-    console.log("Parsing request body");
-    const body = req.body; // Express already parses JSON body
-    console.log("Request body:", body);
     
-    console.log("Validating data with schema");
+    const body = req.body; // Express already parses JSON body
+    
+    
+    
     const validatedData = insertStudySessionSchema.parse(body);
-    console.log("Validated data:", validatedData);
+    
 
-    console.log("Inserting into database");
+    
     const newStudySession = await db
       .insert(studySessions)
       .values({
@@ -120,7 +120,7 @@ export async function createStudySession(req: ExpressRequest) {
         user_id: user.id,
       })
       .returning();
-    console.log("Database insert result:", newStudySession);
+    
 
     return new Response(JSON.stringify(newStudySession[0]), {
       status: 201,
@@ -129,7 +129,7 @@ export async function createStudySession(req: ExpressRequest) {
   } catch (error) {
     console.error("Error creating study session:", error);
     if (error instanceof z.ZodError) {
-      console.log("Validation error:", error.errors);
+      
       return new Response(JSON.stringify({ error: error.errors }), {
         status: 400,
         headers: { "Content-Type": "application/json" },

@@ -6,6 +6,9 @@ import Dashboard from './components/Dashboard';
 import { Toaster } from './components/ui/toaster';
 import { useEffect, Suspense, lazy } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
+import TermsPage from './pages/terms';
+import PrivacyPage from './pages/privacy';
+
 
 // Error Fallback Component
 function ErrorFallback({ error, resetErrorBoundary }: { error: Error; resetErrorBoundary: () => void }) {
@@ -58,6 +61,35 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   );
 }
 
+// Add a new component for admin route protection
+function AdminRoute({ children }: { children: React.ReactNode }) {
+  const { user, isAuthenticated, loading } = useAuth();
+  
+  if (loading) {
+    return <LoadingSpinner />;
+  }
+  
+  if (!isAuthenticated) {
+    return <Navigate to="/auth" />;
+  }
+  
+  // Check if user is an admin
+  if (!user || user.role !== 'admin') {
+    return <Navigate to="/" replace />;
+  }
+  
+  return (
+    <ErrorBoundary
+      FallbackComponent={ErrorFallback}
+      onReset={() => window.location.reload()}
+    >
+      <Suspense fallback={<LoadingSpinner />}>
+        {children}
+      </Suspense>
+    </ErrorBoundary>
+  );
+}
+
 function AppContent() {
   const { isAuthenticated, loading, error, clearErrors } = useAuth();
 
@@ -85,6 +117,11 @@ function AppContent() {
           path="/auth" 
           element={isAuthenticated ? <Navigate to="/" /> : <AuthPage />} 
         />
+        
+        {/* Public legal pages */}
+        <Route path="/terms" element={<TermsPage />} />
+        <Route path="/privacy" element={<PrivacyPage />} />
+        
         <Route
           path="/*"
           element={

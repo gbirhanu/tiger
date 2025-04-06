@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import axios from 'axios';
-import { User } from '../../../shared/schema';
+import { User, Subscription } from '../../../shared/schema';
 import { useAuth } from '../contexts/AuthContext';
-import { formatDistanceToNow, formatRelative } from 'date-fns';
-import { formatDate, getUserTimezone } from '@/lib/timezone';
+import { useMarketingSettings } from '@/lib/hooks/useMarketingSettings';
+import { getUserPaymentHistory, grantProSubscription as grantProApi, 
+  resetGeminiUsage as resetGeminiApi, revokeSubscription as revokeApi,
+  syncUserSubscription } from '@/lib/api';
+import { toast } from '@/hooks/use-toast';
+
 import {
   Table,
   TableBody,
@@ -38,8 +42,18 @@ import { Badge } from './ui/badge';
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from './ui/card';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { Skeleton } from './ui/skeleton';
-import { toast } from "@/hooks/use-toast";
-import { MoreHorizontal, UserCheck, UserX, Shield, ShieldAlert, RefreshCw, Search, UserPlus, Activity } from 'lucide-react';
+import { MoreHorizontal, UserCheck, UserX, Shield, ShieldAlert, RefreshCw, Search, UserPlus, Activity, CreditCard, User2Icon, UserIcon } from 'lucide-react';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import { Separator } from './ui/separator';
+import { UseMutationResult } from '@tanstack/react-query';
+import { UserTable } from './UserTable';
 
 // Create an axios instance with auth token
 const api = axios.create({
@@ -50,9 +64,10 @@ const api = axios.create({
   withCredentials: true,
 });
 
-// Extended User type with additional fields for the UI
-interface ExtendedUser extends User {
-  lastLoginFormatted?: string;
+// Interface for updating user role
+interface UpdateUserRoleRequest {
+  userId: number;
+  role: 'admin' | 'user';
 }
 
 // Interface for updating user status
@@ -61,11 +76,26 @@ interface UpdateUserStatusRequest {
   status: 'active' | 'inactive' | 'suspended';
 }
 
-// Interface for updating user role
-interface UpdateUserRoleRequest {
-  userId: number;
-  role: 'admin' | 'user';
+// Extended User type with additional fields for the UI
+interface ExtendedUser extends User {
+  lastLoginFormatted?: string;
+  gemini_calls_count?: number;
+  // Updated subscription fields
+  subscription?: Omit<Subscription, 'user_id' | 'created_at' | 'updated_at'>;
+  // Payment history fields
+  has_payment?: boolean;
+  payment_id?: number;
+  payment_plan?: string;
+  payment_expiry?: number;
+  payment_expired?: boolean;
+  needs_sync?: boolean;
+  settings?: {
+    is_pro: boolean;
+    subscription_end_date?: number;
+  };
 }
+
+
 
 // Status Explanation Component
 function StatusExplanation() {
@@ -115,29 +145,6 @@ function StatusExplanation() {
   );
 }
 
-// Format date to show both absolute time and relative time
-const formatDateTime = (date: Date | number | string | null | undefined): React.ReactNode => {
-  if (!date) return 'Never';
-  
-  try {
-    const dateObj = typeof date === 'number' 
-      ? new Date(date < 10000000000 ? date * 1000 : date) 
-      : new Date(date);
-    
-    const absoluteTime = formatDate(dateObj, 'PPp');
-    const relativeTime = formatDistanceToNow(dateObj, { addSuffix: true });
-    
-    return (
-      <div className="text-xs" title={absoluteTime}>
-        <span>{absoluteTime}</span>
-        <div className="text-muted-foreground mt-0.5">({relativeTime})</div>
-      </div>
-    );
-  } catch (error) {
-    console.error('Error formatting date:', error);
-    return 'Invalid date';
-  }
-};
 
 export default function UserManagement() {
   const { user: currentUser, sessionToken } = useAuth();
@@ -145,9 +152,16 @@ export default function UserManagement() {
   const [selectedUser, setSelectedUser] = useState<ExtendedUser | null>(null);
   const [isStatusDialogOpen, setIsStatusDialogOpen] = useState(false);
   const [isRoleDialogOpen, setIsRoleDialogOpen] = useState(false);
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false);
   const [newStatus, setNewStatus] = useState<'active' | 'inactive' | 'suspended'>('active');
   const [newRole, setNewRole] = useState<'admin' | 'user'>('user');
   const queryClient = useQueryClient();
+  // Add pagination state
+  const [currentPage, setCurrentPage] = useState(1);
+  const [itemsPerPage, setItemsPerPage] = useState(10);
+
+  // Get marketing settings
+  const { showSubscriptionFeatures } = useMarketingSettings();
 
   // Update API interceptor to use the current sessionToken
   useEffect(() => {
@@ -175,6 +189,17 @@ export default function UserManagement() {
       // Return users without additional formatting since we'll use formatDateTime directly
       return response.data.users;
     },
+  });
+
+  // Filter users based on search term
+  const filteredUsers = users?.filter((user: ExtendedUser) => {
+    const searchLower = searchTerm.toLowerCase();
+    return (
+      user.name?.toLowerCase().includes(searchLower) ||
+      user.email.toLowerCase().includes(searchLower) ||
+      user.role.toLowerCase().includes(searchLower) ||
+      user.status?.toLowerCase().includes(searchLower)
+    );
   });
 
   // Update user status mutation
@@ -221,17 +246,6 @@ export default function UserManagement() {
         variant: "destructive",
       });
     },
-  });
-
-  // Filter users based on search term
-  const filteredUsers = users?.filter((user: ExtendedUser) => {
-    const searchLower = searchTerm.toLowerCase();
-    return (
-      user.name?.toLowerCase().includes(searchLower) ||
-      user.email.toLowerCase().includes(searchLower) ||
-      user.role.toLowerCase().includes(searchLower) ||
-      user.status?.toLowerCase().includes(searchLower)
-    );
   });
 
   const handleStatusChange = (user: ExtendedUser, status: 'active' | 'inactive' | 'suspended') => {
@@ -302,6 +316,121 @@ export default function UserManagement() {
     );
   };
 
+  // Add mutations for managing a user's subscription
+  const grantProSubscription = useMutation({
+    mutationFn: async (userId: number) => {
+      return await grantProApi(userId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({
+        title: "Subscription granted",
+        description: "User has been upgraded to Pro for 30 days",
+      });
+      // Close the subscription modal if it exists
+      setShowSubscriptionModal(false);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error granting subscription",
+        description: error.message || "Authentication required. Please refresh the page and try again.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const revokeSubscription = useMutation({
+    mutationFn: async (userId: number) => {
+      return await revokeApi(userId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({
+        title: "Subscription revoked",
+        description: "User has been downgraded to Free plan",
+      });
+      // Close the subscription modal if it exists
+      setShowSubscriptionModal(false);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error revoking subscription",
+        description: error.message || "Authentication required. Please refresh the page and try again.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  const resetGeminiUsage = useMutation({
+    mutationFn: async (userId: number) => {
+      return await resetGeminiApi(userId);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({
+        title: "API usage reset",
+        description: "Gemini API usage count has been reset",
+      });
+      // Close the subscription modal if it exists
+      setShowSubscriptionModal(false);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error resetting API usage",
+        description: error.message || "Authentication required. Please refresh the page and try again.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  // Add mutation for syncing a user's subscription
+  const syncSubscription = useMutation({
+    mutationFn: async (userId: number) => {
+      // Pass the sessionToken directly to the API function
+      return await syncUserSubscription(userId);
+    },
+    onSuccess: (data) => {
+      queryClient.invalidateQueries({ queryKey: ['users'] });
+      toast({
+        title: "Subscription synced",
+        description: `User subscription updated to ${data.subscription_plan}`,
+      });
+      // Close the subscription modal if it exists
+      setShowSubscriptionModal(false);
+    },
+    onError: (error: any) => {
+      toast({
+        title: "Error syncing subscription",
+        description: error.message || "Authentication required. Please refresh the page and try again.",
+        variant: "destructive",
+      });
+    }
+  });
+
+  // Add query to fetch payment history for a user
+  const fetchPaymentHistory = async (userId: number) => {
+    try {
+      // Import the API function dynamically to avoid circular dependencies
+      const { getUserPaymentHistory } = await import('@/lib/api');
+      return await getUserPaymentHistory(userId);
+    } catch (error) {
+      console.error("Error fetching payment history:", error);
+      toast({
+        title: "Error fetching payment history",
+        description: error instanceof Error ? error.message : "An error occurred",
+        variant: "destructive",
+      });
+      return null;
+    }
+  };
+
+  // Add payment history query
+  const { data: paymentHistory, isLoading: isLoadingPayments } = useQuery({
+    queryKey: ['paymentHistory', selectedUser?.id],
+    queryFn: () => selectedUser?.id ? fetchPaymentHistory(selectedUser.id) : null,
+    enabled: !!selectedUser?.id && showSubscriptionModal,
+  });
+
   if (error) {
     return (
       <div className="p-4">
@@ -348,16 +477,58 @@ export default function UserManagement() {
 
       <Tabs defaultValue="all" className="w-full">
         <TabsList>
-          <TabsTrigger value="all">All Users</TabsTrigger>
-          <TabsTrigger value="active">Active</TabsTrigger>
-          <TabsTrigger value="inactive">Inactive</TabsTrigger>
-          <TabsTrigger value="admin">Admins</TabsTrigger>
+          <TabsTrigger value="all">
+            All Users
+            {filteredUsers?.length > 0 && (
+              <Badge variant="secondary" className="ml-2 px-1 py-0 text-xs">
+                {filteredUsers.length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="active">
+            Active
+            {filteredUsers?.filter((user: ExtendedUser) => user.status === 'active').length > 0 && (
+              <Badge variant="secondary" className="ml-2 px-1 py-0 text-xs">
+                {filteredUsers.filter((user: ExtendedUser) => user.status === 'active').length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="inactive">
+            Inactive
+            {filteredUsers?.filter((user: ExtendedUser) => user.status === 'inactive' || user.status === 'suspended').length > 0 && (
+              <Badge variant="secondary" className="ml-2 px-1 py-0 text-xs">
+                {filteredUsers.filter((user: ExtendedUser) => user.status === 'inactive' || user.status === 'suspended').length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="admin">
+            Admins
+            {filteredUsers?.filter((user: ExtendedUser) => user.role === 'admin').length > 0 && (
+              <Badge variant="secondary" className="ml-2 px-1 py-0 text-xs">
+                {filteredUsers.filter((user: ExtendedUser) => user.role === 'admin').length}
+              </Badge>
+            )}
+          </TabsTrigger>
+          {/* Only show the Pro Users tab if subscription features are enabled */}
+          {showSubscriptionFeatures && (
+            <TabsTrigger value="pro">
+              Pro Users
+              {filteredUsers?.filter((user: ExtendedUser) => 
+                user.settings?.is_pro
+              ).length > 0 && (
+                <Badge variant="secondary" className="ml-2 px-1 py-0 text-xs">
+                  {filteredUsers.filter((user: ExtendedUser) => 
+                    user.settings?.is_pro
+                  ).length}
+                </Badge>
+              )}
+            </TabsTrigger>
+          )}
         </TabsList>
         <TabsContent value="all" className="mt-4">
           {isLoading ? (
             <div className="space-y-3">
               <Skeleton className="h-8 w-full" />
-              <Skeleton className="h-20 w-full" />
               <Skeleton className="h-20 w-full" />
               <Skeleton className="h-20 w-full" />
             </div>
@@ -370,6 +541,14 @@ export default function UserManagement() {
               renderStatusBadge={renderStatusBadge}
               renderRoleBadge={renderRoleBadge}
               renderOnlineStatus={renderOnlineStatus}
+              currentPage={currentPage}
+              setCurrentPage={setCurrentPage}
+              itemsPerPage={itemsPerPage}
+              setItemsPerPage={setItemsPerPage}
+              grantProSubscription={grantProSubscription}
+              resetGeminiUsage={resetGeminiUsage}
+              revokeSubscription={revokeSubscription}
+              syncSubscription={syncSubscription}
             />
           )}
         </TabsContent>
@@ -389,6 +568,14 @@ export default function UserManagement() {
               renderStatusBadge={renderStatusBadge}
               renderRoleBadge={renderRoleBadge}
               renderOnlineStatus={renderOnlineStatus}
+              currentPage={currentPage}
+              setCurrentPage={setCurrentPage}
+              itemsPerPage={itemsPerPage}
+              setItemsPerPage={setItemsPerPage}
+              grantProSubscription={grantProSubscription}
+              resetGeminiUsage={resetGeminiUsage}
+              revokeSubscription={revokeSubscription}
+              syncSubscription={syncSubscription}
             />
           )}
         </TabsContent>
@@ -407,6 +594,14 @@ export default function UserManagement() {
               renderStatusBadge={renderStatusBadge}
               renderRoleBadge={renderRoleBadge}
               renderOnlineStatus={renderOnlineStatus}
+              currentPage={currentPage}
+              setCurrentPage={setCurrentPage}
+              itemsPerPage={itemsPerPage}
+              setItemsPerPage={setItemsPerPage}
+              grantProSubscription={grantProSubscription}
+              resetGeminiUsage={resetGeminiUsage}
+              revokeSubscription={revokeSubscription}
+              syncSubscription={syncSubscription}
             />
           )}
         </TabsContent>
@@ -425,9 +620,49 @@ export default function UserManagement() {
               renderStatusBadge={renderStatusBadge}
               renderRoleBadge={renderRoleBadge}
               renderOnlineStatus={renderOnlineStatus}
+              currentPage={currentPage}
+              setCurrentPage={setCurrentPage}
+              itemsPerPage={itemsPerPage}
+              setItemsPerPage={setItemsPerPage}
+              grantProSubscription={grantProSubscription}
+              resetGeminiUsage={resetGeminiUsage}
+              revokeSubscription={revokeSubscription}
+              syncSubscription={syncSubscription}
             />
           )}
         </TabsContent>
+        {/* Only render the Pro tab content if subscription features are enabled */}
+        {showSubscriptionFeatures && (
+          <TabsContent value="pro" className="mt-4">
+            {isLoading ? (
+              <div className="space-y-3">
+                <Skeleton className="h-8 w-full" />
+                <Skeleton className="h-20 w-full" />
+              </div>
+            ) : (
+              <UserTable 
+                users={(filteredUsers || []).filter((user: ExtendedUser) => {
+                  // Consider a user as Pro if they have is_pro set to true in their settings
+                  return user.settings?.is_pro === true;
+                })} 
+                currentUser={currentUser}
+                handleStatusChange={handleStatusChange}
+                handleRoleChange={handleRoleChange}
+                renderStatusBadge={renderStatusBadge}
+                renderRoleBadge={renderRoleBadge}
+                renderOnlineStatus={renderOnlineStatus}
+                currentPage={currentPage}
+                setCurrentPage={setCurrentPage}
+                itemsPerPage={itemsPerPage}
+                setItemsPerPage={setItemsPerPage}
+                grantProSubscription={grantProSubscription}
+                resetGeminiUsage={resetGeminiUsage}
+                revokeSubscription={revokeSubscription}
+                syncSubscription={syncSubscription}
+              />
+            )}
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Status Change Confirmation Dialog */}
@@ -484,178 +719,5 @@ export default function UserManagement() {
   );
 }
 
-// User Table Component
-interface UserTableProps {
-  users: ExtendedUser[];
-  currentUser: any;
-  handleStatusChange: (user: ExtendedUser, status: 'active' | 'inactive' | 'suspended') => void;
-  handleRoleChange: (user: ExtendedUser, role: 'admin' | 'user') => void;
-  renderStatusBadge: (status: string) => React.ReactNode;
-  renderRoleBadge: (role: string) => React.ReactNode;
-  renderOnlineStatus: (isOnline: boolean) => React.ReactNode;
-}
 
-function UserTable({ 
-  users, 
-  currentUser, 
-  handleStatusChange, 
-  handleRoleChange,
-  renderStatusBadge,
-  renderRoleBadge,
-  renderOnlineStatus
-}: UserTableProps) {
-  return (
-    <div className="rounded-md border overflow-x-auto">
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead>User</TableHead>
-            <TableHead className="hidden md:table-cell">Status</TableHead>
-            <TableHead className="hidden md:table-cell">Role</TableHead>
-            <TableHead className="hidden md:table-cell">Last Login</TableHead>
-            <TableHead className="hidden lg:table-cell">Login Info</TableHead>
-            <TableHead className="hidden lg:table-cell">Created</TableHead>
-            <TableHead>Actions</TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {users.length === 0 ? (
-            <TableRow>
-              <TableCell colSpan={7} className="text-center py-6 text-muted-foreground">
-                No users found
-              </TableCell>
-            </TableRow>
-          ) : (
-            users.map((user) => (
-              <TableRow key={user.id}>
-                <TableCell className="font-medium">
-                  <div className="flex flex-col">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold">{user.name || 'Unnamed User'}</span>
-                      {renderOnlineStatus(!!user.is_online)}
-                    </div>
-                    <span className="text-sm text-muted-foreground">{user.email}</span>
-                    <div className="md:hidden mt-2 space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Status:</span>
-                        {renderStatusBadge(user.status || 'active')}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <span className="text-xs text-muted-foreground">Role:</span>
-                        {renderRoleBadge(user.role || 'user')}
-                      </div>
-                      <div className="text-xs text-muted-foreground">
-                        Last login: <span className="text-foreground">{formatDateTime(user.last_login)}</span>
-                      </div>
-                    </div>
-                  </div>
-                </TableCell>
-                <TableCell className="hidden md:table-cell">{renderStatusBadge(user.status || 'active')}</TableCell>
-                <TableCell className="hidden md:table-cell">{renderRoleBadge(user.role || 'user')}</TableCell>
-                <TableCell className="hidden md:table-cell">
-                  {formatDateTime(user.last_login)}
-                </TableCell>
-                <TableCell className="hidden lg:table-cell">
-                  <div className="flex flex-col gap-1">
-                    <div className="text-xs">
-                      <span className="font-medium">Count:</span> {user.login_count || 0}
-                    </div>
-                    {user.last_login_ip && (
-                      <div className="text-xs">
-                        <span className="font-medium">IP:</span> {user.last_login_ip}
-                      </div>
-                    )}
-                    {user.user_location && (
-                      <div className="text-xs">
-                        <span className="font-medium">Location:</span> {user.user_location}
-                      </div>
-                    )}
-                    {user.last_login_device && (
-                      <div className="text-xs max-w-[200px] truncate" title={user.last_login_device}>
-                        <span className="font-medium">Device:</span> {user.last_login_device}
-                      </div>
-                    )}
-                  </div>
-                </TableCell>
-                <TableCell className="hidden lg:table-cell">
-                  {formatDateTime(user.created_at)}
-                </TableCell>
-                <TableCell>
-                  <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                      <Button variant="ghost" className="h-8 w-8 p-0">
-                        <span className="sr-only">Open menu</span>
-                        <MoreHorizontal className="h-4 w-4" />
-                      </Button>
-                    </DropdownMenuTrigger>
-                    <DropdownMenuContent align="end">
-                      <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                      <DropdownMenuSeparator />
-                      
-                      {/* Status Actions */}
-                      {user.status !== 'active' && (
-                        <DropdownMenuItem 
-                          onClick={() => handleStatusChange(user, 'active')}
-                          disabled={user.id === currentUser?.id}
-                        >
-                          <UserCheck className="mr-2 h-4 w-4" />
-                          <span>Activate</span>
-                        </DropdownMenuItem>
-                      )}
-                      
-                      {user.status !== 'inactive' && (
-                        <DropdownMenuItem 
-                          onClick={() => handleStatusChange(user, 'inactive')}
-                          disabled={user.id === currentUser?.id}
-                          title="Deactivate: User account is disabled but can be reactivated. User cannot log in."
-                        >
-                          <UserX className="mr-2 h-4 w-4" />
-                          <span>Deactivate</span>
-                        </DropdownMenuItem>
-                      )}
-                      
-                      {user.status !== 'suspended' && (
-                        <DropdownMenuItem 
-                          onClick={() => handleStatusChange(user, 'suspended')}
-                          disabled={user.id === currentUser?.id}
-                          className="text-red-500 focus:text-red-500"
-                          title="Suspend: User account is suspended due to policy violations. User cannot log in."
-                        >
-                          <UserX className="mr-2 h-4 w-4" />
-                          <span>Suspend</span>
-                        </DropdownMenuItem>
-                      )}
-                      
-                      <DropdownMenuSeparator />
-                      
-                      {/* Role Actions */}
-                      {user.role !== 'admin' && (
-                        <DropdownMenuItem 
-                          onClick={() => handleRoleChange(user, 'admin')}
-                          disabled={user.id === currentUser?.id}
-                        >
-                          <ShieldAlert className="mr-2 h-4 w-4" />
-                          <span>Make Admin</span>
-                        </DropdownMenuItem>
-                      )}
-                      
-                      {user.role !== 'user' && (
-                        <DropdownMenuItem 
-                          onClick={() => handleRoleChange(user, 'user')}
-                          disabled={user.id === currentUser?.id}
-                        >
-                          <Shield className="mr-2 h-4 w-4" />
-                          <span>Make Regular User</span>
-                        </DropdownMenuItem>
-                      )}
-                    </DropdownMenuContent>
-                  </DropdownMenu>
-                </TableCell>
-              </TableRow>
-            ))
-          )}
-        </TableBody>
-      </Table>
-    </div>
-  );
-} 
+

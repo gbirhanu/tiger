@@ -1,0 +1,171 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 100%;
+    --foreground: 222.2 47.4% 11.2%;
+
+    --muted: 210 40% 96.1%;
+    --muted-foreground: 215.4 16.3% 46.9%;
+
+    --popover: 0 0% 100%;
+    --popover-foreground: 222.2 47.4% 11.2%;
+
+    --card: 0 0% 100%;
+    --card-foreground: 222.2 47.4% 11.2%;
+
+    --border: 214.3 31.8% 91.4%;
+    --input: 214.3 31.8% 91.4%;
+
+    --primary: 222.2 47.4% 11.2%;
+    --primary-foreground: 210 40% 98%;
+
+    --secondary: 210 40% 96.1%;
+    --secondary-foreground: 222.2 47.4% 11.2%;
+
+    --accent: 210 40% 96.1%;
+    --accent-foreground: 222.2 47.4% 11.2%;
+
+    --destructive: 0 100% 50%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 215 20.2% 65.1%;
+
+    --radius: 0.5rem;
+  }
+
+  .dark {
+    --background: 224 71% 4%;
+    --foreground: 213 31% 91%;
+
+    --muted: 223 47% 11%;
+    --muted-foreground: 215.4 16.3% 56.9%;
+
+    --popover: 224 71% 4%;
+    --popover-foreground: 215 20.2% 65.1%;
+
+    --card: 224 71% 4%;
+    --card-foreground: 213 31% 91%;
+
+    --border: 216 34% 17%;
+    --input: 216 34% 17%;
+
+    --primary: 210 40% 98%;
+    --primary-foreground: 222.2 47.4% 1.2%;
+
+    --secondary: 222.2 47.4% 11.2%;
+    --secondary-foreground: 210 40% 98%;
+
+    --accent: 216 34% 17%;
+    --accent-foreground: 210 40% 98%;
+
+    --destructive: 0 63% 31%;
+    --destructive-foreground: 210 40% 98%;
+
+    --ring: 216 34% 17%;
+
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+}
+
+/* Perspective utilities for 3D transforms */
+.perspective-600 {
+  perspective: 600px;
+}
+
+.perspective-1000 {
+  perspective: 1000px;
+}
+
+/* Add a handwriting-style font for the sticky notes */
+@import url('https://fonts.googleapis.com/css2?family=Indie+Flower&display=swap');
+
+.font-handwriting {
+  font-family: 'Indie Flower', cursive;
+}
+
+/* Paper texture for sticky notes */
+.paper-texture {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='4' height='4' viewBox='0 0 4 4'%3E%3Cpath fill='%239C92AC' fill-opacity='0.1' d='M1 3h1v1H1V3zm2-2h1v1H3V1z'%3E%3C/path%3E%3C/svg%3E");
+  background-color: rgb(254 243 199 / var(--tw-bg-opacity));
+  --tw-bg-opacity: 1;
+  box-shadow: 
+    0 1px 2px rgba(0,0,0,0.07), 
+    2px 2px 4px rgba(0,0,0,0.05),
+    0 6px 8px rgba(0,0,0,0.03),
+    0 0 0 1px rgba(255, 237, 178, 0.3) inset;
+  position: relative;
+}
+
+.paper-texture:after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background-image: linear-gradient(to bottom, rgba(255,255,255,0.1) 0%, rgba(255,255,255,0) 20%, rgba(0,0,0,0.02) 100%);
+  pointer-events: none;
+}
+
+.paper-texture:before {
+  content: '';
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 5px;
+  height: 100%;
+  background-image: linear-gradient(to right, transparent, rgba(0,0,0,0.05));
+  pointer-events: none;
+}
+
+.paper-texture:hover {
+  --tw-bg-opacity: 0.95;
+  box-shadow: 
+    0 10px 15px -3px rgba(0,0,0,0.1),
+    0 4px 6px -4px rgba(0,0,0,0.1),
+    0 0 0 1px rgba(255, 237, 178, 0.4) inset;
+}
+
+/* Special flip animation for sticky notes */
+@keyframes paper-flip {
+  0% { transform: rotateX(0deg); }
+  50% { transform: rotateX(90deg); opacity: 0.8; }
+  100% { transform: rotateX(0deg); }
+}
+
+.paper-flip {
+  animation: paper-flip 1s ease-in-out;
+  transform-origin: top center;
+}
+
+/* Dark mode adjustments for paper texture */
+.dark .paper-texture {
+  background-color: rgb(146 64 14 / var(--tw-bg-opacity));
+  --tw-bg-opacity: 0.15;
+  box-shadow: 
+    0 1px 2px rgba(0,0,0,0.2), 
+    2px 2px 4px rgba(0,0,0,0.15),
+    0 6px 8px rgba(0,0,0,0.1),
+    0 0 0 1px rgba(180, 83, 9, 0.2) inset;
+}
+
+.dark .paper-texture:after {
+  background-image: linear-gradient(to bottom, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 20%, rgba(0,0,0,0.1) 100%);
+}
+
+.dark .paper-texture:before {
+  background-image: linear-gradient(to right, transparent, rgba(0,0,0,0.15));
+} 

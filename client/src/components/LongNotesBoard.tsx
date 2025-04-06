@@ -77,11 +77,10 @@ import MarkdownEditor from 'react-markdown-editor-lite';
 import 'react-markdown-editor-lite/lib/index.css';
 import htmlParser from 'html-react-parser';
 import { MarkdownPreview } from "@/components/ui/markdown-preview";
+import ProPlanUpgrade from './ProPlanUpgrade';
+import { UsageLimitDialog } from './UsageLimitDialog';
 
-// Define a custom renderer for markdown
-const renderMarkdown = (text: string) => {
-  return <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw, rehypeSanitize]}>{text}</ReactMarkdown>;
-};
+
 
 // Sort options
 type SortOption = "newest" | "oldest" | "title" | "updated";
@@ -116,6 +115,15 @@ function GenerateContentDialog({
       setPrompt(defaultPrompt);
     }
   }, [open, defaultPrompt]);
+
+  // Handle generation to ensure we don't close dialog during API call
+  const handleGenerate = () => {
+    // Call the generation function but don't close dialog yet
+    // This will allow errors to be caught properly, including usage limits
+    onGenerate(prompt);
+    
+    // Dialog will be closed by parent component after success or error
+  };
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -159,10 +167,7 @@ function GenerateContentDialog({
             Cancel
           </Button>
           <Button 
-            onClick={() => {
-              onGenerate(prompt);
-              onOpenChange(false);
-            }}
+            onClick={handleGenerate}
             disabled={isGenerating || !prompt.trim()}
             className="gap-2 bg-gradient-to-r from-indigo-600 to-purple-700 hover:from-indigo-700 hover:to-purple-800 text-white rounded-lg"
           >
@@ -214,6 +219,10 @@ export default function LongNotesBoard() {
   const [generationPrompt, setGenerationPrompt] = useState("");
   const [readMode, setReadMode] = useState(false);
 
+  // Add these state variables inside the LongNotesBoard component
+  const [showLimitDialog, setShowLimitDialog] = useState(false);
+  const [limitErrorMessage, setLimitErrorMessage] = useState('');
+
   // Fetch long notes
   const { data: longNotes = [], isLoading, error } = useQuery<LongNote[], Error>({
     queryKey: [QUERY_KEYS.LONG_NOTES],
@@ -225,7 +234,6 @@ export default function LongNotesBoard() {
   // Log data for debugging
   React.useEffect(() => {
     if (error) {
-      console.error("Long notes query error:", error);
       toast({
         title: "Error loading notes",
         description: error.message || "Failed to load notes. Please try again.",
@@ -405,8 +413,23 @@ export default function LongNotesBoard() {
       }
     },
     onSuccess: (data) => {
-      if (data.content) {
-        // Ensure content is properly formatted as markdown
+      if (typeof data === 'string') {
+        // Handle string response from generateContentApi
+        let formattedContent = data;
+        
+        // Remove ```markdown from the beginning if present
+        formattedContent = formattedContent.replace(/^```markdown\s*/i, '');
+        // Remove trailing ``` if present
+        formattedContent = formattedContent.replace(/\s*```\s*$/, '');
+        
+        // If content doesn't start with a heading, add one
+        if (!formattedContent.startsWith('#')) {
+          formattedContent = `# ${noteTitle || 'Generated Content'}\n\n${formattedContent}`;
+        }
+        
+        setNoteContent(formattedContent);
+      } else if (data.content) {
+        // Handle object response from enhanceLongNoteApi
         let formattedContent = data.content;
         
         // Remove ```markdown from the beginning if present
@@ -420,20 +443,72 @@ export default function LongNotesBoard() {
         }
         
         setNoteContent(formattedContent);
-        toast({
-          title: "Content generated",
-          description: "Content has been generated successfully.",
-        });
+
+        // Also update the selectedNote object to reflect new content
+        if (selectedNote) {
+          setSelectedNote({
+            ...selectedNote,
+            content: formattedContent,
+            updated_at: Math.floor(Date.now() / 1000) // Update the timestamp
+          });
+        }
       }
-      setIsGenerating(false);
-    },
-    onError: (error) => {
-      console.error("Error generating content:", error);
+      
       toast({
-        title: "Error",
-        description: "Failed to generate content. Please try again.",
+        title: "Content generated",
+        description: "Content has been generated successfully.",
       });
       setIsGenerating(false);
+      
+      // Note: We don't close the dialog here, that's handled by the callback
+    },
+    onError: (error: any) => {
+      console.error("Error generating content:", error);
+      console.log("Error details:", {
+        type: typeof error,
+        hasLimitReached: !!error.limitReached,
+        response: error.response,
+        message: error.message,
+        stack: error.stack?.substring(0, 200),
+        code: error.code
+      });
+      setIsGenerating(false);
+      
+      // More robust check for usage limit error
+      // GeminiUsageLimitError may be wrapped in a parent error object
+      const isLimitError = 
+        (error && error.limitReached) || 
+        (error && error.response && error.response.data && error.response.data.code === 'USAGE_LIMIT_REACHED') ||
+        (error && error.message && error.message.includes('USAGE_LIMIT_REACHED')) ||
+        (error && error.message && error.message.includes('usage limit')) ||
+        (error && error.code === 'USAGE_LIMIT_REACHED');
+      
+      if (isLimitError) {
+        // Extract appropriate error message
+        let errorMessage = "You've reached your free limit of Gemini API calls. Please upgrade to Pro to continue using AI features.";
+        
+        if (error.message) {
+          errorMessage = error.message;
+        } else if (error.response && error.response.data && error.response.data.details) {
+          errorMessage = error.response.data.details;
+        }
+        
+        console.log("Showing usage limit dialog with message:", errorMessage);
+        
+        // Note: don't close dialog here, that's handled by the callback
+        // Just set up the limit dialog data so it can be shown
+        setLimitErrorMessage(errorMessage);
+        setShowLimitDialog(true);
+      } else {
+        console.log("Showing error toast instead of dialog");
+        toast({
+          title: "Error",
+          description: "Failed to generate content. Please try again.",
+          variant: "destructive"
+        });
+        
+        // Note: We don't close the dialog here, that's handled by the callback
+      }
     }
   });
 
@@ -540,6 +615,45 @@ Structure the content in a clear, organized way with proper markdown syntax.`;
       generateContentMutation.mutate({ 
         noteId: selectedNote?.id,
         prompt
+      }, {
+        onSuccess: () => {
+          // Close dialog only after successful generation
+          setGenerateDialogOpen(false);
+        },
+        onError: (error: any) => {
+          console.log("Direct error handling in generate callback:", error);
+          
+          // Check for usage limit error with the same checks as the mutation
+          const isLimitError = 
+            (error && error.limitReached) || 
+            (error && error.response && error.response.data && error.response.data.code === 'USAGE_LIMIT_REACHED') ||
+            (error && error.message && error.message.includes('USAGE_LIMIT_REACHED')) ||
+            (error && error.message && error.message.includes('usage limit')) ||
+            (error && error.code === 'USAGE_LIMIT_REACHED');
+            
+          if (isLimitError) {
+            // Extract appropriate error message
+            let errorMessage = "You've reached your free limit of Gemini API calls. Please upgrade to Pro to continue using AI features.";
+            
+            if (error.message) {
+              errorMessage = error.message;
+            } else if (error.response && error.response.data && error.response.data.details) {
+              errorMessage = error.response.data.details;
+            }
+            
+            console.log("Showing usage limit dialog from direct callback with message:", errorMessage);
+            
+            // Close generate dialog and show limit dialog instead
+            setGenerateDialogOpen(false);
+            
+            // Show dialog instead of toast
+            setLimitErrorMessage(errorMessage);
+            setShowLimitDialog(true);
+          } else {
+            // For non-limit errors, close dialog and show toast
+            setGenerateDialogOpen(false);
+          }
+        }
       });
     });
     
@@ -626,14 +740,76 @@ Maintain the existing content but improve its structure and formatting.`;
     setGenerateDialogCallback(() => (prompt: string) => {
       setIsGenerating(true);
       
+      // Use both onSuccess and onError for proper dialog handling
       generateContentMutation.mutate({ 
         prompt, 
         noteId: selectedNote.id 
+      }, {
+        onSuccess: () => {
+          // Close dialog only after successful generation
+          setGenerateDialogOpen(false);
+          
+          // Only save the content automatically if we're in view mode
+          // If we're in edit mode, let the user save manually to avoid closing the edit dialog
+          if (viewDialogOpen && !editDialogOpen) {
+            setTimeout(() => {
+              // Using setTimeout to ensure the content state is updated first
+              handleUpdateNote();
+            }, 300);
+          }
+        },
+        onError: (error: any) => {
+          console.log("Direct error handling in generate callback:", error);
+          
+          // Check for usage limit error with the same checks as the mutation
+          const isLimitError = 
+            (error && error.limitReached) || 
+            (error && error.response && error.response.data && error.response.data.code === 'USAGE_LIMIT_REACHED') ||
+            (error && error.message && error.message.includes('USAGE_LIMIT_REACHED')) ||
+            (error && error.message && error.message.includes('usage limit')) ||
+            (error && error.code === 'USAGE_LIMIT_REACHED');
+            
+          if (isLimitError) {
+            // Extract appropriate error message
+            let errorMessage = "You've reached your free limit of Gemini API calls. Please upgrade to Pro to continue using AI features.";
+            
+            if (error.message) {
+              errorMessage = error.message;
+            } else if (error.response && error.response.data && error.response.data.details) {
+              errorMessage = error.response.data.details;
+            }
+            
+            console.log("Showing usage limit dialog from direct callback with message:", errorMessage);
+            
+            // Close generate dialog and show limit dialog instead
+            setGenerateDialogOpen(false);
+            
+            // Show dialog instead of toast
+            setLimitErrorMessage(errorMessage);
+            setShowLimitDialog(true);
+          } else {
+            // For non-limit errors, close dialog and show toast
+            setGenerateDialogOpen(false);
+          }
+        }
       });
     });
     
     // Open the dialog
     setGenerateDialogOpen(true);
+  };
+
+  // Add useEffect to log dialog state changes
+  React.useEffect(() => {
+    if (showLimitDialog) {
+      console.log("UsageLimitDialog should be visible now");
+    }
+  }, [showLimitDialog]);
+
+  // Enhance note feature - more detailed error logging
+  const handleUsageLimitDialogOpenChange = (isOpen: boolean) => {
+    console.log("UsageLimitDialog open state changing to:", isOpen);
+    setShowLimitDialog(isOpen);
   };
 
   if (isLoading) {
@@ -1300,6 +1476,13 @@ Maintain the existing content but improve its structure and formatting.`;
         defaultPrompt={generateDialogDefaultPrompt}
         onGenerate={generateDialogCallback}
         isGenerating={isGenerating}
+      />
+
+      {/* Usage Limit Dialog */}
+      <UsageLimitDialog 
+        open={showLimitDialog} 
+        onOpenChange={handleUsageLimitDialogOpenChange}
+        message={limitErrorMessage}
       />
     </div>
   );

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
-import { useQuery, useMutation } from "@tanstack/react-query";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
@@ -53,12 +53,13 @@ import {
   updateTask,
   deleteTask,
   getSubtasks,
-  updateSubtask,
   generateSubtasks as generateSubtasksApi,
   createSubtasks,
   getUserSettings,
-  getTasksWithSubtasks
+  getTasksWithSubtasks,
+  updateSubtask
 } from "@/lib/api";
+import TaskActivityGraph from "./TaskActivityGraph";
 import {
   Check,
   Clock,
@@ -86,9 +87,20 @@ import {
 } from "lucide-react";
 import { formatDate, getNow } from "@/lib/timezone";
 import { format } from "date-fns";
-import { Task, Subtask, NewTask } from "@shared/schema";
+import { Task as ImportedTask, Subtask as ImportedSubtask } from "@shared/schema";
 import { TimeSelect } from "./TimeSelect";
-import { createReminderMessage, TaskForReminder } from "@/lib/taskReminders";
+import { UsageLimitDialog } from './UsageLimitDialog';
+import { getAuthToken } from "@/lib/api"; // Import getAuthToken
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 // Import the schema from shared
 const insertTaskSchema = z.object({
   title: z.string().min(1, "Title is required"),
@@ -123,13 +135,25 @@ interface SubtasksResponse {
   subtasks: string[] | string;
 }
 
-// Define the TaskWithSubtasks interface
-interface TaskWithSubtasks extends Task {
-  subtasks: Subtask[];
+interface Task extends ImportedTask {
   has_subtasks?: boolean;
   completed_subtasks?: number;
   total_subtasks?: number;
-  position?: number; // Add position field
+  subtasks?: Subtask[];
+  parent_task_id: number | null;
+}
+
+interface Subtask extends ImportedSubtask {
+  position: number;
+}
+
+interface TaskWithSubtasks extends Task {
+  subtasks: Subtask[];
+  has_subtasks: boolean;
+  completed_subtasks: number;
+  total_subtasks: number;
+  position?: number;
+  parent_task_id: number | null;
 }
 
 // TaskProgress component
@@ -137,34 +161,35 @@ const TaskProgress = ({ completed, total }: { completed: number; total: number }
   if (total === 0 || completed === 0) return null;
   
   const percentage = (completed / total) * 100;
-  let color = "bg-gradient-to-r";
-  
-  if (percentage < 33) {
-    color += " from-red-500 via-red-400 to-yellow-500";
-  } else if (percentage < 66) {
-    color += " from-yellow-500 via-yellow-400 to-green-500";
-  } else {
-    color += " from-green-500 via-green-400 to-emerald-500";
-  }
   
   return (
     <TooltipProvider>
       <Tooltip>
         <TooltipTrigger asChild>
-          <div className="w-full h-1 bg-muted rounded-full overflow-hidden mt-2 cursor-help">
+          <div className="absolute top-0 left-0 right-0 h-1 bg-transparent cursor-help">
+            {/* Animated progress bar with gradient */}
             <div
-              className={`h-full ${color} transition-all duration-500 ease-in-out`}
+              className="h-full transition-all duration-500 ease-out"
               style={{ 
                 width: `${percentage}%`,
-                boxShadow: `0 0 8px ${percentage < 33 ? '#ef4444' : percentage < 66 ? '#eab308' : '#22c55e'}`
+                background: percentage < 33 
+                  ? 'linear-gradient(90deg, #f87171 0%, #fb923c 100%)' 
+                  : percentage < 66 
+                    ? 'linear-gradient(90deg, #fb923c 0%, #facc15 50%, #a3e635 100%)' 
+                    : 'linear-gradient(90deg, #a3e635 0%, #4ade80 50%, #34d399 100%)',
+                boxShadow: `0 0 6px ${percentage < 33 ? 'rgba(239, 68, 68, 0.5)' : percentage < 66 ? 'rgba(234, 179, 8, 0.5)' : 'rgba(34, 197, 94, 0.5)'}`
               }}
             />
           </div>
         </TooltipTrigger>
-        <TooltipContent>
-          <div className="text-sm">
-            <span className="font-medium">{completed}</span> of <span className="font-medium">{total}</span> subtasks completed
-            {percentage === 100 ? ' 🎉' : ''} ({Math.round(percentage)}%)
+        <TooltipContent side="top" className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-md">
+          <div className="text-sm flex items-center gap-1.5">
+            <span className="font-semibold text-xs px-1.5 py-0.5 rounded bg-primary/10 text-primary">{completed}/{total}</span>
+            <span>subtasks completed</span>
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700">
+              {Math.round(percentage)}%
+            </span>
+            {percentage === 100 && <span className="text-lg">🎉</span>}
           </div>
         </TooltipContent>
       </Tooltip>
@@ -172,61 +197,9 @@ const TaskProgress = ({ completed, total }: { completed: number; total: number }
   );
 };
 
-// Helper function to get priority styling
-const getPriorityClass = (priority: "low" | "medium" | "high") => {
-  switch (priority) {
-    case "low":
-      return {
-        bg: "bg-[hsl(var(--task-low)/0.2)]",
-        text: "text-[hsl(var(--task-low))]",
-        border: "border-[hsl(var(--task-low)/0.3)]",
-      };
-    case "medium":
-      return {
-        bg: "bg-[hsl(var(--task-medium)/0.2)]",
-        text: "text-[hsl(var(--task-medium))]",
-        border: "border-[hsl(var(--task-medium)/0.3)]",
-      };
-    case "high":
-      return {
-        bg: "bg-[hsl(var(--task-high)/0.2)]",
-        text: "text-[hsl(var(--task-high))]",
-        border: "border-[hsl(var(--task-high)/0.3)]",
-      };
-    default:
-      return {
-        bg: "bg-[hsl(var(--task-medium)/0.2)]",
-        text: "text-[hsl(var(--task-medium))]",
-        border: "border-[hsl(var(--task-medium)/0.3)]",
-      };
-  }
-};
 
-// Helper function to ensure priority is one of the allowed values
-const ensureValidPriority = (priority: string): "low" | "medium" | "high" => {
-  if (priority === "low" || priority === "medium" || priority === "high") {
-    return priority;
-  }
-  return "medium"; // Default to medium if invalid value
-};
 
-// Task Priority Badge
-const PriorityBadge = ({ priority }: { priority: "low" | "medium" | "high" }) => {
-  const priorityClass = getPriorityClass(priority);
-  
-  return (
-    <div className={cn(
-      "inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium",
-      priorityClass.bg,
-      priorityClass.text
-    )}>
-      {priority === "high" && <AlertCircle className="h-3 w-3" />}
-      {priority === "medium" && <Clock className="h-3 w-3" />}
-      {priority === "low" && <CheckCircle2 className="h-3 w-3" />}
-      <span className="capitalize">{priority}</span>
-    </div>
-  );
-};
+
 
 // Helper function for safely handling dates
 const safeFormatDate = (timestamp: number | null | undefined) => {
@@ -238,7 +211,7 @@ const safeFormatDate = (timestamp: number | null | undefined) => {
       ? parseInt(timestamp, 10) 
       : timestamp;
     
-    console.log("Formatting timestamp:", numericTimestamp);
+    
     
     // Convert Unix timestamp to JavaScript Date
     let date;
@@ -285,7 +258,7 @@ const ensureUnixTimestamp = (date: Date | null | undefined): number | null => {
     }
     
     const timestamp = Math.floor(date.getTime() / 1000);
-    console.log("Converted to Unix timestamp:", timestamp, "from", date.toISOString());
+    
     return timestamp;
   } catch (error) {
     console.error("Error converting date to timestamp:", error);
@@ -374,6 +347,15 @@ const convertTaskForNotifications = (task: any) => {
   };
 };
 
+// Add this near the top of the file with other type definitions
+interface GeminiUsageLimitError {
+  limitReached: boolean;
+  message: string;
+  code: string;
+  showUpgrade?: boolean;
+}
+
+
 export default function TaskManager() {
   const { toast } = useToast();
   const { addNotification, checkTaskReminders } = useNotifications();
@@ -403,11 +385,14 @@ export default function TaskManager() {
   const [editDatePickerOpen, setEditDatePickerOpen] = useState(false);
   const [newTaskDatePickerOpen, setNewTaskDatePickerOpen] = useState(false);
   const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false);
+  const [showLimitDialog, setShowLimitDialog] = useState(false);
+  const [limitErrorMessage, setLimitErrorMessage] = useState('');
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [pendingTaskCompletion, setPendingTaskCompletion] = useState<{ taskId: number; checked: boolean } | null>(null);
   
-  // Remove the general pagination and use separate pagination for each task type
-  // const [currentPage, setCurrentPage] = useState(1);
-  const [hasSubtasks, setHasSubtasks] = useState<Record<number, boolean>>({});
-  
+  // Use ReturnType<typeof setTimeout> for the correct type
+  const titleUpdateTimeoutRef = useRef<number | undefined>(undefined);
+ 
   const form = useForm<FormData>({
     resolver: zodResolver(insertTaskSchema),
     defaultValues: {
@@ -458,7 +443,7 @@ export default function TaskManager() {
   // FIXED: Add a useEffect to force re-render when tasks change
   useEffect(() => {
     if (tasks && Array.isArray(tasks)) {
-      console.log("Tasks changed, forcing re-render");
+      
       // This will trigger a re-render when tasks change
       setForceUpdate(prev => prev + 1);
     }
@@ -467,7 +452,7 @@ export default function TaskManager() {
   // FIXED: Add a useEffect to handle forceUpdate changes
   useEffect(() => {
     if (forceUpdate > 0) {
-      console.log("Force update triggered:", forceUpdate);
+      
       // Force a refresh of the tasks data
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
     }
@@ -475,7 +460,6 @@ export default function TaskManager() {
   
   useEffect(() => {
     if (tasksError) {
-      console.error("Error fetching tasks:", tasksError);
       toast({
         variant: "destructive", 
         title: "Failed to fetch tasks",
@@ -491,7 +475,7 @@ export default function TaskManager() {
 
   useEffect(() => {
     if (subtasksError) {
-      console.error("Error fetching subtasks info:", subtasksError);
+      // Handle the error appropriately
     }
   }, [subtasksError]);
 
@@ -502,7 +486,7 @@ export default function TaskManager() {
 
   useEffect(() => {
     if (settingsError) {
-      console.error("Error fetching user settings:", settingsError);
+      // Handle the error appropriately
     }
   }, [settingsError]);
 
@@ -529,7 +513,7 @@ export default function TaskManager() {
       });
     },
     onSuccess: (newTask) => {
-      console.log("Task created successfully:", newTask);
+      
       
       // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -566,7 +550,7 @@ export default function TaskManager() {
       });
     },
     onSuccess: (updatedTask) => {
-      console.log("Task updated successfully:", updatedTask);
+      
       
       // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -606,7 +590,7 @@ export default function TaskManager() {
       });
     },
     onSuccess: (_, taskId) => {
-      console.log("Task deleted successfully:", taskId);
+      
       
       // Simply fetch the tasks again from the server
       queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -621,7 +605,7 @@ export default function TaskManager() {
 
   const onSubmit = async (data: FormData) => {
     try {
-      console.log('Form submitted with data:', data);
+      
       
       // Validate required fields
       if (!data.title || data.title.trim() === "") {
@@ -651,11 +635,11 @@ export default function TaskManager() {
       };
 
       // Log what's being sent to the API
-      console.log('Sending task data to API:', JSON.stringify(taskData));
+      
 
       // Use the mutation with type assertion to bypass the type error
       const newTask = await createTaskMutation.mutateAsync(taskData as any);
-      console.log("Task created result:", newTask);
+      
       
       // Check for task reminders after creating a new task
       if (newTask) {
@@ -703,7 +687,7 @@ export default function TaskManager() {
       recurrenceEndDate = new Date(task.recurrence_end_date * 1000);
     }
     
-    console.log("Created date objects:", { dueDate, recurrenceEndDate });
+    
     
     setEditForm({
       title: task.title || "",
@@ -732,7 +716,6 @@ export default function TaskManager() {
       // Find the current task to get its existing data
       const currentTask = tasks?.find(task => task.id === taskId);
       if (!currentTask) {
-        console.error(`Task with ID ${taskId} not found`);
         toast({
           variant: "destructive",
           title: "Error updating task",
@@ -756,7 +739,7 @@ export default function TaskManager() {
         completed: typeof editForm.completed === 'boolean' ? editForm.completed : currentTask.completed,
       };
 
-      console.log("Updating task with ALL data preserved:", updateData);
+      
       
       // Make sure we don't have duplicate id
       const { id, ...taskDataWithoutId } = updateData;
@@ -812,15 +795,6 @@ export default function TaskManager() {
         })));
         setIsGenerating(false); // Stop loading if we have existing subtasks
       } else {
-        const prompt = `
-          Generate 5 clear and simple subtasks for this task. Each subtask should be a single, actionable item.
-          
-          Task: ${task.title}
-          ${task.description ? `Description: ${task.description}` : ''}
-          
-          Return the subtasks as a simple list, one per line. Do not include any JSON formatting, quotes, brackets, or numbers.
-        `;
-        
         // Keep loading indicator on
         toast({
           title: "Generating subtasks",
@@ -828,25 +802,123 @@ export default function TaskManager() {
         });
         
         try {
-          const response = await generateSubtasksApi(prompt);
-          setIsGenerating(false); // Stop loading after generation
+          // Pass the task object directly to the API with correct structure
+          console.log("Generating subtasks for task:", {
+            taskId: task.id,
+            title: task.title,
+            description: task.description
+          });
           
-          // Process the response text
-          let subtasksText = response.subtasks;
-          
-          // Clean up the response if it's a string
-          if (typeof subtasksText === 'string') {
-            // Remove any JSON formatting characters
-            subtasksText = subtasksText
-              .replace(/^\s*\[|\]\s*$/g, '') // Remove opening/closing brackets
-              .replace(/"/g, '') // Remove quotes
-              .replace(/,\s*/g, '\n') // Replace commas with newlines
-              .replace(/\\n/g, '\n'); // Replace escaped newlines
+          // Check if we have auth token before making the request
+          const authToken = getAuthToken();
+          if (!authToken) {
+            console.error("No auth token available for generateSubtasks - attempting to refresh");
+            
+            toast({
+              title: "Authentication Error",
+              description: "Please refresh the page and try again.",
+              variant: "destructive"
+            });
+            
+            setIsGenerating(false);
+            return;
           }
           
-          // Split by newlines and clean up each line
-          const subtasksArray = (Array.isArray(subtasksText) ? subtasksText : subtasksText.split('\n'))
-            .filter(line => line.trim().length > 0)
+          // Use the standardized API call with proper parameters
+          const response = await generateSubtasksApi({ 
+            task: {
+              title: task.title || "Untitled Task", 
+              description: task.description || ""
+            },
+            count: 5
+          });
+          
+          setIsGenerating(false); // Stop loading after generation
+          
+          // Log the response for debugging
+          console.log("Response from generateSubtasksApi:", {
+            hasResponse: !!response,
+            hasSubtasks: response && !!response.subtasks,
+            subtasksType: response && response.subtasks ? 
+              (Array.isArray(response.subtasks) ? 
+                `array[${response.subtasks.length}]` : 
+                typeof response.subtasks) : 
+              'none',
+            response
+          });
+          
+          // Safely handle the response
+          if (!response || !response.subtasks) {
+            console.error("Invalid or empty response from generateSubtasksApi");
+            toast({
+              title: "Error generating subtasks",
+              description: "Unable to generate subtasks. Please try again later.",
+              variant: "destructive"
+            });
+            
+            // Create one empty subtask for manual entry
+            setEditedSubtasks([{
+              id: -Date.now(),
+              user_id: task.user_id,
+              task_id: task.id,
+              title: "",
+              completed: false,
+              position: 0,
+              created_at: Math.floor(Date.now() / 1000),
+              updated_at: Math.floor(Date.now() / 1000)
+            }]);
+            return;
+          }
+          
+          // Process the response
+          const subtasksFromResponse = response.subtasks;
+          let subtasksList: string[] = [];
+          
+          if (Array.isArray(subtasksFromResponse)) {
+            // Server should return an array, use it directly
+            subtasksList = subtasksFromResponse;
+            console.log("Received subtasks array:", subtasksList);
+          } else if (typeof subtasksFromResponse === 'string') {
+            // Handle string responses by parsing
+            console.log("Received subtasks string, attempting to parse:", 
+                      subtasksFromResponse.substring(0, 100) + 
+                      (subtasksFromResponse.length > 100 ? "..." : ""));
+            
+            try {
+              // Try to parse as JSON if it looks like JSON
+              if (subtasksFromResponse.trim().startsWith('[') && 
+                  subtasksFromResponse.trim().endsWith(']')) {
+                subtasksList = JSON.parse(subtasksFromResponse);
+              } else {
+                // Fallback to splitting by newlines
+                subtasksList = subtasksFromResponse.split('\n')
+                  .map(line => line.trim())
+                  .filter(Boolean);
+              }
+            } catch (parseError) {
+              console.error("Error parsing subtasks string:", parseError);
+              // Simple fallback
+              subtasksList = subtasksFromResponse
+                .replace(/^\s*\[|\]\s*$/g, '')
+                .split(/[,\n]/)
+                .map(line => line.trim().replace(/^["']|["']$/g, ''))
+                .filter(Boolean);
+            }
+          } else {
+            console.error("Unexpected subtasks format:", subtasksFromResponse);
+            subtasksList = ["Review task details"];
+          }
+          
+          // If we still have no subtasks, provide a fallback
+          if (subtasksList.length === 0) {
+            subtasksList = ["Add a subtask"];
+          }
+          
+          console.log("Final subtasks list:", subtasksList);
+          
+          // Map to the expected format
+          const subtasksArray = subtasksList
+            .filter(line => line && line.trim().length > 0)
             .map((line, index) => ({
               id: -Date.now() - index, // Temporary negative ID
               user_id: task.user_id,
@@ -858,7 +930,6 @@ export default function TaskManager() {
               updated_at: Math.floor(Date.now() / 1000)
             }));
           
-          console.log('Processed subtasks:', subtasksArray);
           setEditedSubtasks(subtasksArray);
           
           toast({
@@ -869,126 +940,54 @@ export default function TaskManager() {
           console.error('Error generating subtasks:', error);
           setIsGenerating(false);
           
-          // If generation fails, create empty subtasks
-          setEditedSubtasks([
-            {
-              id: -Date.now() - 1,
-              user_id: task.user_id,
-              task_id: task.id,
-              title: "",
-              completed: false,
-              position: 0,
-              created_at: Math.floor(Date.now() / 1000),
-              updated_at: Math.floor(Date.now() / 1000)
-            }
-          ]);
-          
-          toast({
-            variant: "destructive",
-            title: "Error generating subtasks",
-            description: error instanceof Error ? error.message : "An unknown error occurred",
-          });
+          // Check if this is a usage limit error
+          if (error && typeof error === 'object' && 'limitReached' in error) {
+            const limitError = error as GeminiUsageLimitError;
+            // Show dialog instead of toast
+            setLimitErrorMessage(limitError.message || "You've reached your Gemini API usage limit.");
+            setShowLimitDialog(true);
+          } else {
+            // If generation fails for other reasons, create empty subtasks
+            setEditedSubtasks([
+              {
+                id: -Date.now() - 1,
+                user_id: task.user_id,
+                task_id: task.id,
+                title: "",
+                completed: false,
+                position: 0,
+                created_at: Math.floor(Date.now() / 1000),
+                updated_at: Math.floor(Date.now() / 1000)
+              }
+            ]);
+            
+            toast({
+              variant: "destructive",
+              title: "Failed to generate subtasks",
+              description: error instanceof Error ? error.message : "An unknown error occurred",
+            });
+          }
         }
       }
     } catch (error) {
-      console.error('Error in generateSubtasks:', error);
+      console.error('Error in subtasks workflow:', error);
       setIsGenerating(false);
+      
       toast({
         variant: "destructive",
-        title: "Error",
+        title: "Error loading subtasks",
         description: error instanceof Error ? error.message : "An unknown error occurred",
       });
     }
   };
 
   const saveSubtasksMutation = useMutation({
-    mutationFn: ({ taskId, subtasks }: { taskId: number, subtasks: Array<{ title: string; completed: boolean }> }) => {
-      // Ensure subtasks match the expected format for the API
-      // The server will handle adding task_id and other metadata internally
+    mutationFn: ({ taskId, subtasks }: { taskId: number, subtasks: Array<Subtask | { title: string; completed: boolean }> }) => {
+      // Send all subtasks to the server - the server will only create the new ones
+      console.log("Saving subtasks:", { taskId, subtasksCount: subtasks.length });
       return createSubtasks(taskId, subtasks);
     },
-    onMutate: async ({ taskId, subtasks }) => {
-      console.log("Optimistically saving subtasks for task:", taskId, subtasks);
-      
-      // Cancel any outgoing refetches
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
-      if (selectedTask) {
-        await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASK_SUBTASKS(taskId)] });
-      }
-      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASKS] });
-      
-      // Snapshot the previous values
-      const previousTasksWithSubtasks = queryClient.getQueryData<any>([QUERY_KEYS.TASKS_WITH_SUBTASKS]);
-      const previousSubtasks = selectedTask ? 
-        queryClient.getQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(taskId)]) : null;
-      const previousTasks = queryClient.getQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS]) || [];
-      
-      // Create optimistic subtasks with temporary IDs
-      const optimisticSubtasks = subtasks.map((subtask, index) => ({
-        id: `temp-${Date.now()}-${index}`,
-        task_id: taskId,
-        title: subtask.title,
-        completed: subtask.completed,
-        position: index,
-        created_at: Math.floor(Date.now() / 1000),
-        updated_at: Math.floor(Date.now() / 1000)
-      }));
-      
-      // Optimistically update tasks-with-subtasks
-      if (previousTasksWithSubtasks) {
-        // Add this task ID to the list of tasks with subtasks if not already there
-        if (!previousTasksWithSubtasks.includes(taskId)) {
-          queryClient.setQueryData<any>([QUERY_KEYS.TASKS_WITH_SUBTASKS], 
-            [...previousTasksWithSubtasks, taskId]
-          );
-        }
-      }
-      
-      // Optimistically update the subtasks for this task
-      if (selectedTask) {
-        queryClient.setQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(taskId)], optimisticSubtasks);
-      }
-      
-      // Update the main tasks list to show this task has subtasks
-        const updatedTasks = JSON.parse(JSON.stringify(previousTasks));
-      const taskIndex = updatedTasks.findIndex((task: TaskWithSubtasks) => task.id === taskId);
-        
-        if (taskIndex !== -1) {
-        // Add the subtasks to the task
-        updatedTasks[taskIndex].subtasks = optimisticSubtasks;
-        
-        // Update the tasks cache
-          queryClient.setQueryData<TaskWithSubtasks[]>([QUERY_KEYS.TASKS], updatedTasks);
-      }
-      
-      console.log("Optimistically updated subtasks in cache");
-      
-      // Return the context
-      return { previousTasksWithSubtasks, previousSubtasks, previousTasks };
-    },
-    onError: (error, variables, context) => {
-      console.error("Error saving subtasks:", error);
-      
-      // Roll back to the previous state if there was an error
-      if (context?.previousTasksWithSubtasks) {
-        queryClient.setQueryData([QUERY_KEYS.TASKS_WITH_SUBTASKS], context.previousTasksWithSubtasks);
-      }
-      if (context?.previousSubtasks && selectedTask) {
-        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], context.previousSubtasks);
-      }
-      if (context?.previousTasks) {
-        queryClient.setQueryData([QUERY_KEYS.TASKS], context.previousTasks);
-      }
-      
-      toast({
-        variant: "destructive",
-        title: "Failed to save subtasks",
-        description: error instanceof Error ? error.message : "An error occurred while saving subtasks.",
-      });
-    },
     onSuccess: (data, variables) => {
-      console.log("Subtasks saved successfully:", data);
-      
       // Update the cache with the server response
       if (selectedTask) {
         queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], data);
@@ -1004,15 +1003,54 @@ export default function TaskManager() {
       });
       
       setShowSubtasks(false);
+    },
+    onError: (error) => {
+      console.error("Failed to save subtasks:", error);
+      
+      toast({
+        title: "Error saving subtasks",
+        description: "There was a problem saving your subtasks. Please try again.",
+        variant: "destructive"
+      });
     }
   });
 
   const saveSubtasks = async () => {
     if (!selectedTask) return;
-    saveSubtasksMutation.mutate({ taskId: selectedTask.id, subtasks: editedSubtasks });
+    
+    // Filter out empty subtasks before saving
+    const filteredSubtasks = editedSubtasks.filter(subtask => 
+      subtask.title && subtask.title.trim() !== ''
+    );
+    
+    if (filteredSubtasks.length === 0) {
+      toast({
+        title: "No subtasks to save",
+        description: "Please add at least one subtask with a title.",
+        variant: "default"
+      });
+      return;
+    }
+    
+    // Ensure position values are sequential
+    const subtasksWithPositions = filteredSubtasks.map((subtask, index) => ({
+      ...subtask,
+      position: index
+    }));
+    
+    console.log("Saving subtasks with positions:", 
+      subtasksWithPositions.map(s => ({ id: s.id, title: s.title, position: s.position }))
+    );
+    
+    // Just pass all subtasks - the server will handle existing vs new ones
+    saveSubtasksMutation.mutate({ 
+      taskId: selectedTask.id, 
+      subtasks: subtasksWithPositions 
+    });
   };
 
-  const onDragEnd = (result: any) => {
+  const onDragEnd = async (result: any) => {
+    // If no destination or dropped in same place, do nothing
     if (!result.destination) return;
     if (
       result.destination.droppableId === result.source.droppableId &&
@@ -1021,32 +1059,86 @@ export default function TaskManager() {
       return;
     }
 
+    // Create a copy of the current subtasks and reorder them
     const items = Array.from(editedSubtasks);
     const [reorderedItem] = items.splice(result.source.index, 1);
     items.splice(result.destination.index, 0, reorderedItem);
     
-    // Immediately update the UI
-    setEditedSubtasks(items);
+    // Get current subtasks data
+    const currentSubtasks = queryClient.getQueryData<Subtask[]>([QUERY_KEYS.TASK_SUBTASKS(selectedTask?.id || 0)]);
     
-    // If we have a selected task, update the subtasks query data optimistically
-    if (selectedTask) {
-      // Get the current subtasks data
-      const currentSubtasks = queryClient.getQueryData<any>([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)]);
+    // Update positions in the reordered array BUT PRESERVE original updated_at times
+    const updatedItems = items.map((subtask, index) => {
+      // Find the original subtask to preserve its updated_at timestamp
+      const originalSubtask = currentSubtasks?.find(s => s.id === subtask.id);
       
-      if (currentSubtasks) {
-        // Update the positions based on the new order
-        const updatedSubtasks = items.map((subtask, index) => ({
-          ...subtask,
-          position: index
-        }));
+      return {
+        ...subtask,
+        position: index,
+        // Keep the original updated_at timestamp - CRITICAL for activity graph
+        updated_at: originalSubtask?.updated_at || subtask.updated_at
+      };
+    });
+    
+    // Immediately update the UI
+    setEditedSubtasks(updatedItems);
+    
+    // If we have a selected task, update the subtasks positions in the database
+    if (selectedTask) {
+      try {
+        // Get the subtasks that exist in the database (positive IDs)
+        const existingSubtasks = updatedItems.filter(
+          subtask => subtask.id && typeof subtask.id === 'number' && subtask.id > 0
+        );
         
-        // Update the query data optimistically
-        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)], updatedSubtasks);
+        console.log("Updating positions only for existing subtasks:", 
+          existingSubtasks.map(st => ({ id: st.id, position: st.position }))
+        );
+        
+        // Only update positions for subtasks that already exist in the database
+        for (const subtask of existingSubtasks) {
+          try {
+            // Send ONLY the position data, nothing else
+            await updateSubtask(
+              selectedTask.id,
+              subtask.id as number,
+              { position: subtask.position }
+            );
+          } catch (error) {
+            console.error(`Error updating subtask ${subtask.id} position:`, error);
+          }
+        }
+        
+        // Update the query cache PRESERVING the original timestamps
+        if (currentSubtasks) {
+          const mergedSubtasks = updatedItems.map(updatedSubtask => {
+            // For each updated subtask, find the matching original to preserve timestamps
+            const originalSubtask = currentSubtasks.find(s => s.id === updatedSubtask.id);
+            if (originalSubtask) {
+              // Preserve created_at and updated_at from the original
+              return {
+                ...updatedSubtask,
+                created_at: originalSubtask.created_at,
+                updated_at: originalSubtask.updated_at
+              };
+            }
+            return updatedSubtask;
+          });
+          
+          queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)], mergedSubtasks);
+        }
+      } catch (error) {
+        console.error("Error updating subtask positions:", error);
+        toast({
+          title: "Error updating positions",
+          description: "There was a problem updating subtask positions. Please try again.",
+          variant: "destructive"
+        });
       }
     }
   };
 
-  const renderTaskContent = (task: TaskWithSubtasks, isCompleted: boolean) => {
+  const renderTaskContent = (task: Task, isInDetail = false) => {
     if (editingTask === task.id && editForm) {
       return (
         <div className="flex-1 space-y-3">
@@ -1077,44 +1169,50 @@ export default function TaskManager() {
               </SelectContent>
             </Select>
             <Popover open={editDatePickerOpen} onOpenChange={setEditDatePickerOpen}>
-              <PopoverTrigger asChild>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
-                >
-                  <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
-                  {editForm.due_date && editForm.due_date instanceof Date && !isNaN(editForm.due_date.getTime())
-                    ? formatDate(editForm.due_date, "PPP")
-                    : "Due date"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[280px]">
-                <div>
-                  <Calendar
-                    mode="single"
-                    selected={editForm.due_date || undefined}
-                    onSelect={(date) => {
-                      console.log("Selected date in edit form:", date);
-                      setEditForm(prev => updateFormData(prev, { due_date: date }));
-                    }}
-                    initialFocus
-                  />
-                  {editForm.due_date && (
-                    <TimeSelect
-                      value={editForm.due_date}
-                      onChange={(newDate) => {
-                        setEditForm(prev => updateFormData(prev, { due_date: newDate }));
+                          <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
+                          >
+                            <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                            {editForm.due_date && editForm.due_date instanceof Date && !isNaN(editForm.due_date.getTime())
+                              ? formatDate(editForm.due_date, "PPP")
+                              : "Due date"}
+                          </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 flex" align="start">
+                            <div>
+                            <Calendar
+                      mode="single"
+                      selected={editForm.due_date ? new Date(editForm.due_date) : undefined}
+                      onSelect={(date) => {
+                        if (date) {
+                          const currentTime = editForm.due_date ? new Date(editForm.due_date) : new Date();
+                          date.setHours(currentTime.getHours(), currentTime.getMinutes());
+                          setEditForm(prev => updateFormData(prev, { due_date: date }));
+                        } else {
+                          setEditForm(prev => updateFormData(prev, { due_date: null }));
+                          setEditDatePickerOpen(false);
+                        }
                       }}
-                      onComplete={() => {
-                        setEditDatePickerOpen(false);
-                      }}
-                      compact={true}
+                      initialFocus
                     />
-                  )}
-                </div>
-              </PopoverContent>
-            </Popover>
+                            </div>
+                            <div className="border-l">
+                            <TimeSelect
+                                value={editForm.due_date ? new Date(editForm.due_date) : new Date()}
+                                onChange={(newDate) => {
+                                  setEditForm(prev => updateFormData(prev, { due_date: newDate }));
+                                }}
+                                onComplete={() => {
+                                  setEditDatePickerOpen(false);
+                                }}
+                                compact={true}
+                              />
+                            </div>
+                          </PopoverContent>
+                        </Popover>
             {!task.parent_task_id && (
               <div className="flex items-center gap-2">
                 <Switch
@@ -1180,46 +1278,51 @@ export default function TaskManager() {
                       Ends (Optional)
                     </label>
                     <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          variant="outline"
-                          className={cn(
-                            "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md",
-                            !editForm.recurrence_end_date && "text-muted-foreground"
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
-                          {editForm.recurrence_end_date
-                            ? formatDate(editForm.recurrence_end_date, "PPP")
-                            : "Select end date"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
-                        <Calendar
-                          mode="single"
-                          selected={editForm.recurrence_end_date || undefined}
-                          onSelect={(date) => {
-                            setEditForm((prev) => updateFormData(prev, { recurrence_end_date: date }));
-                            if (!date) {
-                              setRecurrenceEndDatePickerOpen(false);
-                            }
-                          }}
-                          initialFocus
-                        />
-                        {editForm.recurrence_end_date && (
-                          <TimeSelect
-                            value={editForm.recurrence_end_date}
-                            onChange={(newDate) => {
-                              form.setValue("recurrence_end_date", newDate);
-                            }}
-                            onComplete={() => {
-                              setRecurrenceEndDatePickerOpen(false);
-                            }}
-                            compact={true}
-                          />
-                        )}
-                      </PopoverContent>
-                    </Popover>
+                          <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
+                          >
+                            <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                            {editForm.recurrence_end_date && editForm.recurrence_end_date instanceof Date && !isNaN(editForm.recurrence_end_date.getTime())
+                              ? formatDate(editForm.recurrence_end_date, "PPP")
+                              : "Select end date"}
+                          </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 flex" align="start">
+                            <div>
+                            <Calendar
+                      mode="single"
+                      selected={editForm.recurrence_end_date ? new Date(editForm.recurrence_end_date) : undefined}
+                      onSelect={(date) => {
+                        if (date) {
+                          const currentTime = editForm.recurrence_end_date ? new Date(editForm.recurrence_end_date) : new Date();
+                          date.setHours(currentTime.getHours(), currentTime.getMinutes());
+                          setEditForm(prev => updateFormData(prev, { recurrence_end_date: date }));
+                        } else {
+                          setEditForm(prev => updateFormData(prev, { recurrence_end_date: null }));
+                          setRecurrenceEndDatePickerOpen(false);
+                        }
+                      }}
+                      initialFocus
+                    />
+                            </div>
+                            <div className="border-l">
+                            <TimeSelect
+                                value={editForm.due_date ? new Date(editForm.due_date) : new Date()}
+                                onChange={(newDate) => {
+                                  setEditForm(prev => updateFormData(prev, { recurrence_end_date: newDate }));
+                                }}
+                                onComplete={() => {
+                                  setRecurrenceEndDatePickerOpen(false);
+                                }}
+                                compact={true}
+                              />
+                            </div>
+                          </PopoverContent>
+                        </Popover>
+                  
                   </div>
                 </div>
               </div>
@@ -1232,7 +1335,7 @@ export default function TaskManager() {
     return (
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <p className={cn("font-medium truncate", isCompleted && "line-through text-muted-foreground")}>
+          <p className={cn("font-medium truncate", task.completed && "line-through text-muted-foreground")}>
             {task.title}
           </p>
           {task.is_recurring && !task.parent_task_id && (
@@ -1279,7 +1382,7 @@ export default function TaskManager() {
           )}
         </div>
         {task.description && (
-          <p className={cn("text-sm text-muted-foreground truncate mt-1", isCompleted && "line-through")}>
+          <p className={cn("text-sm text-muted-foreground truncate mt-1", task.completed && "line-through")}>
             {task.description}
           </p>
         )}
@@ -1294,6 +1397,9 @@ export default function TaskManager() {
             </div>
           )}
         </div>
+        {/* Check property exists before accessing it */}
+        {('has_subtasks' in task && task.has_subtasks) ? 
+          <TaskActivityGraph task={task as TaskWithSubtasks} /> : null}
       </div>
     );
   };
@@ -1413,19 +1519,49 @@ export default function TaskManager() {
   };
 
   const getActiveTasks = (tasks: TaskWithSubtasks[]) => {
-    return tasks.filter(task => 
-      !task.completed && 
-      !isOverdue(task) && 
-      !task.parent_task_id
-    );
+    return tasks.filter(task => {
+      // Regular active tasks
+      if (!task.completed && !isOverdue(task) && !task.parent_task_id) {
+        return true;
+      }
+      
+      // For child tasks of recurring tasks (instances of recurring tasks)
+      if (!task.completed && !isOverdue(task) && task.parent_task_id) {
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        
+        // Only show if it has a due date
+        if (!task.due_date) return false;
+        
+        const dueDate = new Date(task.due_date * 1000);
+        
+        // Get next week's end
+        const nextWeekEnd = new Date(today);
+        nextWeekEnd.setDate(today.getDate() + 7);
+        
+        // Include the task if it's due within the current week or next week
+        return dueDate >= today && dueDate <= nextWeekEnd;
+      }
+      
+      return false;
+    });
   };
 
   const getOverdueTasks = (tasks: TaskWithSubtasks[]) => {
-    return tasks.filter(task => 
-      !task.completed && 
-      isOverdue(task) && 
-      !task.parent_task_id
-    );
+    return tasks.filter(task => {
+      // Regular overdue tasks
+      if (!task.completed && isOverdue(task) && !task.parent_task_id) {
+        return true;
+      }
+      
+      // For child tasks of recurring tasks (instances of recurring tasks)
+      if (!task.completed && isOverdue(task) && task.parent_task_id) {
+        // Only include overdue tasks from child recurring tasks
+        return true;
+      }
+      
+      return false;
+    });
   };
 
   const getCompletedTasks = (tasks: TaskWithSubtasks[]) => {
@@ -1554,17 +1690,7 @@ export default function TaskManager() {
     return Math.ceil(getCompletedTasks(tasks).length / tasksPerPage);
   };
 
-  const getPaginatedTasks = (tasks: TaskWithSubtasks[]) => {
-    // This function is kept for backward compatibility
-    // but we'll use the specific pagination functions instead
-    const startIndex = (activePage - 1) * tasksPerPage;
-    return tasks.slice(startIndex, startIndex + tasksPerPage);
-  };
 
-  const getTotalPages = (tasks: TaskWithSubtasks[]) => {
-    // This function is kept for backward compatibility
-    return Math.ceil(tasks.length / tasksPerPage);
-  };
 
   const PaginationControls = ({ 
     currentPage, 
@@ -1613,7 +1739,7 @@ export default function TaskManager() {
 
   // Process tasks to add subtask information
   const processedTasks = useMemo(() => {
-    console.log("Recalculating processedTasks with forceUpdate:", forceUpdate);
+    
     
     // SIMPLIFIED: Safety check for tasks
     if (!tasks || !Array.isArray(tasks) || tasks.length === 0) {
@@ -1649,18 +1775,6 @@ export default function TaskManager() {
     }).filter(Boolean); // Remove any null tasks
   }, [tasks, tasksWithSubtasksIds, forceUpdate]);
 
-  const completedTasks = useMemo(() => 
-    getCompletedTasks(filterTasks(processedTasks)),
-  [filterTasks, processedTasks, forceUpdate]);
-
-  const activeTasks = useMemo(() => 
-    getActiveTasks(filterTasks(processedTasks)),
-  [filterTasks, processedTasks, forceUpdate]);
-
-  const overdueTasks = useMemo(() => 
-    getOverdueTasks(filterTasks(processedTasks)),
-  [filterTasks, processedTasks, forceUpdate]);
-
   const filteredTasks = useMemo(() => {
     if (searchTerm.length === 0) return processedTasks;
     
@@ -1682,23 +1796,101 @@ export default function TaskManager() {
 
   const handleSubtaskChange = (index: number, value: string) => {
     const newSubtasks = [...editedSubtasks];
-    if (newSubtasks[index]) {
+    const subtask = newSubtasks[index];
+    
+    if (subtask) {
+      // Update the title in local state
       newSubtasks[index] = {
-        ...newSubtasks[index],
+        ...subtask,
         title: value
       };
       setEditedSubtasks(newSubtasks);
+      
+      // If this is an existing subtask with a POSITIVE numeric ID, update it via API
+      // Negative IDs are temporary and don't exist in the database yet
+      if (subtask.id && typeof subtask.id === 'number' && subtask.id > 0 && selectedTask) {
+        // Debounce the API call to avoid too many requests
+        if (titleUpdateTimeoutRef.current) {
+          clearTimeout(titleUpdateTimeoutRef.current);
+        }
+        
+        titleUpdateTimeoutRef.current = window.setTimeout(() => {
+          updateSubtaskMutation.mutate({
+            taskId: selectedTask.id,
+            subtaskId: subtask.id as number,
+            data: { title: value }
+          });
+        }, 500); // 500ms debounce
+      }
     }
   };
 
   const handleSubtaskToggle = (index: number) => {
     const newSubtasks = [...editedSubtasks];
-    if (newSubtasks[index]) {
+    const subtask = newSubtasks[index];
+    
+    if (subtask) {
+      // Toggle completed state in local state
+      const newCompletedState = !subtask.completed;
+      const currentTimestamp = Math.floor(Date.now() / 1000);
+      
+      // Update the subtask in the local state
       newSubtasks[index] = {
-        ...newSubtasks[index],
-        completed: !newSubtasks[index].completed
+        ...subtask,
+        completed: newCompletedState,
+        // When a subtask is completed, update its timestamp to now
+        // This is important for the activity graph
+        updated_at: newCompletedState ? currentTimestamp : subtask.updated_at
       };
+      
+      // Immediately update the local state
       setEditedSubtasks(newSubtasks);
+      
+      // If this is an existing subtask with a POSITIVE ID, update it via API
+      // Negative IDs are temporary and don't exist in the database yet
+      if (subtask.id && typeof subtask.id === 'number' && subtask.id > 0 && selectedTask) {
+        // Update all caches immediately for a responsive UI
+        
+        // 1. Update TASK_SUBTASKS cache
+        const currentTaskSubtasks = queryClient.getQueryData<Subtask[]>([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)]);
+        if (currentTaskSubtasks) {
+          const updatedCache = currentTaskSubtasks.map(s => 
+            s.id === subtask.id 
+              ? { ...s, completed: newCompletedState, updated_at: newCompletedState ? currentTimestamp : s.updated_at } 
+              : s
+          );
+          queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(selectedTask.id)], updatedCache);
+        }
+        
+        // 2. Update SUBTASKS cache (used by TaskActivityGraph)
+        const currentSubtasksCache = queryClient.getQueryData<Subtask[]>([QUERY_KEYS.SUBTASKS, selectedTask.id]);
+        if (currentSubtasksCache) {
+          const updatedCache = currentSubtasksCache.map(s => 
+            s.id === subtask.id 
+              ? { ...s, completed: newCompletedState, updated_at: newCompletedState ? currentTimestamp : s.updated_at } 
+              : s
+          );
+          queryClient.setQueryData([QUERY_KEYS.SUBTASKS, selectedTask.id], updatedCache);
+        }
+        
+        // Then update the server - use mutateAsync to ensure completion
+        updateSubtaskMutation.mutateAsync({
+          taskId: selectedTask.id,
+          subtaskId: subtask.id,
+          data: { 
+            completed: newCompletedState,
+            // Include updated_at in the request data only if the subtask is being completed
+            ...(newCompletedState ? { updated_at: currentTimestamp } : {})
+          }
+        }).catch(error => {
+          console.error("Failed to update subtask completion:", error);
+          toast({
+            variant: "destructive",
+            title: "Error",
+            description: "Failed to update subtask completion status"
+          });
+        });
+      }
     }
   };
 
@@ -1710,9 +1902,12 @@ export default function TaskManager() {
 
   // Add a ref for the latest subtask input
   const lastSubtaskInputRef = useRef<HTMLInputElement>(null);
+  
+  // Create a map of refs for each subtask input
+  const subtaskInputRefs = useRef<Map<number, HTMLInputElement>>(new Map());
 
   // Update the SubtaskItem component to use the ref for the last item
-  const SubtaskItem = ({ subtask, onToggle, onDelete, isLast }: { 
+  const SubtaskItem = ({ subtask, index, onToggle, onDelete, isLast }: { 
     subtask: { 
       id: number; 
       user_id: number; 
@@ -1723,24 +1918,48 @@ export default function TaskManager() {
       created_at: number;
       updated_at: number;
     }; 
+    index: number;
     onToggle: () => void; 
     onDelete: () => void;
     isLast?: boolean;
   }) => {
+    // Use local state for the input value to prevent focus loss during typing
+    const [localTitle, setLocalTitle] = useState(subtask.title);
+    
+    // Update local state when the subtask title changes from parent
+    useEffect(() => {
+      setLocalTitle(subtask.title);
+    }, [subtask.title]);
+    
+    // Handle local changes without triggering parent state updates
+    const handleLocalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+      setLocalTitle(e.target.value);
+    };
+    
+    // Update parent state only when input loses focus
+    const handleBlur = () => {
+      if (localTitle !== subtask.title) {
+        handleSubtaskChange(index, localTitle);
+      }
+    };
+    
     return (
-      <div className="flex items-center gap-2 py-1 w-full">
+      <div className="flex items-center gap-2 py-1 w-full group">
         <Checkbox
           checked={subtask.completed}
           onCheckedChange={onToggle}
-          className="data-[state=checked]:bg-green-500 data-[state=checked]:text-white flex-shrink-0"
+          className="data-[state=checked]:bg-blue-500 data-[state=checked]:text-white flex-shrink-0 border-gray-300 dark:border-gray-600 transition-colors"
         />
         <Input
           ref={isLast ? lastSubtaskInputRef : null}
-          value={subtask.title}
-          onChange={(e) => handleSubtaskChange(subtask.position, e.target.value)}
+          value={localTitle}
+          onChange={handleLocalChange}
+          onBlur={handleBlur}
           className={cn(
-            "flex-1 border-0 focus-visible:ring-1 px-2 py-1 h-auto min-h-[32px]",
-            subtask.completed && "line-through text-muted-foreground bg-gray-50"
+            "flex-1 border-0 focus-visible:ring-1 focus-visible:ring-blue-500 px-3 py-1.5 h-auto min-h-[36px] rounded-md text-sm",
+            subtask.completed 
+              ? "line-through text-muted-foreground bg-gray-50 dark:bg-gray-800/50" 
+              : "bg-white dark:bg-gray-800 shadow-sm"
           )}
           placeholder="Enter subtask..."
         />
@@ -1748,12 +1967,166 @@ export default function TaskManager() {
           variant="ghost"
           size="icon"
           onClick={onDelete}
-          className="h-6 w-6 flex-shrink-0 text-destructive hover:text-destructive hover:bg-destructive/10 ml-auto"
+          className="h-7 w-7 rounded-full flex-shrink-0 text-gray-400 hover:text-red-500 hover:bg-red-50 dark:hover:bg-red-950/30 opacity-0 group-hover:opacity-100 transition-opacity duration-200 ml-auto"
         >
-          <Trash2 className="h-3 w-3" />
+          <Trash2 className="h-3.5 w-3.5" />
         </Button>
       </div>
     );
+  };
+
+  // Add mutation for updating individual subtask
+  const updateSubtaskMutation = useMutation({
+    mutationFn: ({ taskId, subtaskId, data }: { taskId: number; subtaskId: number; data: Partial<Subtask> }) => 
+      updateSubtask(taskId, subtaskId, data),
+    onMutate: async ({ taskId, subtaskId, data }) => {
+      // Cancel any outgoing refetches
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.TASK_SUBTASKS(taskId)] });
+      await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.SUBTASKS, taskId] });
+      
+      // Snapshot the previous value
+      const previousSubtasks = queryClient.getQueryData<Subtask[]>([QUERY_KEYS.TASK_SUBTASKS(taskId)]);
+      const previousQuerySubtasks = queryClient.getQueryData<Subtask[]>([QUERY_KEYS.SUBTASKS, taskId]);
+      
+      // Create an optimistic update
+      if (previousSubtasks) {
+        const optimisticSubtasks = previousSubtasks.map(subtask => 
+          subtask.id === subtaskId 
+            ? { 
+                ...subtask, 
+                ...data, 
+                // Preserve the updated timestamp from data if it's provided
+                updated_at: data.updated_at || subtask.updated_at
+              }
+            : subtask
+        );
+        
+        // Update the query cache
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(taskId)], optimisticSubtasks);
+      }
+
+      // Also update the SUBTASKS query cache used by the TaskActivityGraph
+      if (previousQuerySubtasks) {
+        const optimisticQuerySubtasks = previousQuerySubtasks.map(subtask => 
+          subtask.id === subtaskId 
+            ? { 
+                ...subtask, 
+                ...data, 
+                // Preserve the updated timestamp from data if it's provided
+                updated_at: data.updated_at || subtask.updated_at
+              }
+            : subtask
+        );
+        
+        queryClient.setQueryData([QUERY_KEYS.SUBTASKS, taskId], optimisticQuerySubtasks);
+      }
+      
+      return { previousSubtasks, previousQuerySubtasks };
+    },
+    onError: (err, variables, context) => {
+      // Roll back to the previous state if there's an error
+      if (context?.previousSubtasks) {
+        queryClient.setQueryData(
+          [QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], 
+          context.previousSubtasks
+        );
+      }
+
+      if (context?.previousQuerySubtasks) {
+        queryClient.setQueryData(
+          [QUERY_KEYS.SUBTASKS, variables.taskId], 
+          context.previousQuerySubtasks
+        );
+      }
+      
+      // Notify user of error
+      toast({
+        variant: "destructive",
+        title: "Failed to update subtask",
+        description: err instanceof Error ? err.message : "An error occurred while updating the subtask",
+      });
+    },
+    onSuccess: (updatedSubtask, variables) => {
+      // Get the current data
+      const currentSubtasks = queryClient.getQueryData<Subtask[]>([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)]);
+      
+      // Update just the specific subtask in the cache with the response from the server
+      if (currentSubtasks) {
+        const updatedSubtasks = currentSubtasks.map(subtask => 
+          subtask.id === updatedSubtask.id ? updatedSubtask : subtask
+        );
+        
+        // Update the cache with the fresh data
+        queryClient.setQueryData([QUERY_KEYS.TASK_SUBTASKS(variables.taskId)], updatedSubtasks);
+      }
+      
+      // Invalidate all affected queries to ensure UI consistency
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.SUBTASKS, variables.taskId] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS_WITH_SUBTASKS] });
+    },
+    onSettled: (_, __, variables) => {
+      // Always force a refresh of the subtasks data when a mutation completes
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.SUBTASKS, variables.taskId] });
+      queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASK_SUBTASKS(variables.taskId)] });
+      
+      // Force update UI counters and task list
+      setForceUpdate(prev => prev + 1);
+    }
+  });
+
+  const handleTaskCompletion = async (taskId: number, checked: boolean) => {
+    // Get the task
+    const task = tasks?.find(t => t.id === taskId) as TaskWithSubtasks;
+    if (!task) return;
+
+    // If task has subtasks and there are uncompleted ones
+    if (task.has_subtasks && checked && task.completed_subtasks < task.total_subtasks) {
+      setPendingTaskCompletion({ taskId, checked });
+      setShowConfirmDialog(true);
+      return;
+    }
+
+    // Otherwise, proceed with the update
+    await completeTask(taskId, checked);
+  };
+
+  const completeTask = async (taskId: number, checked: boolean) => {
+    try {
+      // Update the task completion status - let database handle updated_at timestamp
+      await updateTaskMutation.mutateAsync({
+        id: taskId,
+        completed: checked
+      });
+
+      // If completing the task and it has subtasks, complete all subtasks
+      const task = tasks?.find(t => t.id === taskId);
+      if (task && 'has_subtasks' in task && task.has_subtasks && checked) {
+        const subtasks = await getSubtasks(taskId);
+        for (const subtask of subtasks) {
+          if (!subtask.completed) {
+            await updateSubtaskMutation.mutateAsync({
+              taskId: taskId,
+              subtaskId: subtask.id,
+              data: { 
+                completed: true
+              }
+            });
+          }
+        }
+      }
+
+      // Force a re-render and refresh tasks
+      setForceUpdate(prev => prev + 1);
+      refreshTasks();
+    } catch (error) {
+      console.error("Error updating task completion:", error);
+      toast({
+        variant: "destructive",
+        title: "Error",
+        description: "Failed to update task completion status"
+      });
+    }
   };
 
   if (isLoading) {
@@ -1814,7 +2187,7 @@ export default function TaskManager() {
           </p>
           <Button 
             onClick={() => {
-              console.log("Button clicked, setting showAddTask to true");
+              
               setShowAddTask(true);
             }}
             className="bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white px-6 py-2 rounded-lg shadow-md hover:shadow-lg transition-all duration-200 flex items-center gap-2"
@@ -1924,53 +2297,52 @@ export default function TaskManager() {
                 
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-12 gap-3 md:gap-4 items-center">
                   <div className="sm:col-span-1 lg:col-span-4">
+                
                     <Popover open={newTaskDatePickerOpen} onOpenChange={setNewTaskDatePickerOpen}>
-                      <PopoverTrigger asChild>
-                        <Button
-                          type="button"
-                          variant="outline"
-                          className={cn(
-                            "w-full justify-start text-left font-normal bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors h-11",
-                            !dueDate && "text-gray-500 dark:text-gray-400",
-                            dueDate && "text-gray-800 dark:text-gray-200 border-teal-200 dark:border-teal-800"
-                          )}
-                        >
-                          <CalendarIcon className="mr-2 h-4 w-4 text-teal-500 dark:text-teal-400" />
-                          {dueDate ? formatDate(dueDate, "PPP") : "Due date (optional)"}
-                        </Button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[300px]">
-                        <div>
-                          <Calendar
-                            mode="single"
-                            selected={dueDate ? new Date(dueDate) : undefined}
-                            onSelect={(date) => {
-                              if (date) {
-                                const selectedTime = dueDate ? new Date(dueDate) : new Date();
-                                form.setValue("due_date", date);
-                              } else {
-                                form.setValue("due_date", null);
-                                setNewTaskDatePickerOpen(false);
-                              }
-                            }}
-                            initialFocus
-                            className="rounded-lg border-0"
-                          />
-                          {dueDate && (
+                          <PopoverTrigger asChild>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
+                          >
+                            <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                            {dueDate && dueDate instanceof Date && !isNaN(dueDate.getTime())
+                              ? formatDate(dueDate, "PPP")
+                              : "Due date"}
+                          </Button>
+                          </PopoverTrigger>
+                          <PopoverContent className="w-auto p-0 flex" align="start">
+                            <div>
+                            <Calendar
+                      mode="single"
+                      selected={dueDate ? new Date(dueDate) : undefined}
+                      onSelect={(date) => {
+                        if (date) {
+                          const currentTime = dueDate ? new Date(dueDate) : new Date();
+                          date.setHours(currentTime.getHours(), currentTime.getMinutes());
+                          form.setValue("due_date", date);
+                        } else {
+                          form.setValue("due_date", null);
+                          setNewTaskDatePickerOpen(false);
+                        }
+                      }}
+                      initialFocus
+                    />
+                            </div>
+                            <div className="border-l">
                             <TimeSelect
-                              value={new Date(dueDate)}
-                              onChange={(newDate) => {
-                                form.setValue("due_date", newDate);
-                              }}
-                              onComplete={() => {
-                                setNewTaskDatePickerOpen(false);
-                              }}
-                              compact={true}
-                            />
-                          )}
-                        </div>
-                      </PopoverContent>
-                    </Popover>
+                                value={dueDate ? new Date(dueDate) : new Date()}
+                                onChange={(newDate) => {
+                                  form.setValue("due_date", newDate);
+                                }}
+                                onComplete={() => {
+                                  setNewTaskDatePickerOpen(false);
+                                }}
+                                compact={true}
+                              />
+                            </div>
+                          </PopoverContent>
+                        </Popover>
                   </div>
                   
                   <div className="sm:col-span-1 lg:col-span-4">
@@ -2002,12 +2374,12 @@ export default function TaskManager() {
                       type="button" 
                       onClick={async () => {
                         try {
-                          console.log("Add Task button clicked");
+                          
                           
                           // Validate the form first
                           const isValid = await form.trigger();
                           if (!isValid) {
-                            console.log("Form validation failed");
+                            
                             toast({
                               variant: "destructive",
                               title: "Invalid form data",
@@ -2017,7 +2389,7 @@ export default function TaskManager() {
                           }
                           
                           const formData = form.getValues();
-                          console.log("Form data:", formData);
+                          
                           
                           // Ensure all required fields are present
                           if (!formData.title || formData.title.trim() === "") {
@@ -2044,7 +2416,7 @@ export default function TaskManager() {
                             recurrence_end_date: ensureUnixTimestamp(formData.recurrence_end_date),
                           };
 
-                          console.log('Sending task data to API:', JSON.stringify(taskData));
+                          
                           
                           // Call the mutation
                           await createTaskMutation.mutateAsync(taskData as any);
@@ -2143,31 +2515,38 @@ export default function TaskManager() {
                         </label>
                         <Popover open={recurrenceEndDatePickerOpen} onOpenChange={setRecurrenceEndDatePickerOpen}>
                           <PopoverTrigger asChild>
-                            <Button
-                              variant="outline"
-                              className={cn(
-                                "w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700",
-                                !recurrenceEndDate && "text-gray-500 dark:text-gray-400",
-                                recurrenceEndDate && "text-gray-800 dark:text-gray-200"
-                              )}
-                            >
-                              <CalendarIcon className="mr-2 h-4 w-4 text-teal-500 dark:text-teal-400" />
-                              {recurrenceEndDate
-                                ? formatDate(recurrenceEndDate, "PPP")
-                                : "Select end date"}
-                            </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            className="w-full justify-start text-left font-normal bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-md"
+                          >
+                            <CalendarIcon className="mr-2 h-4 w-4 text-primary" />
+                            {recurrenceEndDate && recurrenceEndDate instanceof Date && !isNaN(recurrenceEndDate.getTime())
+                              ? formatDate(recurrenceEndDate, "PPP")
+                              : "Select end date"}
+                          </Button>
                           </PopoverTrigger>
-                          <PopoverContent className="w-auto p-0 bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 rounded-lg shadow-xl max-w-[260px]">
+                          <PopoverContent className="w-auto p-0 flex" align="start">
+                            <div>
                             <Calendar
-                              mode="single"
-                              selected={recurrenceEndDate ? recurrenceEndDate : undefined}
-                              onSelect={(newDate) => form.setValue("recurrence_end_date", newDate ?? null)}
-                              initialFocus
-                              className="rounded-lg border-0"
-                            />
-                            {recurrenceEndDate && (
-                              <TimeSelect
-                                value={recurrenceEndDate}
+                      mode="single"
+                      selected={recurrenceEndDate ? new Date(recurrenceEndDate) : undefined}
+                      onSelect={(date) => {
+                        if (date) {
+                          const currentTime = recurrenceEndDate ? new Date(recurrenceEndDate) : new Date();
+                          date.setHours(currentTime.getHours(), currentTime.getMinutes());
+                          form.setValue("recurrence_end_date", date);
+                        } else {
+                          form.setValue("recurrence_end_date", null);
+                          setRecurrenceEndDatePickerOpen(false);
+                        }
+                      }}
+                      initialFocus
+                    />
+                            </div>
+                            <div className="border-l">
+                            <TimeSelect
+                                value={recurrenceEndDate ? new Date(recurrenceEndDate) : new Date()}
                                 onChange={(newDate) => {
                                   form.setValue("recurrence_end_date", newDate);
                                 }}
@@ -2176,9 +2555,10 @@ export default function TaskManager() {
                                 }}
                                 compact={true}
                               />
-                            )}
+                            </div>
                           </PopoverContent>
                         </Popover>
+                  
                       </div>
                     </div>
                   </div>
@@ -2354,8 +2734,14 @@ export default function TaskManager() {
                 {getPaginatedActiveTasks(filterTasks(processedTasks)).map((task) => (
                   <div
                     key={task.id}
-                    className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-accent/5 hover:border-primary/30 transition-all duration-200 shadow-sm hover:shadow relative pt-6"
+                    className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-blue-50/40 dark:hover:bg-blue-900/10 transition-all duration-200 shadow-sm hover:shadow relative overflow-hidden"
                   >
+                    {'has_subtasks' in task && task.has_subtasks && (
+                      <TaskProgress
+                        completed={task.completed_subtasks || 0}
+                        total={task.total_subtasks || 0}
+                      />
+                    )}
                     <div
                       className={cn(
                         "absolute top-1 right-1 px-2 py-0.5 text-xs font-medium rounded-md flex items-center gap-1",
@@ -2372,34 +2758,16 @@ export default function TaskManager() {
                       )}></span>
                       {task.priority}
                     </div>
+                    
                     <div className="flex items-center gap-4">
                       <Checkbox
                         checked={task.completed}
-                        onCheckedChange={(checked: boolean) => {
-                          console.log(`Changing task ${task.id} completion to ${checked}`);
-                          // FIXED: Use mutateAsync to ensure we wait for the mutation to complete
-                          updateTaskMutation.mutateAsync({
-                            id: task.id,
-                            completed: checked,
-                          }).then(() => {
-                            // FIXED: Force a re-render after completion status changes
-                            setForceUpdate(prev => prev + 1);
-                            // FIXED: Use the refreshTasks helper to ensure UI updates
-                            refreshTasks();
-                          }).catch(error => {
-                            console.error("Error updating task completion:", error);
-                          });
-                        }}
+                        onCheckedChange={(checked: boolean) => handleTaskCompletion(task.id, checked)}
                         className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
                       />
                       {renderTaskContent(task, false)}
                     </div>
-                    {task.has_subtasks && (
-                      <TaskProgress
-                        completed={task.completed_subtasks || 0}
-                        total={task.total_subtasks || 0}
-                      />
-                    )}
+                    
                     {renderTaskActions(task)}
                   </div>
                 ))}
@@ -2438,8 +2806,14 @@ export default function TaskManager() {
                   {getPaginatedOverdueTasks(filterTasks(processedTasks)).map((task) => (
                     <div
                       key={task.id}
-                      className="group p-4 rounded-lg border border-red-200 dark:border-red-800/50 hover:bg-red-50/30 dark:hover:bg-red-900/10 transition-all duration-200 shadow-sm hover:shadow relative pt-6"
+                      className="group p-4 rounded-lg border border-red-200 dark:border-red-800/50 hover:bg-red-50/30 dark:hover:bg-red-900/10 transition-all duration-200 shadow-sm hover:shadow relative overflow-hidden"
                     >
+                      {'has_subtasks' in task && task.has_subtasks && (
+                        <TaskProgress
+                          completed={task.completed_subtasks || 0}
+                          total={task.total_subtasks || 0}
+                        />
+                      )}
                       <div
                         className={cn(
                           "absolute top-1 right-1 px-2 py-0.5 text-xs font-medium rounded-md flex items-center gap-1",
@@ -2456,6 +2830,7 @@ export default function TaskManager() {
                         )}></span>
                         {task.priority}
                       </div>
+                      
                       <div className="flex items-center gap-4">
                         <TooltipProvider>
                           <Tooltip>
@@ -2507,8 +2882,14 @@ export default function TaskManager() {
                 {getPaginatedCompletedTasks(filterTasks(processedTasks)).map((task) => (
                   <div
                     key={task.id}
-                    className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-muted/30 hover:bg-muted/50 transition-all duration-200 relative pt-6"
+                    className="group p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-muted/30 hover:bg-muted/50 transition-all duration-200 relative overflow-hidden"
                   >
+                    {'has_subtasks' in task && task.has_subtasks && (
+                      <TaskProgress
+                        completed={task.completed_subtasks || 0}
+                        total={task.total_subtasks || 0}
+                      />
+                    )}
                     <div
                       className={cn(
                         "absolute top-1 right-1 px-2 py-0.5 text-xs font-medium rounded-md flex items-center gap-1 opacity-60",
@@ -2525,24 +2906,11 @@ export default function TaskManager() {
                       )}></span>
                       {task.priority}
                     </div>
+                    
                     <div className="flex items-center gap-4">
                       <Checkbox
                         checked={task.completed}
-                        onCheckedChange={(checked: boolean) => {
-                          console.log(`Changing task ${task.id} completion to ${checked}`);
-                          // FIXED: Use mutateAsync to ensure we wait for the mutation to complete
-                          updateTaskMutation.mutateAsync({
-                            id: task.id,
-                            completed: checked,
-                          }).then(() => {
-                            // FIXED: Force a re-render after completion status changes
-                            setForceUpdate(prev => prev + 1);
-                            // FIXED: Use the refreshTasks helper to ensure UI updates
-                            refreshTasks();
-                          }).catch(error => {
-                            console.error("Error updating task completion:", error);
-                          });
-                        }}
+                        onCheckedChange={(checked: boolean) => handleTaskCompletion(task.id, checked)}
                         className="h-5 w-5 rounded-md border-gray-300 dark:border-gray-600"
                       />
                       {renderTaskContent(task, true)}
@@ -2571,13 +2939,23 @@ export default function TaskManager() {
         </div>
 
         {showSubtasks && selectedTask && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center p-4 z-50">
-            <Card className="w-full max-w-2xl bg-white dark:bg-gray-800 shadow-2xl rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6">
-                <CardTitle className="flex items-center gap-2 text-xl">
-                  <List className="h-5 w-5" />
-                  Subtasks for "{selectedTask.title}"
-                </CardTitle>
+          <div className="fixed inset-0 bg-black/60 backdrop-blur-[2px] flex items-center justify-center p-4 z-50 animate-in fade-in duration-200">
+            <Card className="w-full max-w-2xl bg-white dark:bg-gray-800 shadow-2xl rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden transform-gpu scale-100 transition-all">
+              <CardHeader className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white p-6 pb-4">
+                <div className="flex justify-between items-center">
+                  <CardTitle className="flex items-center gap-2 text-xl">
+                    <List className="h-5 w-5" />
+                    <span className="line-clamp-1">Subtasks for "{selectedTask.title}"</span>
+                  </CardTitle>
+                  <Button 
+                    variant="ghost" 
+                    size="icon" 
+                    onClick={() => setShowSubtasks(false)}
+                    className="text-white/80 hover:text-white hover:bg-white/20"
+                  >
+                    <X className="h-5 w-5" />
+                  </Button>
+                </div>
               </CardHeader>
               <CardContent className="p-6">
                 {isGenerating ? (
@@ -2591,9 +2969,10 @@ export default function TaskManager() {
                     <Progress className="w-full max-w-xs" value={undefined} />
                   </div>
                 ) : (
-                  <div className="mb-4">
-                    <div className="text-sm text-muted-foreground mb-4">
-                      Break down your task into smaller, manageable steps. Drag to reorder.
+                  <div className="mb-2">
+                    <div className="text-sm text-muted-foreground mb-4 flex items-center gap-2">
+                      <GripVertical className="h-4 w-4 text-blue-500" />
+                      <span>Break down your task into smaller, manageable steps. Drag to reorder.</span>
                     </div>
                     
                     <DragDropContext onDragEnd={onDragEnd}>
@@ -2602,7 +2981,7 @@ export default function TaskManager() {
                           <div
                             {...provided.droppableProps}
                             ref={provided.innerRef}
-                            className="space-y-2 max-h-[400px] overflow-y-auto pr-2"
+                            className="space-y-2 max-h-[350px] overflow-y-auto pr-2 scrollbar-thin scrollbar-thumb-gray-300 dark:scrollbar-thumb-gray-600 scrollbar-track-transparent"
                           >
                             {editedSubtasks.map((subtask, index) => (
                               <Draggable
@@ -2614,16 +2993,17 @@ export default function TaskManager() {
                                   <div
                                     ref={provided.innerRef}
                                     {...provided.draggableProps}
-                                    className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 transition-colors group"
+                                    className="flex items-center gap-2 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700 hover:shadow-sm transition-all duration-150 group"
                                   >
                                     <div 
                                       {...provided.dragHandleProps}
-                                      className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 transition-colors flex-shrink-0"
+                                      className="text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 transition-colors flex-shrink-0 cursor-grab active:cursor-grabbing"
                                     >
                                       <GripVertical className="h-4 w-4" />
                                     </div>
                                     <SubtaskItem
                                       subtask={subtask}
+                                      index={index}
                                       onToggle={() => handleSubtaskToggle(index)}
                                       onDelete={() => handleSubtaskDelete(index)}
                                       isLast={index === editedSubtasks.length - 1}
@@ -2638,13 +3018,18 @@ export default function TaskManager() {
                       </Droppable>
                     </DragDropContext>
 
-                    <div className="mt-4 space-y-3">
+                    <div className="mt-6 space-y-4">
                       <Button
-                        className="w-full flex items-center justify-center gap-2 border-dashed border-gray-300 dark:border-gray-600 hover:border-blue-400 dark:hover:border-blue-500 transition-colors"
+                        variant="outline"
+                        className="w-full flex items-center justify-center gap-2 border-dashed border-blue-300 dark:border-blue-700 bg-blue-50/50 dark:bg-blue-900/10 hover:bg-blue-100/50 dark:hover:bg-blue-900/20 text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 transition-all h-10"
                         onClick={() => {
                           if (selectedTask) {
+                            // Generate a unique temporary ID (negative to distinguish from server IDs)
+                            // Use microsecond precision for better uniqueness
+                            const tempId = -(Date.now() * 1000 + Math.floor(Math.random() * 1000));
+                            
                             const newSubtasks = [...editedSubtasks, {
-                              id: -Date.now() - editedSubtasks.length,
+                              id: tempId, // Temporary negative ID
                               user_id: selectedTask.user_id,
                               task_id: selectedTask.id,
                               title: "",
@@ -2667,9 +3052,10 @@ export default function TaskManager() {
                         <Plus className="h-4 w-4" />
                         <span>Add Subtask</span>
                       </Button>
-                      <div className="flex gap-2">
+                      <div className="flex gap-3 pt-2 border-t border-gray-200 dark:border-gray-700">
                         <Button
-                          className="flex-1 bg-blue-600 hover:bg-blue-700 text-white"
+                          size="default"
+                          className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-md hover:shadow-lg transition-all duration-200"
                           onClick={saveSubtasks}
                           disabled={saveSubtasksMutation.isPending}
                         >
@@ -2679,12 +3065,16 @@ export default function TaskManager() {
                               Saving...
                             </>
                           ) : (
-                            "Save Subtasks"
+                            <>
+                              <Check className="h-4 w-4 mr-2" />
+                              Save Changes
+                            </>
                           )}
                         </Button>
                         <Button
                           variant="outline"
-                          className="flex-1"
+                          size="default"
+                          className="flex-none px-5 border-gray-300 dark:border-gray-600 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
                           onClick={() => setShowSubtasks(false)}
                         >
                           Cancel
@@ -2698,6 +3088,36 @@ export default function TaskManager() {
           </div>
         )}
       </div>
+      {/* Usage Limit Dialog */}
+      <UsageLimitDialog 
+        open={showLimitDialog} 
+        onOpenChange={setShowLimitDialog}
+        message={limitErrorMessage}
+      />
+      <AlertDialog open={showConfirmDialog} onOpenChange={setShowConfirmDialog}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Complete Task with Uncompleted Subtasks?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This task has uncompleted subtasks. Would you like to mark all subtasks as completed as well?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setPendingTaskCompletion(null)}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => {
+                if (pendingTaskCompletion) {
+                  completeTask(pendingTaskCompletion.taskId, pendingTaskCompletion.checked);
+                  setPendingTaskCompletion(null);
+                }
+                setShowConfirmDialog(false);
+              }}
+            >
+              Yes, Complete All
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

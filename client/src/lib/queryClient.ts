@@ -7,10 +7,10 @@ const TOKEN_STORAGE_KEY = 'sessionToken';
 export const setAuthToken = (token: string | null) => {
   if (token) {
     localStorage.setItem(TOKEN_STORAGE_KEY, token);
-    console.log("Auth token set in localStorage");
+    
   } else {
     localStorage.removeItem(TOKEN_STORAGE_KEY);
-    console.log("Auth token removed from localStorage");
+    
   }
 };
 
@@ -18,47 +18,71 @@ export const getAuthToken = (): string | null => {
   const token = localStorage.getItem(TOKEN_STORAGE_KEY);
   
   if (token) {
-    console.log(`Retrieved auth token from storage: ${token.substring(0, 5)}...`);
+    
     return token;
   }
   
-  console.log('No auth token found in storage');
+  
   return null;
 };
 
-async function throwIfResNotOk(res: Response) {
-  if (!res.ok) {
-    let errorMessage = `${res.status}: ${res.statusText}`;
+async function parseResponseForError(response: Response) {
+  try {
+    const text = await response.text();
     try {
-      const text = await res.text();
-      console.error(`Error response body: ${text}`);
-      
-      if (text) {
-        try {
-          // Try to parse as JSON for structured error messages
-          const errorData = JSON.parse(text);
-          console.error('Parsed error data:', errorData);
-          
-          if (errorData.error) {
-            errorMessage = `${res.status}: ${errorData.error}`;
-            if (errorData.details) {
-              console.error('Error details:', errorData.details);
-              errorMessage += ` - ${JSON.stringify(errorData.details)}`;
-            }
-          } else {
-            errorMessage = `${res.status}: ${text}`;
-          }
-        } catch (parseError) {
-          // If not JSON, use the raw text
-          console.error('Error parsing JSON:', parseError);
-          errorMessage = `${res.status}: ${text}`;
+      const errorData = JSON.parse(text);
+      if (errorData.error) {
+        if (errorData.details) {
         }
+        throw new Error(errorData.error);
       }
-    } catch (error) {
-      console.error('Error parsing response body:', error);
+      if (errorData.message) {
+        throw new Error(errorData.message);
+      }
+      return errorData;
+    } catch (parseError) {
+      throw new Error(`Failed to parse error response: ${text}`);
     }
-    
-    throw new Error(errorMessage);
+  } catch (error) {
+    throw error;
+  }
+}
+
+async function fetchWithAuth(
+  apiUrl: string, 
+  options: RequestInit = {},
+  throwOnUnauth = true
+): Promise<any> {
+  const token = getAuthToken();
+  
+  if (!token) {
+    if (throwOnUnauth) {
+      throw new Error('Authentication required');
+    }
+  }
+
+  const method = options.method || 'GET';
+  
+  try {
+    const response = await fetch(apiUrl, {
+      ...options,
+      headers: {
+        ...options.headers,
+        'Content-Type': 'application/json',
+        ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+      },
+    });
+
+    if (response.status === 401) {
+      setAuthToken(null);
+      if (throwOnUnauth) {
+        throw new Error('Authentication required');
+      }
+    }
+
+    return await parseResponseForError(response);
+  } catch (error) {
+    throw error;
   }
 }
 
@@ -78,12 +102,7 @@ export async function apiRequest(
     const token = getAuthToken();
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
-      console.log(`API Request to ${apiUrl} with token: ${token.substring(0, 10)}...`);
-    } else {
-      console.warn(`API Request to ${apiUrl} without authentication token`);
     }
-
-    console.log(`Making ${method} request to ${apiUrl}`, data ? 'with data' : 'without data');
     
     const res = await fetch(apiUrl, {
       method,
@@ -92,20 +111,18 @@ export async function apiRequest(
       credentials: "include",
     });
 
-    console.log(`Response from ${apiUrl}: status ${res.status}`);
-
     // Handle authentication errors specifically
     if (res.status === 401) {
-      console.error(`Authentication failed for request to ${apiUrl} - clearing token`);
       setAuthToken(null);
       // You could trigger a redirect to login here if needed
       // window.location.href = '/auth';
     }
 
-    await throwIfResNotOk(res);
+    // Don't parse for error here, let the caller handle the response
+    // This prevents throwing errors for valid responses
+    // await parseResponseForError(res);
     return res;
   } catch (error) {
-    console.error(`API Request failed for ${method} ${url}:`, error);
     throw error;
   }
 }
@@ -122,9 +139,8 @@ export const getQueryFn = <T>(options: {
 
       if (token) {
         headers["Authorization"] = `Bearer ${token}`;
-        console.log(`Query request to ${url} with token: ${token.substring(0, 10)}...`);
+        
       } else {
-        console.warn(`Query request to ${url} without authentication token`);
       }
 
       const res = await fetch(url, {
@@ -133,7 +149,6 @@ export const getQueryFn = <T>(options: {
       });
 
       if (res.status === 401) {
-        console.error(`Authentication failed for query to ${url} - clearing token`);
         setAuthToken(null);
         
         if (options.on401 === "returnNull") {
@@ -143,10 +158,9 @@ export const getQueryFn = <T>(options: {
         throw new Error(`401: Unauthorized access to ${url}`);
       }
 
-      await throwIfResNotOk(res);
+      await parseResponseForError(res);
       return await res.json();
     } catch (error) {
-      console.error(`Query function error:`, error);
       throw error;
     }
   };
@@ -161,11 +175,16 @@ export const QUERY_KEYS = {
   TASKS_WITH_SUBTASKS: 'task-with-subtasks',
   TASK_SUBTASKS: (taskId: number) => ['task-subtasks', taskId],
   APPOINTMENTS: 'appointments',
+  USER_SUBSCRIPTION: 'user-subscription',
   MEETINGS: 'meetings',
   POMODORO_SETTINGS: 'pomodoro-settings',
   USER_SETTINGS: 'user-settings',
   USER_PROFILE: 'user-profile',
   NOTIFICATIONS: 'notifications',
+  SUBTASKS: "subtasks",
+  ADMIN_SETTINGS: "admin-settings",
+  STUDY_SESSION: "study-session",
+  LONG_NOTE: "long-note",
 };
 
 export const queryClient = new QueryClient({
@@ -180,7 +199,6 @@ export const queryClient = new QueryClient({
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors up to 2 times
         if (error?.message?.includes('401')) {
-          console.error('Authentication error in query:', error.message);
           setAuthToken(null); // Clear token on auth errors
           return false;
         }
@@ -192,7 +210,7 @@ export const queryClient = new QueryClient({
     mutations: {
       // FIXED: Properly handle mutation lifecycle
       onMutate: async (variables) => {
-        console.log('Global mutation handler - canceling related queries');
+        
         // Cancel any in-flight or pending queries that might conflict
         await queryClient.cancelQueries();
         // This is a fallback - specific mutations should define their own onMutate
@@ -200,7 +218,7 @@ export const queryClient = new QueryClient({
       },
       // FIXED: Always invalidate related queries after mutation
       onSettled: (data, error, variables, context) => {
-        console.log('Global mutation settled - invalidating queries');
+        
         // Force refetch of all critical data
         queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
         queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
@@ -212,7 +230,6 @@ export const queryClient = new QueryClient({
       retry: (failureCount: number, error: any) => {
         // Don't retry auth errors, but retry other errors once
         if (error?.message?.includes('401')) {
-          console.error('Authentication error in mutation:', error.message);
           setAuthToken(null); // Clear token on auth errors
           return false;
         }
@@ -225,7 +242,7 @@ export const queryClient = new QueryClient({
 // Add global focus refetching for critical data
 // This ensures data is refreshed when the user returns to the tab
 window.addEventListener('focus', () => {
-  console.log('Window focused - refreshing critical data');
+  
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.LONG_NOTES] });
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -237,7 +254,7 @@ window.addEventListener('focus', () => {
 // ADDED: Add a global visibility change handler to refresh data when tab becomes visible
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') {
-    console.log('Tab became visible - refreshing critical data');
+    
     queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.NOTES] });
     queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.LONG_NOTES] });
     queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });
@@ -251,15 +268,13 @@ document.addEventListener('visibilitychange', () => {
 window.addEventListener('unhandledrejection', (event) => {
   const error = event.reason;
   if (error?.message?.includes('401')) {
-    console.error('Unhandled authentication error:', error.message);
-    // Clear token and potentially redirect to login
     setAuthToken(null);
   }
 });
 
 // Export a function to reset the query cache when logging out
 export function resetQueryCache() {
-  console.log('Resetting query cache');
+  
   queryClient.clear();
 }
 
@@ -270,7 +285,7 @@ export function deepCopy<T>(obj: T): T {
 
 // ADDED: Helper function to force a UI refresh for a specific query
 export function forceRefreshQuery(queryKey: unknown[]) {
-  console.log(`Forcing refresh for query: ${JSON.stringify(queryKey)}`);
+  
   
   // Get the current data
   const currentData = queryClient.getQueryData(queryKey);
@@ -292,7 +307,7 @@ export function forceRefreshQuery(queryKey: unknown[]) {
 
 // Helper function to refresh tasks specifically
 export function refreshTasks() {
-  console.log("Refreshing tasks");
+  
   
   // Simply invalidate the query to fetch fresh data from the server
   queryClient.invalidateQueries({ queryKey: [QUERY_KEYS.TASKS] });

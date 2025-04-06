@@ -1,44 +1,205 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../../contexts/AuthContext';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from '../ui/card';
 import { Label } from '../ui/label';
 import { Alert, AlertDescription, AlertTitle } from '../ui/alert';
-import { Loader2, Mail, Lock, User, AlertCircle } from 'lucide-react';
+import { Separator } from '../ui/separator';
+import { Loader2, Mail, Lock, AlertCircle, UserRound, CheckCircle2, User } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { motion } from 'framer-motion';
+import { useTheme } from '@/contexts/ThemeContext';
+import { cn, safeDOM } from '@/lib/utils';
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (config: any) => void;
+          renderButton: (element: HTMLElement, config: any) => void;
+          prompt: () => void;
+        };
+      };
+    };
+    // Add a flag to track if the Google script is already loading
+    googleScriptLoading?: boolean;
+  }
+}
 
 export function RegisterForm() {
-  const { register, error } = useAuth();
+  const { register, loginWithGoogle, error } = useAuth();
   const { toast } = useToast();
+  const { resolvedTheme } = useTheme();
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [name, setName] = useState('');
+  const [password, setPassword] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [registerStatus, setRegisterStatus] = useState<'idle' | 'loading' | 'success' | 'error'>('idle');
   const [localError, setLocalError] = useState<string | null>(null);
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
+  const googleInitializedRef = useRef(false);
+  
+  // Define Google response handler first, before it's used in the useEffect
+  const handleGoogleResponse = async (response: any) => {
+    if (!response || !response.credential) {
+      setLocalError('Google sign-in failed. Please try again.');
+      return;
+    }
+    
+    try {
+      setIsLoading(true);
+      const result = await loginWithGoogle(response.credential);
+      
+      if (result) {
+        setRegisterStatus('success');
+        toast({
+          title: "Success",
+          description: "Google sign-up successful. Redirecting...",
+          variant: "default"
+        });
+      } else {
+        setRegisterStatus('error');
+        setLocalError('Registration failed. Please try again.');
+        toast({
+          title: "Registration Failed",
+          description: "Registration failed. Please try again.",
+          variant: "destructive"
+        });
+      }
+    } catch (error: any) {
+      console.error('Google sign-up error:', error);
+      setLocalError(error.message || 'An error occurred during registration');
+      toast({
+        title: "Registration Error",
+        description: error.message || 'An error occurred during registration',
+        variant: "destructive"
+      });
+    } finally {
+      setIsLoading(false);
+    }
+  };
+  
+  // Load Google Sign-In script with theme support
+  useEffect(() => {
+    // Only initialize Google once
+    if (!googleInitializedRef.current && window.google?.accounts) {
+      googleInitializedRef.current = true;
+      window.google.accounts.id.initialize({
+        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        callback: handleGoogleResponse,
+        cancel_on_tap_outside: true,
+        ux_mode: 'popup',
+      });
+    }
 
-  const handleSubmit = async (e: React.FormEvent) => {
+    // Render the button if Google is available and the button ref exists
+    const renderGoogleButton = () => {
+      if (window.google?.accounts && googleButtonRef.current) {
+        // Clear previous content safely using our utility
+        safeDOM.clearChildren(googleButtonRef.current);
+        
+        try {
+          window.google.accounts.id.renderButton(
+            googleButtonRef.current,
+            { 
+              theme: resolvedTheme === 'dark' ? 'filled_black' : 'outline',
+              size: 'large', 
+              width: '100%',
+              text: 'signup_with',
+              shape: 'pill',
+              logo_alignment: 'center',
+            }
+          );
+        } catch (err) {
+          console.error('Error rendering Google button:', err);
+        }
+      }
+    };
+
+    // If Google is already loaded, render the button
+    if (window.google?.accounts) {
+      renderGoogleButton();
+      return;
+    }
+    
+    // If script is already loading, don't load it again
+    if (window.googleScriptLoading) {
+      return;
+    }
+    
+    // Mark as loading
+    window.googleScriptLoading = true;
+    
+    // Create and add the script
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.id = 'google-signin-script';
+    
+    script.onload = () => {
+      // Initialize and render when loaded
+      if (!googleInitializedRef.current && window.google?.accounts) {
+        googleInitializedRef.current = true;
+        window.google.accounts.id.initialize({
+          client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+          callback: handleGoogleResponse,
+          cancel_on_tap_outside: true,
+          ux_mode: 'popup',
+        });
+      }
+      
+      renderGoogleButton();
+    };
+    
+    script.onerror = (e) => {
+      console.error('Failed to load Google Sign-In script:', e);
+      setLocalError('Failed to load Google Sign-In. Please check your internet connection.');
+      window.googleScriptLoading = false;
+    };
+    
+    document.body.appendChild(script);
+    
+    // No cleanup needed on theme changes
+  }, [resolvedTheme, handleGoogleResponse]);
+
+  const handleSubmit = async (e: React.FormEvent): Promise<void> => {
     e.preventDefault();
     setIsLoading(true);
+    setRegisterStatus('loading');
     setLocalError(null);
     
     try {
-      console.log('Attempting registration with:', { email, name });
-      const result = await register(email, password, name);
-      console.log('Registration successful');
+      if (password.length < 6) {
+        throw new Error('Password must be at least 6 characters long');
+      }
       
+      const result = await register(email, password, name);
+      
+      // Verify user data and session is received
+      if (result && result.session?.id) {
+        setRegisterStatus('success');
       toast({
-        title: "Account Created",
-        description: "Your account has been created successfully. You can now log in.",
+          title: "Registration Successful",
+          description: "Your account has been created. Logging you in...",
         variant: "default"
       });
+      } else {
+        setRegisterStatus('error');
+        setLocalError('Registration failed. Please try again.');
+        toast({
+          title: "Registration Failed",
+          description: "Registration failed. Please try again.",
+          variant: "destructive"
+        });
+      }
     } catch (err) {
-      console.error('Registration error:', err);
+      setRegisterStatus('error');
       const errorMessage = err instanceof Error ? err.message : 'Unknown error during registration';
       setLocalError(errorMessage);
-      
       toast({
-        title: "Registration Failed",
+        title: "Registration Error",
         description: errorMessage,
         variant: "destructive"
       });
@@ -48,47 +209,60 @@ export function RegisterForm() {
   };
 
   return (
-    <Card className="w-[400px] shadow-lg border-muted/30">
-      <CardHeader className="space-y-2 pb-4">
-        
-        <CardTitle className="text-2xl font-bold text-center bg-gradient-to-r from-primary to-primary/70 bg-clip-text text-transparent">Create Account</CardTitle>
-        <CardDescription className="text-center">Sign up to get started with Tiger</CardDescription>
-      </CardHeader>
-      <CardContent>
-        <form onSubmit={handleSubmit} className="space-y-4">
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="w-full"
+    >
+      <div className="space-y-4">
           {(error || localError) && (
-            <Alert variant="destructive" className="animate-in fade-in-50">
+          <Alert variant="destructive" className="animate-in fade-in-50 border-red-500 bg-red-50 dark:bg-red-900/20">
               <AlertCircle className="h-4 w-4" />
               <AlertTitle>Registration Failed</AlertTitle>
               <AlertDescription>{localError || error}</AlertDescription>
             </Alert>
           )}
           
-          <div className="space-y-2">
-            <Label htmlFor="name" className="text-sm font-medium">
-              Full Name
+        {registerStatus === 'success' && (
+          <Alert className="animate-in fade-in-50 border-green-500 bg-green-50 dark:bg-green-900/20 text-green-800 dark:text-green-300">
+            <CheckCircle2 className="h-4 w-4" />
+            <AlertTitle>Registration Successful</AlertTitle>
+            <AlertDescription>Your account has been created. Logging you in...</AlertDescription>
+          </Alert>
+        )}
+
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div className="space-y-3">
+            <Label htmlFor="name" className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Your Name
             </Label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400 dark:text-gray-500">
                 <User className="h-4 w-4" />
               </div>
               <Input
                 id="name"
+                type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Enter your full name"
-                className="pl-10 focus-visible:ring-primary"
                 required
+                placeholder="Enter your name"
+                className={cn(
+                  "pl-10 focus-visible:ring-primary dark:focus-visible:ring-amber-500 border-gray-200 dark:border-gray-700 rounded-lg",
+                  "bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100",
+                  "shadow-sm"
+                )}
               />
             </div>
           </div>
           
-          <div className="space-y-2">
-            <Label htmlFor="email" className="text-sm font-medium">
-              Email
+          <div className="space-y-3">
+            <Label htmlFor="email" className="text-sm font-medium text-gray-700 dark:text-gray-200">
+              Email Address
             </Label>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400 dark:text-gray-500">
                 <Mail className="h-4 w-4" />
               </div>
               <Input
@@ -98,17 +272,26 @@ export function RegisterForm() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 placeholder="Enter your email"
-                className="pl-10 focus-visible:ring-primary"
+                className={cn(
+                  "pl-10 focus-visible:ring-primary dark:focus-visible:ring-amber-500 border-gray-200 dark:border-gray-700 rounded-lg",
+                  "bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100",
+                  "shadow-sm"
+                )}
               />
             </div>
           </div>
           
-          <div className="space-y-2">
-            <Label htmlFor="password" className="text-sm font-medium">
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="password" className="text-sm font-medium text-gray-700 dark:text-gray-200">
               Password
             </Label>
+              <div className="text-xs text-gray-500 dark:text-gray-400">
+                Min. 6 characters
+              </div>
+            </div>
             <div className="relative">
-              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-muted-foreground">
+              <div className="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-gray-400 dark:text-gray-500">
                 <Lock className="h-4 w-4" />
               </div>
               <Input
@@ -117,38 +300,62 @@ export function RegisterForm() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                minLength={6}
-                placeholder="Choose a password (min. 6 characters)"
-                className="pl-10 focus-visible:ring-primary"
+                placeholder="Create a password"
+                className={cn(
+                  "pl-10 focus-visible:ring-primary dark:focus-visible:ring-amber-500 border-gray-200 dark:border-gray-700 rounded-lg",
+                  "bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100",
+                  "shadow-sm"
+                )}
               />
             </div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Password must be at least 6 characters long
-            </p>
           </div>
           
           <Button 
             type="submit" 
-            className="w-full bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70 transition-all duration-300 shadow-md mt-2" 
-            disabled={isLoading}
+            className={cn(
+              "w-full shadow-md rounded-lg h-11 mt-2",
+              "text-white font-medium transition-all duration-300",
+              resolvedTheme === 'dark'
+                ? "bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700"
+                : "bg-gradient-to-r from-primary to-primary/80 hover:from-primary/90 hover:to-primary/70"
+            )}
+            disabled={isLoading || registerStatus === 'loading'}
           >
-            {isLoading ? (
+            {isLoading || registerStatus === 'loading' ? (
               <>
                 <Loader2 className="mr-2 h-4 w-4 animate-spin" />
                 Creating account...
               </>
-            ) : 'Create Account'}
+            ) : (
+              <>
+                <UserRound className="mr-2 h-4 w-4" />
+                Create Account
+              </>
+            )}
           </Button>
+
+          <div className="relative my-6">
+            <Separator className="bg-gray-200 dark:bg-gray-700" />
+            <div className="absolute inset-0 flex items-center justify-center">
+              <span className="bg-white dark:bg-gray-900 px-2 text-sm text-gray-500 dark:text-gray-400">
+                Or continue with
+              </span>
+            </div>
+          </div>
+          
+          <div 
+            ref={googleButtonRef} 
+            className="w-full min-h-11 flex justify-center items-center"
+          >
+            {!window.google && (
+              <div className="text-sm text-gray-500 dark:text-gray-400 flex items-center">
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Loading Google Sign-In...
+              </div>
+            )}
+          </div>
         </form>
-      </CardContent>
-      <CardFooter className="flex justify-center border-t p-4">
-        <p className="text-sm text-muted-foreground">
-          Already have an account?{" "}
-          <a href="#login" className="text-primary hover:underline font-medium">
-            Sign in
-          </a>
-        </p>
-      </CardFooter>
-    </Card>
+      </div>
+    </motion.div>
   );
 } 
