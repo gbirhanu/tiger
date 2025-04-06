@@ -66,8 +66,13 @@ Tiger is a modern productivity platform that integrates task management, time tr
 4. Set up the database
 
    ```bash
-   npm run db:push
+   node migrations/run_migration.js
    ```
+
+   This script will:
+   - Create a SQLite database file (tiger.db)
+   - Set up all tables needed for the application
+   - Initialize default settings and subscription plans
 
 5. Start the development server
 
@@ -92,8 +97,25 @@ Tiger is a modern productivity platform that integrates task management, time tr
 - `npm run dev` - Start the development server
 - `npm run build` - Build for production
 - `npm run start` - Run the production server
-- `npm run db:push` - Push schema changes to the database
-- `npm run db:generate` - Generate database migrations
+- `node migrations/run_migration.js` - Set up or reset the database
+
+## Database Migrations
+
+Tiger uses SQLite with the Drizzle ORM. The database schema is defined in `shared/schema.ts` and migrations are stored in the `migrations` directory.
+
+To reset your database or set up a new instance:
+
+1. Run the migration script:
+
+   ```bash
+   node migrations/run_migration.js
+   ```
+
+2. For custom database path:
+
+   ```bash
+   DB_PATH=./custom/path/database.db node migrations/run_migration.js
+   ```
 
 ## License
 
