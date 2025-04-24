@@ -40,29 +40,9 @@ const UsageLimitDialog = ({ open, onOpenChange, message }: UsageLimitDialogProps
   useEffect(() => {
     // If dialog is open and marketing is disabled, close it immediately
     if (open && !showSubscriptionFeatures) {
-      console.log("Marketing disabled, automatically closing usage limit dialog");
       onOpenChange(false);
     }
   }, [open, showSubscriptionFeatures, onOpenChange]);
-
-  // Add useEffect to log dialog state changes
-  React.useEffect(() => {
-    console.log("UsageLimitDialog state:", { 
-      open, 
-      showPaymentForm, 
-      subscriptionId,
-      isCreatingSubscription,
-      marketingEnabled: showSubscriptionFeatures
-    });
-    
-    if (open && !showPaymentForm) {
-      console.log("UsageLimitDialog is open and showing options");
-    }
-    
-    if (open && showPaymentForm) {
-      console.log("UsageLimitDialog is open and showing payment form");
-    }
-  }, [open, showPaymentForm, subscriptionId, isCreatingSubscription, showSubscriptionFeatures]);
 
   // Navigate to settings and select API integration tab
   const handleGoToSettings = () => {
@@ -85,7 +65,6 @@ const UsageLimitDialog = ({ open, onOpenChange, message }: UsageLimitDialogProps
   const handleUpgradeClick = async () => {
     try {
       setIsCreatingSubscription(true);
-      console.log("Starting upgrade process");
       
       // Try to create a subscription, but continue even if it fails
       try {
@@ -98,22 +77,18 @@ const UsageLimitDialog = ({ open, onOpenChange, message }: UsageLimitDialogProps
           auto_renew: false
         });
         
-        console.log("Subscription created successfully:", subscription);
         
         if (subscription && subscription.id) {
           setSubscriptionId(subscription.id);
         }
       } catch (subscriptionError) {
-        console.error("Error creating subscription:", subscriptionError);
         // Continue without subscription ID
       }
       
       // Always show payment form, even if subscription creation failed
       setShowPaymentForm(true);
-      console.log("Payment form should now be visible");
       
     } catch (error) {
-      console.error("Unexpected error in handleUpgradeClick:", error);
       // Show payment form anyway
       setShowPaymentForm(true);
     } finally {

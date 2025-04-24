@@ -50,10 +50,6 @@ function getNextOccurrence(date: Date, pattern: string, interval: number): Date 
 
 // Check for API key
 const GEMINI_API_KEY = "AIzaSyAPNehyjmuB15YYzvq2yhbDiI8769TLChE"
-if (!GEMINI_API_KEY) {
-  console.error("GEMINI_API_KEY is not set in environment variables");
-}
-
 // Tasks
 router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
   try {
@@ -102,7 +98,6 @@ router.get("/tasks", requireAuth, async (req: Request, res: Response) => {
 
     res.json(tasksWithSubtasksInfo);
   } catch (error) {
-    console.error("Error fetching tasks:", error);
     res.status(500).json({ error: "Failed to fetch tasks" });
   }
 });
@@ -124,7 +119,6 @@ router.get("/tasks/subtasks", requireAuth, async (_req: Request, res: Response) 
     // Return as a proper JSON array
     res.json(taskIdsWithSubtasks);
   } catch (error) {
-    console.error("Error fetching tasks with subtasks:", error);
     res.status(500).json({ error: "Failed to fetch tasks with subtasks" });
   }
 });
@@ -141,7 +135,6 @@ router.get("/tasks/:id", requireAuth, async (req: Request, res: Response) => {
     
     res.json(task[0]);
   } catch (error) {
-    console.error("Error fetching task:", error);
     res.status(500).json({ error: "Failed to fetch task" });
   }
 });
@@ -179,7 +172,6 @@ router.post("/tasks", requireAuth, async (req: Request, res: Response) => {
     const task = await db.insert(tasks).values(taskValues).returning().get();
     res.json(task);
   } catch (error) {
-    console.error("Error creating task:", error);
     res.status(500).json({ error: "Failed to create task" });
   }
 });
@@ -206,7 +198,8 @@ router.put("/tasks/:id", requireAuth, async (req, res) => {
     
     // Create a clean update object with just the properties we want to update
     const updateData: any = {
-      updated_at: sql`datetime('now')` // Use the server's time - SQLite will convert to UTC
+      // Use the current time in UTC
+      updated_at: sql`datetime('now', 'utc')`
     };
     
     // Only include properties that are explicitly provided
@@ -307,7 +300,6 @@ router.put("/tasks/:id", requireAuth, async (req, res) => {
     
     res.json(updateData);
   } catch (error) {
-    console.error("Error updating task:", error);
     res.status(500).json({ 
       error: "Failed to update task",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -337,7 +329,7 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
 
     // Create a clean update object with just the properties we want to update
     const updateData: any = {
-      updated_at: sql`datetime('now')` // Use the server's time - SQLite will convert to UTC
+      updated_at: sql`datetime('now', 'utc')` // Use the server's time - SQLite will convert to UTC
     };
     
     // Only include properties that are explicitly provided
@@ -419,14 +411,45 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
       .returning()
       .get();
 
+    // ---> DELETE NOTIFICATION LOG LOGIC <-----
+    const newDueDate = updateData.due_date;
+    const shouldDeleteLog = 'due_date' in updateData && 
+                            id != null && 
+                            newDueDate && // Ensure due_date is not null or 0
+                            newDueDate > Math.floor(Date.now() / 1000); // Check if due_date is in the future
+
+    console.log(`[Task PATCH ${id}] Should delete notification log?`, shouldDeleteLog);
+    if (shouldDeleteLog) {
+      console.log(`[Task PATCH ${id}] Attempting to delete notification log for new due date: ${newDueDate}`);
+      try {
+        // Execute raw SQL delete statement using db.run
+        await db.run(sql`
+          DELETE FROM notification_log 
+          WHERE item_id = ${id} AND item_type = 'task'
+        `);
+        console.log(`[Task PATCH ${id}] Successfully deleted notification log.`);
+      } catch (logDeleteError) {
+        console.error(`[Task PATCH ${id}] Failed to delete notification log:`, logDeleteError); 
+        // Decide if this error should affect the main response. Usually not critical.
+      }
+    } else if ('due_date' in updateData) {
+      console.log(`[Task PATCH ${id}] Not deleting notification log. Due date: ${newDueDate}, Current time: ${Math.floor(Date.now() / 1000)}`);
+    }
+    // ---> END DELETE NOTIFICATION LOG LOGIC <-----
+
     // Update all related recurring instances if needed 
     if (isUpdatingRecurringInstance && sharedUpdateData) {
       // Update all other instances with the same parent_id (but not this one, which we just updated)
       await db.update(tasks)
-        .set(sharedUpdateData)
+        .set({
+          ...sharedUpdateData,
+          updated_at: sql`datetime('now', 'utc')`
+        })
         .where(
           and(
-            eq(tasks.parent_task_id, currentTask.parent_task_id),
+            currentTask.parent_task_id 
+              ? eq(tasks.parent_task_id, currentTask.parent_task_id) 
+              : sql`${tasks.parent_task_id} IS NULL`,
             sql`${tasks.id} != ${id}`,
             eq(tasks.user_id, req.userId!)
           )
@@ -476,7 +499,9 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
             .set(sharedParentUpdateData)
             .where(
               and(
-                eq(tasks.parent_task_id, id),
+                currentTask.parent_task_id 
+                  ? eq(tasks.parent_task_id, currentTask.parent_task_id) 
+                  : sql`${tasks.parent_task_id} IS NULL`,
                 eq(tasks.user_id, req.userId!)
               )
             );
@@ -524,7 +549,6 @@ router.patch("/tasks/:id", requireAuth, async (req, res) => {
 
     res.json(updatedTask);
   } catch (error) {
-    console.error("Error updating task:", error);
     res.status(400).json({ 
       error: "Invalid update data", 
       details: error instanceof Error ? error.message : "Unknown error"
@@ -552,7 +576,6 @@ router.delete("/tasks/:id", requireAuth, async (req, res) => {
 
     res.json({ success: true });
   } catch (error) {
-    console.error("Error deleting task:", error);
     res.status(500).json({ error: "Failed to delete task" });
   }
 });
@@ -568,7 +591,6 @@ router.get("/notes", requireAuth, async (req: Request, res: Response) => {
     
     res.json(userNotes);
   } catch (error) {
-    console.error("Error fetching notes:", error);
     res.status(500).json({ error: "Failed to fetch notes" });
   }
 });
@@ -590,7 +612,6 @@ router.get("/notes/:id", requireAuth, async (req: Request, res: Response) => {
     
     res.json(note[0]);
   } catch (error) {
-    console.error("Error fetching note:", error);
     res.status(500).json({ error: "Failed to fetch note" });
   }
 });
@@ -612,7 +633,6 @@ const noteData = result.data;
     }).returning();
     res.json(newNote[0]);
   } catch (error) {
-    console.error("Error creating note:", error);
     res.status(500).json({ error: "Failed to create note" });
   }
 });
@@ -657,7 +677,6 @@ router.patch("/notes/:id", requireAuth, async (req: Request, res: Response) => {
     
     res.json(updatedNote[0]);
   } catch (error) {
-    console.error("Error updating note:", error);
     res.status(500).json({ error: "Failed to update note" });
   }
 });
@@ -688,7 +707,6 @@ router.delete("/notes/:id", requireAuth, async (req: Request, res: Response) => 
       
     res.json({ success: true });
   } catch (error) {
-    console.error("Error deleting note:", error);
     res.status(500).json({ error: "Failed to delete note" });
   }
 });
@@ -704,7 +722,6 @@ router.get("/long-notes", requireAuth, async (req: Request, res: Response) => {
     
     res.json(userLongNotes);
   } catch (error) {
-    console.error("Error fetching long notes:", error);
     res.status(500).json({ error: "Failed to fetch long notes" });
   }
 });
@@ -726,7 +743,6 @@ router.get("/long-notes/:id", requireAuth, async (req: Request, res: Response) =
     
     res.json(note[0]);
   } catch (error) {
-    console.error("Error fetching long note:", error);
     res.status(500).json({ error: "Failed to fetch long note" });
   }
 });
@@ -736,7 +752,6 @@ router.post("/long-notes", requireAuth, async (req: Request, res: Response) => {
     
     const result = insertLongNoteSchema.safeParse(req.body);
     if (!result.success) {
-      console.error("Invalid long note data:", result.error.errors);
       return res.status(400).json({ 
         error: "Invalid long note data", 
         details: result.error.errors 
@@ -752,7 +767,6 @@ router.post("/long-notes", requireAuth, async (req: Request, res: Response) => {
     
     res.json(newNote[0]);
   } catch (error) {
-    console.error("Error creating long note:", error);
     res.status(500).json({ error: "Failed to create long note" });
   }
 });
@@ -797,7 +811,6 @@ router.patch("/long-notes/:id", requireAuth, async (req: Request, res: Response)
     
     res.json(updatedNote[0]);
   } catch (error) {
-    console.error("Error updating long note:", error);
     res.status(500).json({ error: "Failed to update long note" });
   }
 });
@@ -828,7 +841,6 @@ router.delete("/long-notes/:id", requireAuth, async (req: Request, res: Response
     
     res.json({ success: true });
   } catch (error) {
-    console.error("Error deleting long note:", error);
     res.status(500).json({ error: "Failed to delete long note" });
   }
 });
@@ -966,14 +978,12 @@ router.post("/long-notes/:id/enhance", requireAuth, async (req: Request, res: Re
         }
       }
     } catch (countError) {
-      console.error("Error incrementing counter:", countError);
       // Continue processing request despite counter error
     }
 
     // Return the enhanced content
     res.json({ content: enhancedContent });
   } catch (error) {
-    console.error("Error enhancing note:", error);
     res.status(500).json({ 
       error: "Failed to enhance note",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -1019,7 +1029,6 @@ router.post("/meetings", requireAuth, async (req: Request, res: Response) => {
     const newMeeting = await db.insert(meetings).values(meetingData).returning().get();
     res.json(newMeeting);
   } catch (error) {
-    console.error("Error creating meeting:", error);
     res.status(500).json({ error: "Failed to create meeting" });
   }
 });
@@ -1074,7 +1083,6 @@ router.patch("/meetings/:id", requireAuth, async (req: Request, res: Response) =
     
     res.json(updatedMeeting);
   } catch (error) {
-    console.error("Error updating meeting:", error);
     res.status(500).json({ error: "Failed to update meeting" });
   }
 });
@@ -1152,7 +1160,6 @@ router.post("/appointments", requireAuth, async (req: Request, res: Response) =>
     const newAppointment = await db.insert(appointments).values(appointmentData).returning().get();
     res.json(newAppointment);
   } catch (error) {
-    console.error("Error creating appointment:", error);
     res.status(500).json({ error: "Failed to create appointment" });
   }
 });
@@ -1207,7 +1214,6 @@ router.patch("/appointments/:id", requireAuth, async (req: Request, res: Respons
     
     res.json(updatedAppointment);
   } catch (error) {
-    console.error("Error updating appointment:", error);
     res.status(500).json({ error: "Failed to update appointment" });
   }
 });
@@ -1290,7 +1296,6 @@ router.patch("/pomodoro-settings", requireAuth, async (req, res) => {
       .returning();
     res.json(updatedSettings[0]);
   } catch (error) {
-    console.error("Error updating pomodoro settings:", error);
     res.status(500).json({ error: "Failed to update pomodoro settings" });
   }
 });
@@ -1313,6 +1318,7 @@ router.get("/user-settings", requireAuth, async (req, res) => {
         default_calendar_view: "month",
         show_notifications: true,
         notifications_enabled: true,
+        email_notifications_enabled: false,
         created_at: Math.floor(Date.now() / 1000),
         updated_at: Math.floor(Date.now() / 1000)
       });
@@ -1321,7 +1327,6 @@ router.get("/user-settings", requireAuth, async (req, res) => {
     
     res.json(settings[0]);
   } catch (error) {
-    console.error("Error fetching user settings:", error);
     res.status(500).json({ error: "Failed to fetch user settings" });
   }
 });
@@ -1350,20 +1355,15 @@ router.put("/user-settings", requireAuth, async (req, res) => {
       res.json(updatedSettings[0]);
     }
   } catch (error) {
-    console.error('Error updating user settings:', error);
     res.status(500).json({ error: "Failed to update user settings" });
   }
 });
 
 router.patch("/user-settings", requireAuth, async (req, res) => {
   try {
-    console.log("🔄 PATCH user settings update for user ID:", req.userId, "with data:", {
-      ...req.body,
-      gemini_key: req.body.gemini_key ? "[REDACTED]" : undefined
-    });
+ 
     
     if (!req.userId) {
-      console.error("⚠️ No user ID found in request for PATCH settings update");
       return res.status(401).json({ error: "Unauthorized - No user ID" });
     }
     
@@ -1373,7 +1373,6 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
       .from(userSettings)
       .where(eq(userSettings.user_id, req.userId));
     
-    console.log(`📊 Found ${existingSettings.length} existing settings records for user ID ${req.userId}`);
     
     // Process work hours - ensure they are valid hour values (0-24)
     let workStartHour = undefined;
@@ -1399,7 +1398,6 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
     
     // If no settings exist, create new settings
     if (existingSettings.length === 0) {
-      console.log("🆕 No existing settings found, creating new settings for user ID:", req.userId);
       
       // Create default hour values for work hours if not provided
       if (workStartHour === undefined) {
@@ -1418,6 +1416,7 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
         default_calendar_view: 'default_calendar_view' in req.body ? req.body.default_calendar_view : "month",
         show_notifications: 'show_notifications' in req.body ? Boolean(req.body.show_notifications) : true,
         notifications_enabled: 'notifications_enabled' in req.body ? Boolean(req.body.notifications_enabled) : true,
+        email_notifications_enabled: 'email_notifications_enabled' in req.body ? Boolean(req.body.email_notifications_enabled) : false,
         gemini_key: 'gemini_key' in req.body ? req.body.gemini_key : null,
         subscription_plan: 'subscription_plan' in req.body ? req.body.subscription_plan : "free",
         subscription_expiry: 'subscription_expiry' in req.body ? req.body.subscription_expiry : null,
@@ -1426,35 +1425,30 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
         work_end_hour: workEndHour
       };
       
-      console.log("📝 Creating new settings with data:", {
-        ...newSettingsData,
-        gemini_key: newSettingsData.gemini_key ? "[REDACTED]" : null
-      });
+    
       
       const newSettings = await db
         .insert(userSettings)
         .values(newSettingsData)
         .returning();
       
-      console.log("✅ New settings created successfully for user ID:", req.userId);
       return res.json(newSettings[0]);
     }
     
     // Update existing settings
-    console.log("🔄 Updating existing settings for user ID:", req.userId);
     
     // Create update object with only the fields that are provided
     const updateData: Record<string, any> = {
       // Set updated_at timestamp for every update
       updated_at: Math.floor(Date.now() / 1000)
     };
-    
     // Add all possible user settings fields if they exist in the request body
     if ('timezone' in req.body) updateData.timezone = req.body.timezone;
     if ('theme' in req.body) updateData.theme = req.body.theme;
     if ('default_calendar_view' in req.body) updateData.default_calendar_view = req.body.default_calendar_view;
     if ('show_notifications' in req.body) updateData.show_notifications = Boolean(req.body.show_notifications);
     if ('notifications_enabled' in req.body) updateData.notifications_enabled = Boolean(req.body.notifications_enabled);
+    if ('email_notifications_enabled' in req.body) updateData.email_notifications_enabled = Boolean(req.body.email_notifications_enabled);
     if ('gemini_key' in req.body) updateData.gemini_key = req.body.gemini_key;
     if ('subscription_plan' in req.body) updateData.subscription_plan = req.body.subscription_plan;
     if ('subscription_expiry' in req.body) updateData.subscription_expiry = req.body.subscription_expiry;
@@ -1462,14 +1456,10 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
     if (workStartHour !== undefined) updateData.work_start_hour = workStartHour;
     if (workEndHour !== undefined) updateData.work_end_hour = workEndHour;
     
-    console.log("📝 Updating with data:", {
-      ...updateData,
-      gemini_key: updateData.gemini_key ? "[REDACTED]" : undefined
-    });
+    
     
     // Only update if there are fields to update
     if (Object.keys(updateData).length === 1) { // 1 because we always set updated_at
-      console.log("ℹ️ No changes to update, returning existing settings for user ID:", req.userId);
       return res.json(existingSettings[0]);
     }
     
@@ -1479,11 +1469,9 @@ router.patch("/user-settings", requireAuth, async (req, res) => {
       .where(eq(userSettings.user_id, req.userId))
       .returning();
     
-    console.log("✅ Settings updated successfully for user ID:", req.userId);
     res.json(result[0]);
     
   } catch (error) {
-    console.error("❌ Error updating user settings:", error);
     res.status(500).json({ 
       error: "Failed to update user settings",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -1543,7 +1531,6 @@ router.post("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Respon
     
     res.json(allSubtasks);
   } catch (error) {
-    console.error("Error saving subtasks:", error);
     res.status(500).json({ error: "Failed to save subtasks" });
   }
 });
@@ -1559,7 +1546,6 @@ router.get("/tasks/:id/subtasks", requireAuth, async (req: Request, res: Respons
     
     res.json(taskSubtasks);
   } catch (error) {
-    console.error("Error fetching subtasks:", error);
     res.status(500).json({ error: "Failed to fetch subtasks" });
   }
 });
@@ -1575,12 +1561,10 @@ router.patch("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Requ
     const subtaskIdNum = parseInt(subtaskId);
     
     if (isNaN(taskIdNum) || taskIdNum <= 0) {
-      console.error(`Invalid taskId: ${taskId}`);
       return res.status(400).json({ error: "Invalid task ID" });
     }
     
     if (isNaN(subtaskIdNum) || subtaskIdNum <= 0) {
-      console.error(`Invalid subtaskId: ${subtaskId}`);
       return res.status(400).json({ error: "Invalid subtask ID" });
     }
 
@@ -1636,7 +1620,6 @@ router.patch("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Requ
       .get();
       
     if (!existingSubtask) {
-      console.error(`Subtask ${subtaskIdNum} not found for task ${taskIdNum} and user ${req.userId}`);
       return res.status(404).json({ error: "Subtask not found" });
     }
 
@@ -1654,13 +1637,11 @@ router.patch("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Requ
       .returning();
 
     if (!updatedSubtask) {
-      console.error(`Update failed for subtask ${subtaskIdNum}`);
       return res.status(404).json({ error: "Subtask update failed" });
     }
 
     res.json(updatedSubtask);
   } catch (error) {
-    console.error("Error updating subtask:", error);
     res.status(500).json({ 
       error: "Failed to update subtask",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -1698,7 +1679,6 @@ router.delete("/tasks/:taskId/subtasks/:subtaskId", requireAuth, async (req: Req
 
     res.status(200).json({ success: true, message: "Subtask deleted successfully" });
   } catch (error) {
-    console.error("Error deleting subtask:", error);
     res.status(500).json({ error: "Failed to delete subtask" });
   }
 });
@@ -1782,7 +1762,6 @@ router.get("/gemini/usage", requireAuth, async (req: Request, res: Response) => 
       showUpgrade: shouldEnforceLimits // Add flag to indicate that user should be prompted to upgrade
     });
   } catch (error) {
-    console.error("Error checking Gemini usage:", error);
     res.status(500).json({ 
       error: "Failed to check Gemini usage",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -1853,7 +1832,6 @@ router.post("/gemini/increment-usage", requireAuth, async (req: Request, res: Re
       settings: userSetting
     });
   } catch (error) {
-    console.error("Error incrementing Gemini usage:", error);
     res.status(500).json({ 
       error: "Failed to increment Gemini usage",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -1930,7 +1908,6 @@ router.get('/admin-settings', requireAuth, async (req, res) => {
     
     res.json(settings);
   } catch (error) {
-    console.error('Error fetching admin settings:', error);
     res.status(500).json({ error: 'Failed to fetch admin settings' });
   }
 });
@@ -1964,7 +1941,6 @@ router.patch('/admin-settings', requireAuth, async (req, res) => {
     
     res.json(updatedSettings);
   } catch (error) {
-    console.error('Error updating admin subscription settings:', error);
     res.status(500).json({ error: 'Failed to update admin subscription settings' });
   }
 });
@@ -1981,7 +1957,6 @@ router.get('/api/admin-settings', requireAuth, async (req, res) => {
     
     res.json(settings);
   } catch (error) {
-    console.error('Error fetching admin settings:', error);
     res.status(500).json({ error: 'Failed to fetch admin settings' });
   }
 });
@@ -2015,7 +1990,6 @@ router.patch('/api/admin-settings', requireAuth, async (req, res) => {
     
     res.json(updatedSettings);
   } catch (error) {
-    console.error('Error updating admin subscription settings:', error);
     res.status(500).json({ error: 'Failed to update admin subscription settings' });
   }
 });
@@ -2054,8 +2028,84 @@ router.get("/users", requireAdmin, async (req: Request, res: Response) => {
     
     return res.json({ users: formattedUsers });
   } catch (error) {
-    console.error("Error getting users:", error);
     return res.status(500).json({ error: "Failed to get users" });
+  }
+});
+
+// Add a debug route to check session validity
+router.post("/debug/verify-token", async (req, res) => {
+  try {
+    const { token } = req.body;
+    
+    
+    if (!token) {
+      return res.status(400).json({ 
+        valid: false, 
+        error: "No token provided",
+        dbCheck: false
+      });
+    }
+    
+    // Import validation function directly
+    const { validateSession } = await import("../lib/auth");
+    
+    // Check raw token format
+    const isValidFormat = typeof token === 'string' && token.trim().length > 10;
+    
+    // First, check database without any error handling to see if token exists
+    try {
+      const { db } = await import("../lib/db");
+      const { sessions } = await import("../../shared/schema");
+      const { eq } = await import("drizzle-orm");
+      
+      const sessionRecord = await db.query.sessions.findFirst({
+        where: eq(sessions.id, token),
+      });
+
+      // Now do the real validation through the standard function
+      const userId = await validateSession(token);
+      
+      return res.json({
+        valid: !!userId,
+        userId: userId,
+        format: {
+          isString: typeof token === 'string',
+          length: typeof token === 'string' ? token.length : 0,
+          isValidFormat
+        },
+        dbCheck: {
+          found: !!sessionRecord,
+          expiresAt: sessionRecord?.expires_at,
+          currentTime: Math.floor(Date.now() / 1000),
+          isExpired: sessionRecord 
+              ? sessionRecord.expires_at < Math.floor(Date.now() / 1000) 
+              : null
+        }
+      });
+    } catch (dbError) {
+      
+      // Fall back to just using the validation function
+      const userId = await validateSession(token);
+      
+      return res.json({
+        valid: !!userId,
+        userId: userId,
+        format: {
+          isString: typeof token === 'string',
+          length: typeof token === 'string' ? token.length : 0,
+          isValidFormat
+        },
+        dbCheck: {
+          error: "Database check failed",
+          details: dbError instanceof Error ? dbError.message : "Unknown error"
+        }
+      });
+    }
+  } catch (error) {
+    return res.status(500).json({ 
+      valid: false, 
+      error: error instanceof Error ? error.message : "Unknown error"
+    });
   }
 });
 

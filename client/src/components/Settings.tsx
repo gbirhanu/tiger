@@ -13,7 +13,9 @@ import {
   fetchAllPayments,
   approvePayment,
   rejectPayment,
-  getUserPaymentHistory
+  getUserPaymentHistory,
+  updateEnvVariables,
+  getEnvironmentVariables
 } from "@/lib/api";
 import { QUERY_KEYS } from "@/lib/queryClient";
 import type { UserSettings, AdminSettings } from "../../../shared/schema";
@@ -54,7 +56,9 @@ import {
   PackageOpen,
   User,
   Brain,
-  Receipt
+  Receipt,
+  Settings2,
+  Database
 } from "lucide-react";
 import { getUserTimezone } from "@/lib/timezone";
 import { TimeSelect } from "./TimeSelect";
@@ -78,6 +82,7 @@ import {
 import { AdminPlanManager } from "./AdminPlanManager";
 import AdminSettingsForm from "./AdminSettingsForm";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useNotifications } from '@/hooks/use-notifications';
 
 // Define a custom type for work hours that can be either a number (Unix timestamp) or an object
 type WorkHour = number | { hour: number; minute: number };
@@ -90,21 +95,7 @@ interface FormattedUserSettings extends Omit<UserSettings, 'work_start_hour' | '
   // Do NOT include admin properties here
 }
 
-// Define a separate interface for admin settings
-interface FormattedAdminSettings {
-  // Optional fields that may not be present when creating a new record
-  id?: number;
-  created_at?: number;
-  updated_at?: number;
-  
-  // Required fields with proper types
-  gemini_max_free_calls: number;
-  enable_marketing: boolean;
-  bank_account: string | null;
-  bank_owner: string | null;
-  subscription_amount: number;
-  default_currency: string;
-}
+
 
 const TIMEZONES = Intl.supportedValuesOf('timeZone');
 
@@ -195,19 +186,7 @@ export const Settings = ({ user }: { user: any }) => {
     retry: 1
   });
 
-  // Add a separate effect to log admin settings data
-  React.useEffect(() => {
-    if (adminSettings) {
-      console.log("✅ Admin settings loaded successfully:", adminSettings);
-    }
-  }, [adminSettings]);
-
-  // Add an effect to log any admin query errors
-  React.useEffect(() => {
-    if (adminError) {
-      console.error("Error fetching admin settings:", adminError);
-    }
-  }, [adminError]);
+  const { requestNotificationPermissions } = useNotifications();
 
   // Define a type for subscription payments
   interface SubscriptionPayment {
@@ -264,13 +243,80 @@ export const Settings = ({ user }: { user: any }) => {
       default_calendar_view: "month",
       show_notifications: true,
       notifications_enabled: true,
+      email_notifications_enabled: false,
       gemini_key: "",
     },
   });
 
+  // Add state for environment variables form
+  const [isUpdatingEnv, setIsUpdatingEnv] = useState(false);
+  const [envVariables, setEnvVariables] = useState({
+    GOOGLE_CLIENT_ID: "",
+    GOOGLE_CLIENT_SECRET: "",
+    GEMINI_API_KEY: "",
+    TURSO_URL: "",
+    TURSO_AUTH_TOKEN: ""
+  });
+  const [isLoadingEnv, setIsLoadingEnv] = useState(false);
 
+  // Function to load environment variables
+  const loadEnvironmentVariables = async () => {
+    if (!user || user.role !== "admin") return;
+    
+    try {
+      setIsLoadingEnv(true);
+      // Get the current .env file contents from server
+      const data = await getEnvironmentVariables();
+      
+     
+      
+      setEnvVariables({
+        GOOGLE_CLIENT_ID: data.GOOGLE_CLIENT_ID || "",
+        GOOGLE_CLIENT_SECRET: data.GOOGLE_CLIENT_SECRET || "",
+        GEMINI_API_KEY: data.GEMINI_API_KEY || "",
+        TURSO_URL: data.TURSO_DATABASE_URL || "",
+        TURSO_AUTH_TOKEN: data.TURSO_AUTH_TOKEN || ""
+      });
+      
+      // Removed the success toast notification
+    } catch (error) {
+      console.error('Error loading environment variables:', error);
+      toast({
+        variant: "destructive",
+        title: "Failed to load environment variables",
+        description: error instanceof Error ? error.message : "An error occurred while loading configuration.",
+      });
+    } finally {
+      setIsLoadingEnv(false);
+    }
+  };
 
- 
+  // Load environment variables when the component mounts and user is admin
+  React.useEffect(() => {
+    if (user?.role === "admin") {
+      loadEnvironmentVariables();
+    }
+  }, [user?.role]);
+
+  // Function to update environment variables
+  const updateEnvSettings = async () => {
+    try {
+      setIsUpdatingEnv(true);
+      await updateEnvVariables(envVariables);
+      toast({
+        title: "Environment variables updated",
+        description: "The configuration has been updated successfully.",
+      });
+    } catch (error) {
+      toast({
+        variant: "destructive",
+        title: "Failed to update environment variables",
+        description: error instanceof Error ? error.message : "An error occurred while updating configuration.",
+      });
+    } finally {
+      setIsUpdatingEnv(false);
+    }
+  };
 
   // Helper function to convert a Unix timestamp to a time object
   const unixTimestampToTimeObject = (timestamp: number): { hour: number, minute: number } => {
@@ -313,10 +359,6 @@ export const Settings = ({ user }: { user: any }) => {
   }, [settings, form]);
   const updateSettingsMutation = useMutation({
     mutationFn: async (data: FormattedUserSettings) => {
-      console.log("🔄 Starting settings update mutation with data:", {
-        ...data,
-        gemini_key: data.gemini_key ? "[REDACTED]" : data.gemini_key
-      });
       
       // Create a clean copy of data, only including fields that are defined
       // This ensures partial updates don't clear other fields
@@ -333,6 +375,7 @@ export const Settings = ({ user }: { user: any }) => {
       if (data.default_calendar_view !== undefined) userOnlyData.default_calendar_view = data.default_calendar_view;
       if (data.show_notifications !== undefined) userOnlyData.show_notifications = data.show_notifications;
       if (data.notifications_enabled !== undefined) userOnlyData.notifications_enabled = data.notifications_enabled;
+      if (data.email_notifications_enabled !== undefined) userOnlyData.email_notifications_enabled = data.email_notifications_enabled;
       if (data.gemini_key !== undefined) userOnlyData.gemini_key = data.gemini_key;
       
       try {
@@ -340,10 +383,6 @@ export const Settings = ({ user }: { user: any }) => {
         await new Promise(resolve => setTimeout(resolve, 100));
         
         const result = await updateUserSettings(userOnlyData);
-        console.log("✅ Settings update API call successful:", {
-          ...result,
-          gemini_key: result.gemini_key ? "[REDACTED]" : result.gemini_key
-        });
         return result;
       } catch (error) {
         console.error("❌ Settings update API call failed:", error);
@@ -351,8 +390,7 @@ export const Settings = ({ user }: { user: any }) => {
       }
     },
     onMutate: async (newSettings) => {
-      console.log("🔄 Mutation started, optimistically updating UI...");
-      
+
       // Cancel any outgoing refetches
       await queryClient.cancelQueries({ queryKey: [QUERY_KEYS.USER_SETTINGS] });
       
@@ -385,15 +423,11 @@ export const Settings = ({ user }: { user: any }) => {
       // Ensure the user_id is preserved for all settings updates
       if (previousSettings?.user_id) {
         optimisticSettings.user_id = previousSettings.user_id;
-        console.log("📝 Setting user_id in optimistic update to:", previousSettings.user_id);
-      } else {
-        console.warn("⚠️ No user_id found in previous settings for optimistic update");
       }
       
       // Optimistically update to the new value
       queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], (old) => {
         if (!old) {
-          console.warn("⚠️ No existing settings found in cache for optimistic update");
           return old;
         }
         
@@ -415,10 +449,7 @@ export const Settings = ({ user }: { user: any }) => {
           user_id: oldCopy.user_id
         };
         
-        console.log("📋 Optimistically updated settings:", {
-          ...typedOptimisticSettings,
-          gemini_key: typedOptimisticSettings.gemini_key ? "[REDACTED]" : typedOptimisticSettings.gemini_key
-        });
+       
         return typedOptimisticSettings;
       });
       
@@ -430,7 +461,6 @@ export const Settings = ({ user }: { user: any }) => {
       
       // Rollback to previous state if available
       if (context?.previousSettings) {
-        console.log("↩️ Rolling back to previous settings due to error");
         queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], context.previousSettings);
       }
       
@@ -441,10 +471,7 @@ export const Settings = ({ user }: { user: any }) => {
       });
     },
     onSuccess: (data) => {
-      console.log("✅ Settings update mutation successful, received data:", {
-        ...data,
-        gemini_key: data.gemini_key ? "[REDACTED]" : data.gemini_key
-      });
+      
       
       // Update the cache with the server response
       queryClient.setQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS], data);
@@ -458,11 +485,10 @@ export const Settings = ({ user }: { user: any }) => {
       });
     },
     onSettled: () => {
-      console.log("🏁 Settings mutation settled - either succeeded or failed");
       
       // Ensure loading state is reset - add this explicitly
       setTimeout(() => {
-        console.log("🔄 Forcing reset of loading state");
+        
       }, 500);
     }
   })
@@ -509,25 +535,26 @@ export const Settings = ({ user }: { user: any }) => {
               }
             }}
           >
-            <TabsList className="mb-4">
-              <TabsTrigger value="general">General</TabsTrigger>
-              <TabsTrigger value="notifications">Notifications</TabsTrigger>
-              <TabsTrigger value="api">API Integration</TabsTrigger>
+            <TabsList className="mb-6 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 h-auto p-2">
+              <TabsTrigger value="general" className="h-10 text-sm">General</TabsTrigger>
+              <TabsTrigger value="notifications" className="h-10 text-sm">Notifications</TabsTrigger>
+              <TabsTrigger value="api" className="h-10 text-sm">API Integration</TabsTrigger>
               {/* Only show usage tab when marketing is enabled or user is already Pro */}
               {showSubscriptionFeatures && (!user || user.role !== "admin") && (
-                <TabsTrigger value="usage">Usage</TabsTrigger>
+                <TabsTrigger value="usage" className="h-10 text-sm">Usage</TabsTrigger>
               )}
               {/* Only show invoice history tab when marketing is enabled */}
               {showSubscriptionFeatures && (
-                <TabsTrigger value="invoices">Invoice History</TabsTrigger>
+                <TabsTrigger value="invoices" className="h-10 text-sm">Invoice History</TabsTrigger>
               )}
               {user && user.role === "admin" && (
                 <>
-                  <TabsTrigger value="admin">Admin Settings</TabsTrigger>
+                  <TabsTrigger value="admin" className="h-10 text-sm">Admin Settings</TabsTrigger>
+                  <TabsTrigger value="environment" className="h-10 text-sm">Environment</TabsTrigger>
                   {showSubscriptionFeatures && (
                     <>
-                  <TabsTrigger value="plans">Subscription Plans</TabsTrigger>
-                  <TabsTrigger value="payments">Payments</TabsTrigger>
+                      <TabsTrigger value="plans" className="h-10 text-sm">Subscription Plans</TabsTrigger>
+                      <TabsTrigger value="payments" className="h-10 text-sm">Payments</TabsTrigger>
                     </>
                   )}
                 </>
@@ -818,7 +845,6 @@ export const Settings = ({ user }: { user: any }) => {
                   id="general-settings-form"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    console.log("🔄 General form submit triggered");
                     
                     // Get only the general tab fields
                     const formValues = {
@@ -829,7 +855,6 @@ export const Settings = ({ user }: { user: any }) => {
                       default_calendar_view: form.getValues("default_calendar_view"),
                     };
                     
-                    console.log("📋 General settings form values:", formValues);
                     
                     // Create a formatted data object with only general settings, ensuring no admin properties are included
                     const formattedData: Partial<FormattedUserSettings> = { 
@@ -841,10 +866,10 @@ export const Settings = ({ user }: { user: any }) => {
                     // Define callbacks for tracking the state
                     const callbacks = {
                       onSuccess: () => {
-                        console.log("✅ General settings saved successfully");
+                        
                       },
                       onError: (error: any) => {
-                        console.error("❌ Error saving general settings:", error);
+                        
                       }
                     };
                     
@@ -1120,15 +1145,15 @@ export const Settings = ({ user }: { user: any }) => {
                   id="notifications-settings-form"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    console.log("🔄 Notifications form submit triggered");
                     
                     // Get only notification fields
                     const formValues = {
                       notifications_enabled: form.getValues("notifications_enabled"),
                       show_notifications: form.getValues("show_notifications"),
+                      email_notifications_enabled: form.getValues("email_notifications_enabled"),
                     };
                     
-                    console.log("📋 Notifications form values:", formValues);
+                    console.log("Submitting notification settings:", formValues);
                     
                     // Create a formatted data object with only notification settings, ensuring no admin properties
                     const formattedData: Partial<FormattedUserSettings> = { 
@@ -1140,10 +1165,10 @@ export const Settings = ({ user }: { user: any }) => {
                     // Define callbacks for tracking the state
                     const callbacks = {
                       onSuccess: () => {
-                        console.log("✅ Notification settings saved successfully");
+                        console.log("Notification settings updated successfully");
                       },
                       onError: (error: any) => {
-                        console.error("❌ Error saving notification settings:", error);
+                        console.error("Failed to update notification settings:", error);
                       }
                     };
                     
@@ -1165,19 +1190,14 @@ export const Settings = ({ user }: { user: any }) => {
                         render={({ field }) => (
                           <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 shadow-sm">
                             <div className="space-y-0.5">
-                              <div className="flex items-center gap-2">
-                                <FormLabel className="text-base">
-                                  Notifications Enabled
-                                </FormLabel>
-                                {field.value ? (
-                                  <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">Enabled</Badge>
-                                ) : (
-                                  <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Disabled</Badge>
-                                )}
-                              </div>
-                              <FormDescription>
-                                Master switch to enable or disable all notifications
-                              </FormDescription>
+                              <FormLabel className="text-base">
+                                Notifications Enabled
+                              </FormLabel>
+                              {field.value ? (
+                                <Badge variant="outline" className="bg-green-50 text-green-700 border-green-200">Enabled</Badge>
+                              ) : (
+                                <Badge variant="outline" className="bg-red-50 text-red-700 border-red-200">Disabled</Badge>
+                              )}
                             </div>
                             <FormControl>
                               <Switch
@@ -1209,8 +1229,51 @@ export const Settings = ({ user }: { user: any }) => {
                               <Switch
                                 checked={!!field.value}
                                 onCheckedChange={(checked) => {
+                                  // If enabling notifications, request permission
+                                  if (checked) {
+                                    requestNotificationPermissions().then(granted => {
+                                      // Only update field if permission was granted
+                                      field.onChange(granted);
+                                      if (!granted) {
+                                        toast({
+                                          title: "Permission denied",
+                                          description: "You need to allow notifications in your browser settings",
+                                          variant: "destructive"
+                                        });
+                                      }
+                                    });
+                                  } else {
+                                    // If disabling, update field directly
+                                    field.onChange(checked);
+                                  }
+                                }}
+                                disabled={!form.watch("notifications_enabled")}
+                              />
+                            </FormControl>
+                          </FormItem>
+                        )}
+                      />
+
+                      <FormField
+                        control={form.control}
+                        name="email_notifications_enabled"
+                        render={({ field }) => (
+                          <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4 shadow-sm">
+                            <div className="space-y-0.5">
+                              <FormLabel className="text-base">
+                                Email Notifications
+                              </FormLabel>
+                              <FormDescription>
+                                Receive email reminders for tasks and meetings
+                              </FormDescription>
+                            </div>
+                            <FormControl>
+                              <Switch
+                                checked={!!field.value}
+                                onCheckedChange={(checked) => {
+                                  console.log(`Setting email_notifications_enabled to: ${checked}`);
                                   field.onChange(checked);
-                                  // Update form value but don't call API or show toast
+                    
                                 }}
                                 disabled={!form.watch("notifications_enabled")}
                               />
@@ -1249,17 +1312,12 @@ export const Settings = ({ user }: { user: any }) => {
                   id="api-settings-form"
                   onSubmit={(e) => {
                     e.preventDefault();
-                    console.log("🔄 API form submit triggered");
                     
                     // Get only API integration fields
                     const formValues = {
                       gemini_key: form.getValues("gemini_key"),
                     };
                     
-                    console.log("📋 API form values:", {
-                      ...formValues,
-                      gemini_key: formValues.gemini_key ? "[REDACTED]" : formValues.gemini_key
-                    });
                     
                     // Create a formatted data object with only API settings, ensuring no admin properties
                     const formattedData: Partial<FormattedUserSettings> = { 
@@ -1271,10 +1329,8 @@ export const Settings = ({ user }: { user: any }) => {
                     // Define callbacks for tracking the state
                     const callbacks = {
                       onSuccess: () => {
-                        console.log("✅ API settings saved successfully");
                       },
                       onError: (error: any) => {
-                        console.error("❌ Error saving API settings:", error);
                       }
                     };
                     
@@ -1302,7 +1358,6 @@ export const Settings = ({ user }: { user: any }) => {
                               {...field}
                               value={field.value || ""}
                               onChange={(e) => {
-                                console.log("🔑 Gemini key changed:", e.target.value ? "[REDACTED]" : "[EMPTY]");
                                 field.onChange(e.target.value);
                               }}
                             />
@@ -1396,11 +1451,190 @@ export const Settings = ({ user }: { user: any }) => {
 
                     {/* Admin form - only show when not loading and no errors */}
                     {!isLoadingAdmin && !adminError && (
-                    
                         <div className="grid gap-4 md:grid-cols-1">
                           <AdminSettingsForm />
                         </div>
+                    )}
+                  </>
+                    )}
+              </TabsContent>
+
+              {/* Environment Variables Tab */}
+              <TabsContent value="environment" className="space-y-6">
+                {!user || user.role !== "admin" ? (
+                  <Alert variant="destructive">
+                    <AlertCircle className="h-4 w-4" />
+                    <AlertTitle>Access Denied</AlertTitle>
+                    <AlertDescription>
+                      You don't have permission to access environment settings.
+                    </AlertDescription>
+                  </Alert>
+                ) : (
+                  <>
+                    <div className="bg-yellow-50 dark:bg-yellow-900/20 border border-yellow-200 dark:border-yellow-800/30 rounded-lg p-4 mb-4">
+                      <div className="flex items-start gap-3">
+                        <Settings2 className="h-6 w-6 text-yellow-600 dark:text-yellow-400 mt-0.5" />
+                        <div>
+                          <h3 className="font-medium text-yellow-800 dark:text-yellow-300">Environment Variables</h3>
+                          <p className="text-sm text-yellow-700 dark:text-yellow-400 mt-1">
+                            Manage critical system configuration. These settings will override values in .env files.
+                            Changes require application restart to take full effect.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Loading state */}
+                    {isLoadingEnv ? (
+                      <div className="flex items-center justify-center py-8">
+                        <div className="flex flex-col items-center gap-2">
+                          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+                          <p className="text-muted-foreground">Loading environment variables...</p>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between items-center mb-4">
+                          <h3 className="text-lg font-medium">Current Environment Configuration</h3>
+                          <Button
+                            variant="outline"
+                            size="sm" 
+                            onClick={loadEnvironmentVariables}
+                            disabled={isLoadingEnv}
+                            className="gap-2"
+                          >
+                            <Loader2 className={`h-4 w-4 ${isLoadingEnv ? 'animate-spin' : ''}`} />
+                            Reload Variables
+                          </Button>
+                        </div>
+
+                        <Card>
+                          <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between">
+                              <CardTitle>Authentication Settings</CardTitle>
+                              <Key className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <CardDescription>
+                              Google OAuth client credentials for user authentication
+                            </CardDescription>
+                          </CardHeader>
+                          
+                          <CardContent className="space-y-4">
+                            <div className="grid gap-4 md:grid-cols-2">
+                              <div className="space-y-2">
+                                <FormLabel htmlFor="google-client-id">Google Client ID</FormLabel>
+                                <Input 
+                                  id="google-client-id"
+                                  placeholder="Enter Google Client ID"
+                                  value={envVariables.GOOGLE_CLIENT_ID}
+                                  onChange={(e) => setEnvVariables({...envVariables, GOOGLE_CLIENT_ID: e.target.value})}
+                                />
+                              </div>
+                              
+                              <div className="space-y-2">
+                                <FormLabel htmlFor="google-client-secret">Google Client Secret</FormLabel>
+                                <Input 
+                                  id="google-client-secret"
+                                  type="password"
+                                  placeholder="Enter Google Client Secret"
+                                  value={envVariables.GOOGLE_CLIENT_SECRET}
+                                  onChange={(e) => setEnvVariables({...envVariables, GOOGLE_CLIENT_SECRET: e.target.value})}
+                                />
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between">
+                              <CardTitle>Database Configuration</CardTitle>
+                              <Database className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <CardDescription>
+                              Turso database connection settings
+                            </CardDescription>
+                          </CardHeader>
+                          
+                          <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                              <FormLabel htmlFor="turso-url">Turso Database URL</FormLabel>
+                              <Input 
+                                id="turso-url"
+                                placeholder="Enter Turso Database URL"
+                                value={envVariables.TURSO_URL}
+                                onChange={(e) => setEnvVariables({...envVariables, TURSO_URL: e.target.value})}
+                              />
+                              <FormDescription>
+                                Example: libsql://tiger-gadeba.aws-eu-west-1.turso.io
+                              </FormDescription>
+                            </div>
+                            
+                            <div className="space-y-2">
+                              <FormLabel htmlFor="turso-auth-token">Turso Auth Token</FormLabel>
+                              <Input 
+                                id="turso-auth-token"
+                                type="password" 
+                                placeholder="Enter Turso Auth Token"
+                                value={envVariables.TURSO_AUTH_TOKEN}
+                                onChange={(e) => setEnvVariables({...envVariables, TURSO_AUTH_TOKEN: e.target.value})}
+                              />
+                              <FormDescription>
+                                Your Turso authentication token (JWT format)
+                              </FormDescription>
+                            </div>
+                          </CardContent>
+                        </Card>
+
+                        <Card>
+                          <CardHeader className="pb-3">
+                            <div className="flex items-center justify-between">
+                              <CardTitle>API Integration</CardTitle>
+                              <Brain className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <CardDescription>
+                              API keys for third-party service integration
+                            </CardDescription>
+                          </CardHeader>
+                          
+                          <CardContent className="space-y-4">
+                            <div className="space-y-2">
+                              <FormLabel htmlFor="gemini-api-key">Gemini API Key</FormLabel>
+                              <Input 
+                                id="gemini-api-key"
+                                type="password"
+                                placeholder="Enter Gemini API Key" 
+                                value={envVariables.GEMINI_API_KEY}
+                                onChange={(e) => setEnvVariables({...envVariables, GEMINI_API_KEY: e.target.value})}
+                              />
+                              <FormDescription>
+                                Default fallback API key for Gemini AI services
+                              </FormDescription>
+                            </div>
+                          </CardContent>
+                        </Card>
                         
+                        <div className="flex justify-end mt-6">
+                          <Button
+                            type="button"
+                            disabled={isUpdatingEnv}
+                            className="gap-2"
+                            onClick={updateEnvSettings}
+                          >
+                            {isUpdatingEnv ? (
+                              <>
+                                <Loader2 className="h-4 w-4 animate-spin" />
+                                <span>Updating...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Save className="h-4 w-4" />
+                                <span>Save Environment Variables</span>
+                              </>
+                            )}
+                          </Button>
+                        </div>
+                      </>
                     )}
                   </>
                 )}

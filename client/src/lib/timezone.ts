@@ -7,12 +7,24 @@ import { formatDistanceToNow, formatRelative } from 'date-fns';
  */
 export function getUserTimezone(): string {
   try {
+    // First try to get from user settings
     const userSettings = queryClient.getQueryData<UserSettings>([QUERY_KEYS.USER_SETTINGS]);
     if (userSettings && userSettings.timezone) {
       return userSettings.timezone;
     }
+    
+    // Then try to get from localStorage
+    const localStorageTimezone = localStorage.getItem('userTimezone');
+    if (localStorageTimezone) {
+      return localStorageTimezone;
+    }
+    
+    // Finally try to get from browser
+    const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (browserTimezone) {
+      return browserTimezone;
+    }
   } catch (error) {
-    // Fallback to default timezone if error
   }
   
   // Fallback to default timezone (Africa/Addis_Ababa - GMT+3)

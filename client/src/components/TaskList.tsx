@@ -30,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { useToast } from "@/hooks/use-toast";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Checkbox } from "@/components/ui/checkbox";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 // Update Task interface to match database schema
 interface Task {
@@ -368,7 +369,11 @@ export function TaskList() {
 
       {isLoading ? (
         <div className="flex justify-center p-4">
-          <Loader2 className="h-6 w-6 animate-spin text-teal-500" />
+          <LoadingSpinner 
+            message="Loading tasks..." 
+            size="sm"
+            iconClassName="text-teal-500"
+          />
         </div>
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 md:gap-6">

@@ -212,64 +212,70 @@ export function TaskMetricsSummary({ tasks, className }: ProductivityChartProps)
   return (
     <Card className={cn("w-full overflow-hidden bg-gradient-to-br from-card to-background border shadow-md", className)}>
       <CardHeader className="pb-2">
-        <CardTitle className="flex items-center justify-between flex-wrap gap-4">
+        <CardTitle className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-md bg-primary/10">
               <BarChart2 className="w-5 h-5 text-primary" />
             </div>
             <span>Task Completion Metrics</span>
           </div>
-          <div className="flex items-center gap-4">
+          <div className="flex flex-col items-start gap-4 w-full md:w-auto">
+            <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as typeof timeRange)} className="w-full">
+              <TabsList className="grid w-full grid-cols-5 lg:w-[500px] h-12 sm:h-10">
+                <TabsTrigger value="hour" className="text-xs py-3 sm:py-2 truncate">Hourly</TabsTrigger>
+                <TabsTrigger value="day" className="text-xs py-3 sm:py-2 truncate">Daily</TabsTrigger>
+                <TabsTrigger value="week" className="text-xs py-3 sm:py-2 truncate">Weekly</TabsTrigger>
+                <TabsTrigger value="month" className="text-xs py-3 sm:py-2 truncate">Monthly</TabsTrigger>
+                <TabsTrigger value="custom" className="text-xs py-3 sm:py-2 truncate">Custom</TabsTrigger>
+              </TabsList>
+            </Tabs>
+            
             {timeRange === 'custom' && (
               <Popover>
                 <PopoverTrigger asChild>
                   <Button
                     variant="outline"
-                    className="justify-start text-left font-normal h-9"
+                    className="justify-start text-left font-normal h-12 sm:h-10 text-xs w-full md:w-auto mt-2 md:mt-0 overflow-hidden text-ellipsis whitespace-nowrap"
                   >
-                    <CalendarIcon className="mr-2 h-4 w-4" />
-                    {dateRange?.from ? (
-                      dateRange.to ? (
-                        <>
-                          {format(dateRange.from, "LLL dd, y")} -{" "}
-                          {format(dateRange.to, "LLL dd, y")}
-                        </>
+                    <CalendarIcon className="mr-2 h-4 w-4 flex-shrink-0" />
+                    <span className="truncate">
+                      {dateRange?.from ? (
+                        dateRange.to ? (
+                          <>
+                            {format(dateRange.from, "MMM d")} -{" "}
+                            {format(dateRange.to, "MMM d")}
+                          </>
+                        ) : (
+                          format(dateRange.from, "MMM d")
+                        )
                       ) : (
-                        format(dateRange.from, "LLL dd, y")
-                      )
-                    ) : (
-                      <span>Pick a date range</span>
-                    )}
+                        <span>Pick dates</span>
+                      )}
+                    </span>
                   </Button>
                 </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="end">
-                  <Calendar
-                    initialFocus
-                    mode="range"
-                    defaultMonth={dateRange?.from}
-                    selected={{
-                      from: dateRange?.from,
-                      to: dateRange?.to,
-                    }}
-                    onSelect={(range) => {
-                      if (range?.from && range?.to) {
-                        setDateRange({ from: range.from, to: range.to });
-                      }
-                    }}
-                    numberOfMonths={2}
-                  />
+                <PopoverContent className="w-auto p-0 max-w-[95vw] max-h-[90vh] overflow-auto" align="center">
+                  <div className="max-w-[350px] min-w-[280px]">
+                    <Calendar
+                      initialFocus
+                      mode="range"
+                      defaultMonth={dateRange?.from}
+                      selected={{
+                        from: dateRange?.from,
+                        to: dateRange?.to,
+                      }}
+                      onSelect={(range) => {
+                        if (range?.from && range?.to) {
+                          setDateRange({ from: range.from, to: range.to });
+                        }
+                      }}
+                      numberOfMonths={1}
+                      className="rounded-md"
+                    />
+                  </div>
                 </PopoverContent>
               </Popover>
             )}
-            <Tabs value={timeRange} onValueChange={(v) => setTimeRange(v as typeof timeRange)} className="w-full">
-              <TabsList className="grid w-full grid-cols-5 lg:w-[500px] h-9">
-                <TabsTrigger value="hour" className="text-xs">Hourly</TabsTrigger>
-                <TabsTrigger value="day" className="text-xs">Daily</TabsTrigger>
-                <TabsTrigger value="week" className="text-xs">Weekly</TabsTrigger>
-                <TabsTrigger value="month" className="text-xs">Monthly</TabsTrigger>
-                <TabsTrigger value="custom" className="text-xs">Custom</TabsTrigger>
-              </TabsList>
-            </Tabs>
           </div>
         </CardTitle>
       </CardHeader>

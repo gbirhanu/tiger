@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { db } from './db';
-import { users, sessions } from '../../shared/schema';
-import { eq, lt } from 'drizzle-orm';
+import { users, sessions, resetTokens } from '../../shared/schema';
+import { eq, lt, and, gt } from 'drizzle-orm';
 import bcrypt from 'bcryptjs';
 import { randomBytes } from 'crypto';
 
@@ -44,22 +44,18 @@ export async function validateSession(sessionId: string): Promise<number | null>
     });
 
     if (!session) {
-      
       return null;
     }
 
     const currentTimestamp = Math.floor(Date.now() / 1000);
     if (currentTimestamp > session.expires_at) {
-      
       // Clean up expired session
       await deleteSession(sessionId);
       return null;
     }
 
-    
     return session.user_id;
   } catch (error) {
-    console.error('Error validating session:', error);
     return null;
   }
 }
@@ -81,32 +77,30 @@ export async function cleanupExpiredSessions(): Promise<number> {
     
     return result.length;
   } catch (error) {
-    console.error('Error cleaning up expired sessions:', error);
     return 0;
   }
 }
 
 export const requireAuth = async (req: Request, res: Response, next: NextFunction) => {
   try {
+    
     const authHeader = req.headers.authorization;
+    
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({ error: 'Authentication required' });
     }
 
     const sessionId = authHeader.split(' ')[1];
     
-
     const userId = await validateSession(sessionId);
+    
     if (!userId) {
-      
       return res.status(401).json({ error: 'Invalid or expired session' });
     }
 
-    
     req.userId = userId;
     next();
   } catch (error) {
-    console.error('Authentication middleware error:', error);
     return res.status(500).json({ error: 'Server error during authentication' });
   }
 };
@@ -139,7 +133,48 @@ export const requireAdmin = async (req: Request, res: Response, next: NextFuncti
 
     next();
   } catch (error) {
-    console.error('Admin middleware error:', error);
     return res.status(500).json({ error: 'Server error during authorization' });
   }
-}; 
+};
+
+// Generate a password reset token
+export async function generateResetToken(userId: number): Promise<string> {
+  // Generate a random token
+  const token = randomBytes(32).toString('hex');
+  
+  // Calculate expiration time (1 hour from now)
+  const expiresAt = Math.floor(Date.now() / 1000) + 3600; // 1 hour
+  
+  // Delete any existing reset tokens for this user
+  await db.delete(resetTokens)
+    .where(eq(resetTokens.user_id, userId));
+  
+  // Insert new reset token
+  await db.insert(resetTokens)
+    .values({
+      user_id: userId,
+      token,
+      expires_at: expiresAt,
+      created_at: Math.floor(Date.now() / 1000)
+    });
+  
+  return token;
+}
+
+// Verify a password reset token
+export async function verifyResetToken(token: string): Promise<number | null> {
+  // Find token in database
+  const resetToken = await db.query.resetTokens.findFirst({
+    where: and(
+      eq(resetTokens.token, token),
+      gt(resetTokens.expires_at, Math.floor(Date.now() / 1000))
+    ),
+  });
+  
+  // If token not found or expired, return null
+  if (!resetToken) {
+    return null;
+  }
+  
+  return resetToken.user_id;
+} 

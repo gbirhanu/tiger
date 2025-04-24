@@ -168,4 +168,18 @@
 
 .dark .paper-texture:before {
   background-image: linear-gradient(to right, transparent, rgba(0,0,0,0.15));
+}
+
+/* Animation for infinite progress bar */
+@keyframes progress {
+  0% { width: 0%; }
+  50% { width: 70%; }
+  70% { width: 80%; }
+  90% { width: 95%; }
+  95% { width: 98%; }
+  100% { width: 98%; }
+}
+
+.animate-progress {
+  animation: progress 2.5s ease-in-out infinite;
 } 

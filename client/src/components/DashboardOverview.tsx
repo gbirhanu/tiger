@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 
 import React from "react";
 import { startOfDay, endOfDay, getTime } from "date-fns";
-import { toZonedTime } from "date-fns-tz";
+import { toZonedTime, format as formatTZ } from "date-fns-tz";
 import {
   BarChart,
   Bar, 
@@ -56,7 +56,6 @@ export const DashboardOverview = () => {
     queryKey: [QUERY_KEYS.TASKS],
     queryFn: async () => {
       const response = await getTasks();
-      console.log(response);
       // Cast the response to include subtask counts
       return response as TaskWithSubtaskCounts[];
     },
@@ -119,7 +118,6 @@ export const DashboardOverview = () => {
       !task.completed && (task.completed_subtasks && task.completed_subtasks > 0)
     ).length;
 
-    console.log("inprogress", inProgress);
 
     const notStarted = tasks.length - completed - inProgress;
     
@@ -463,28 +461,46 @@ export const DashboardOverview = () => {
     }
     
     // Improved helper function to convert any timestamp to target timezone with proper error handling
-    const convertToTargetTimezone = (timestamp: number): Date | null => {
+    const convertToTargetTimezone = (timestamp: any): Date | null => {
       try {
-      if (!timestamp) return null;
-      
-      // If it's a number, convert from seconds to milliseconds if needed
-      const milliseconds = timestamp < 10000000000 
-        ? timestamp * 1000  // Convert seconds to milliseconds
-        : timestamp;       // Already in milliseconds
-      
-      const date = new Date(milliseconds);
+        if (!timestamp) return null;
         
-        // Validate the date is valid before conversion
-        if (isNaN(date.getTime())) {
-          console.warn(`Invalid timestamp detected: ${timestamp}`);
-          return null;
+        // Handle string timestamps (SQLite datetime format)
+        if (typeof timestamp === 'string') {
+          // Add 'Z' suffix to treat as UTC
+          const date = new Date(timestamp + 'Z');
+          const zonedDate = toZonedTime(date, TIMEZONE);
+          return zonedDate;
         }
         
+        // Handle numeric timestamps
+        // More robust timestamp conversion
+        let milliseconds: number;
+        
+        // Handle different timestamp formats
+        if (timestamp < 10000000000) {
+          // Unix timestamp in seconds, convert to milliseconds
+          milliseconds = timestamp * 1000;
+        } else if (timestamp >= 10000000000 && timestamp < 10000000000000) {
+          // Already in milliseconds
+          milliseconds = timestamp;
+        } else {
+          // Possibly a JavaScript timestamp (microseconds), convert to milliseconds
+          milliseconds = Math.floor(timestamp / 1000);
+        }
+        
+        const date = new Date(milliseconds);
+          
+        // Validate the date is valid before conversion
+        if (isNaN(date.getTime())) {
+          return null;
+        }
+          
         // Convert to user's timezone
-      const zonedDate = toZonedTime(date, TIMEZONE);
-      return zonedDate;
+        const zonedDate = toZonedTime(date, TIMEZONE);
+        return zonedDate;
       } catch (error) {
-        console.error(`Error converting timestamp ${timestamp} to timezone ${TIMEZONE}:`, error);
+        console.error('Error converting timestamp:', error);
         return null;
       }
     };
@@ -498,13 +514,18 @@ export const DashboardOverview = () => {
       else if (hour < 12) displayHour = `${hour} AM`;
       else displayHour = `${hour - 12} PM`;
       
+      // Uncomment this if formatTZ is properly imported:
+      // const hourDate = new Date();
+      // hourDate.setHours(hour, 0, 0, 0); // Set to the specific hour
+      // const formattedHour = formatTZ(hourDate, 'h a', { timeZone: TIMEZONE });
+      
       return {
         hour,
         displayHour,
-      tasks: 0,
-      meetings: 0,
-      appointments: 0,
-      total: 0
+        tasks: 0,
+        meetings: 0,
+        appointments: 0,
+        total: 0
       };
     });
 
@@ -513,22 +534,37 @@ export const DashboardOverview = () => {
 
     // Populate with task data
     if (Array.isArray(tasks)) {
+      
+      let processedTaskCount = 0;
+      
       tasks.forEach((task: any) => {
-        if (task && task.completed && task.updated_at) {
-            // Convert timestamp to user's timezone
-            const zonedDate = convertToTargetTimezone(task.updated_at);
+        // Check if task is completed
+        if (task && task.completed) {
+          // Convert timestamp to user's timezone - handle different timestamp formats
+          let zonedDate;
+          try {
+            // Use the enhanced convertToTargetTimezone function that handles all timestamp formats
+            // For completed tasks, use completed_at instead of updated_at
+            zonedDate = convertToTargetTimezone(task.completed_at);
             
-            if (zonedDate) {
-              const hour = zonedDate.getHours();
-              
-              if (hour >= 0 && hour < 24) {
-                hourlyData[hour].tasks += 1;
-                hourlyData[hour].total += 1;
-              hasAnyData = true;
-              }
+          } catch (error) {
+            return;
           }
+          
+          if (zonedDate) {
+            const hour = zonedDate.getHours();
+            
+            // Include all tasks regardless of date, just organize by hour of day
+            if (hour >= 0 && hour < 24) {
+              hourlyData[hour].tasks += 1;
+              hourlyData[hour].total += 1;
+              hasAnyData = true;
+              processedTaskCount++;
+            }
+          } 
         }
       });
+      
     }
 
     // Populate with meeting data - show completed meetings
@@ -537,14 +573,16 @@ export const DashboardOverview = () => {
         if (meeting && meeting.start_time) {
           // Only count completed meetings
           if (meeting.completed) {
-          // Convert timestamp to user's timezone
-          const zonedDate = convertToTargetTimezone(meeting.start_time);
-          
-          if (zonedDate) {
-            const hour = zonedDate.getHours();
-            if (hour >= 0 && hour < 24) {
-              hourlyData[hour].meetings += 1;
-              hourlyData[hour].total += 1;
+            // Convert timestamp to user's timezone
+            const zonedDate = convertToTargetTimezone(meeting.start_time);
+            
+            if (zonedDate) {
+              const hour = zonedDate.getHours();
+              
+              // Include all meetings regardless of date, just organize by hour of day
+              if (hour >= 0 && hour < 24) {
+                hourlyData[hour].meetings += 1;
+                hourlyData[hour].total += 1;
                 hasAnyData = true;
               }
             }
@@ -559,15 +597,16 @@ export const DashboardOverview = () => {
         if (apt && apt.start_time) {
           // Only count completed appointments
           if (apt.completed) {
-          // Convert timestamp to user's timezone
-          const zonedDate = convertToTargetTimezone(apt.start_time);
-          
-          if (zonedDate) {
-            const hour = zonedDate.getHours();
-            if (hour >= 0 && hour < 24) {
-              hourlyData[hour].appointments += 1;
-              hourlyData[hour].total += 1;
-                hasAnyData = true;
+            // Convert timestamp to user's timezone
+            const zonedDate = convertToTargetTimezone(apt.start_time);
+            
+            if (zonedDate) {
+              const hour = zonedDate.getHours();
+              
+              // Include all appointments regardless of date, just organize by hour of day
+              if (hour >= 0 && hour < 24) {
+                hourlyData[hour].appointments += 1;
+                hourlyData[hour].total += 1;
               }
             }
           }
@@ -577,13 +616,20 @@ export const DashboardOverview = () => {
     
     // Add current hour marker to the data if we have any data
     if (hasAnyData) {
+      // Get current time in user's timezone
       const now = new Date();
-      const currentHour = toZonedTime(now, TIMEZONE).getHours();
+      const zonedNow = toZonedTime(now, TIMEZONE);
+      const hourNow = zonedNow.getHours();
       
       // Mark the current hour (will be shown in the UI)
-      if (currentHour >= 0 && currentHour < 24) {
-        hourlyData[currentHour].isCurrentHour = true;
+      if (hourNow >= 0 && hourNow < 24) {
+        hourlyData[hourNow].isCurrentHour = true;
       }
+    }
+    
+    // Final check - if we still have no data, add some demo data for display purposes
+    if (hourlyData.every(hourlyItem => hourlyItem.total === 0)) {
+      // Removed demo data code as requested
     }
     
     return hourlyData;
@@ -644,16 +690,16 @@ export const DashboardOverview = () => {
       // Count tasks completed in this month
       const tasksCompleted = Array.isArray(tasks) 
         ? tasks.filter((task: any) => {
-            if (!task.completed || !task.updated_at) return false;
+            if (!task.completed || !task.completed_at) return false;
             
             // Convert timestamp to user's timezone
-            const updatedDate = convertToTargetTimezone(task.updated_at);
-            if (!updatedDate) return false;
+            const completedDate = convertToTargetTimezone(task.completed_at);
+            if (!completedDate) return false;
             
             // Check if completed in this month
             return (
-              updatedDate.getFullYear() === year &&
-              updatedDate.getMonth() === month
+              completedDate.getFullYear() === year &&
+              completedDate.getMonth() === month
             );
           }).length
         : 0;
@@ -792,89 +838,64 @@ export const DashboardOverview = () => {
   return (
     <div className="space-y-6">
       {/* Welcome section with greeting based on time of day */}
-      <div className="bg-gradient-to-r from-primary/10 to-primary/5 p-6 rounded-xl  shadow-sm">
+      <div className="bg-gradient-to-r from-primary/10 to-primary/5 p-4 sm:p-6 rounded-xl shadow-sm">
         <div className="flex flex-col md:flex-row md:items-center md:justify-between">
           <div>
-            <div className="flex items-center gap-2">
-            <h2 className="text-2xl font-bold tracking-tight">
-              {getGreeting()}, <span className="text-primary">{localStorage.getItem("userName")?.split(" ")[0] || "User"}</span>
-            </h2>
-            <div className="border-r-2 border-r-yellow-700 dark:border-r-gray-700 pl-2 bg-gray-100 dark:bg-gray-800 p-2 rounded-lg w-fit flex items-center gap-2">
-            <CalendarDays className="h-4 w-4" /> 
-            {formatDate(new Date(), "MMM d, yyyy ")}
-            {/* add clock teller here */}
-            <span className="text-sm font-medium border-l pl-2 border-l-yellow-700 dark:border-l-gray-700 flex items-center">
-              <Clock className="h-3 w-3 mr-1" />
-              <span id="currentTime">{formatDate(new Date(), "h:mm a")}</span>
-            </span>
-            <script dangerouslySetInnerHTML={{__html: `
-              function updateClock() {
-                const timeElement = document.getElementById('currentTime');
-                if (timeElement) {
-                  const now = new Date();
-                  
-                  try {
-                    // Get the user's timezone or use browser default
-                    const userTimezone = localStorage.getItem('userTimezone') || Intl.DateTimeFormat().resolvedOptions().timeZone;
-                    
-                    // Format time with timezone
-                    const options = { 
-                      hour: 'numeric', 
-                      minute: '2-digit',
-                      second: '2-digit',
-                      hour12: true
-                    };
-                    
-                    const formatter = new Intl.DateTimeFormat('en-US', options);
-                    timeElement.textContent = formatter.format(now);
-                  } catch (error) {
-                    // Fallback if there's an error
-                    timeElement.textContent = now.toLocaleTimeString();
-                  }
-                }
-                setTimeout(updateClock, 1000);
-              }
-              updateClock();
-            `}} />
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <h2 className="text-xl sm:text-2xl font-bold tracking-tight">
+                {getGreeting()}, <span className="text-primary">{localStorage.getItem("userName")?.split(" ")[0] || "User"}</span>
+              </h2>
+              <div className="flex flex-wrap items-center gap-2">
+                <div className="bg-gray-100 dark:bg-gray-800 p-2 rounded-lg flex items-center gap-2">
+                  <CalendarDays className="h-4 w-4" /> 
+                  <span className="text-sm">{formatDate(new Date(), "MMM d, yyyy")}</span>
+                </div>
+                <div className="bg-gray-100 dark:bg-gray-800 p-2 rounded-lg flex items-center gap-2">
+                  <Clock className="h-4 w-4" />
+                  <span id="currentTime" className="text-sm">{formatDate(new Date(), "h:mm a")}</span>
+                </div>
+              </div>
             </div>
-            </div>
-            <p className="text-muted-foreground mt-1">
+            <p className="text-muted-foreground mt-1 text-sm sm:text-base">
               Here's what's happening with your tasks and schedule today.
             </p>
           </div>
-          <div className="mt-4 md:mt-0 flex items-center gap-3">
+          <div className="mt-4 md:mt-0 flex flex-wrap gap-2 sm:gap-3">
             <Button 
               variant="default" 
               size="sm" 
-              className="gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700"
+              className="gap-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 flex-1 sm:flex-none"
               onClick={() => setShowDayPlanner(true)}
             >
               <CalendarDays className="h-4 w-4" />
-              <span>Plan My Day</span>
+              <span className="hidden sm:inline">Plan My Day</span>
+              <span className="sm:hidden">Plan</span>
             </Button>
             <Button 
               variant="default" 
               size="sm" 
-              className="gap-2"
+              className="gap-2 flex-1 sm:flex-none"
               onClick={() => {
                 localStorage.setItem('selectedNav', 'Tasks');
                 window.location.reload();
               }}
             >
               <CheckSquare className="h-4 w-4" />
-              <span>View Tasks</span>
+              <span className="hidden sm:inline">View Tasks</span>
+              <span className="sm:hidden">Tasks</span>
             </Button>
             <Button 
               variant="outline" 
               size="sm" 
-              className="gap-2"
+              className="gap-2 flex-1 sm:flex-none"
               onClick={() => {
                 localStorage.setItem('selectedNav', 'Calendar');
                 window.location.reload();
               }}
             >
               <CalendarDays className="h-4 w-4" />
-              <span>Calendar</span>
+              <span className="hidden sm:inline">Calendar</span>
+              <span className="sm:hidden">Calender</span>
             </Button>
           </div>
         </div>
@@ -1024,7 +1045,7 @@ export const DashboardOverview = () => {
                 </div>
             </div>
             
-            <div className="flex flex-col md:flex-row items-center gap-8">
+            <div className="flex flex-col lg:flex-row items-center gap-8">
               <div className="flex flex-col items-center justify-center relative">
                 {/* Remove the redundant border div and rely only on the SVG circle */}
                 
@@ -1075,7 +1096,7 @@ export const DashboardOverview = () => {
                 </div>
               </div>
               
-              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6 md:mt-0">
+              <div className="flex-1 grid grid-cols-1 sm:grid-cols-2 gap-3 mt-6 lg:mt-0 w-full">
                 <div className={cn(
                   "p-4 rounded-lg flex items-center gap-3 border transition-all hover:shadow-md",
                   getProductivityScore().taskCompletionRate >= 70 ? "bg-green-50/70 border-green-200 dark:bg-green-900/20 dark:border-green-800/40" :
@@ -1610,10 +1631,19 @@ export const DashboardOverview = () => {
         <Card>
           <CardContent className="pt-6">
             <h3 className="text-lg font-semibold mb-4">Hourly Activity Distribution</h3>
+            <p className="text-sm text-muted-foreground mb-4">
+              Shows your historical activity patterns organized by hour of day. Task data is based on completion time.
+              {hourlyActivityData.some(item => item.total > 0) && !hourlyActivityData.some(item => item.tasks > 0) && (
+                <span className="block mt-1 text-xs text-amber-600 dark:text-amber-400">
+                  Note: Complete tasks to see your actual activity patterns.
+                </span>
+              )}
+            </p>
             <div className="h-[300px]">
-              {hourlyActivityData.length > 0 && hourlyActivityData.every(item => item.total === 0) ? (
-                <div className="h-full flex items-center justify-center text-muted-foreground">
-                  No activity data available
+              {hourlyActivityData.every(item => item.total === 0) && !hourlyActivityData.some(item => item.isCurrentHour) ? (
+                <div className="h-full flex flex-col items-center justify-center text-muted-foreground">
+                  <p>No activity data available</p>
+                  <p className="text-xs mt-2">Complete some tasks to see your hourly activity patterns</p>
                 </div>
               ) : (
               <ResponsiveContainer width="100%" height="100%">
@@ -1621,16 +1651,20 @@ export const DashboardOverview = () => {
                   <CartesianGrid strokeDasharray="3 3" stroke="var(--border)" />
                   <XAxis 
                     dataKey="displayHour" 
-                    interval={3} 
+                    interval={3}
                     tick={{ fontSize: 12 }}
                     tickFormatter={(value, index) => {
-                      // Check if this is the current hour and highlight it
-                      const item = hourlyActivityData[index * 3];
-                      if (item && item.isCurrentHour) {
+                      // Find the actual hour by matching the displayHour value
+                      const matchingHour = hourlyActivityData.find(h => h.displayHour === value);
+                      
+                      if (matchingHour && matchingHour.isCurrentHour) {
                         return `[${value}]`;
                       }
                       return value;
                     }}
+                    angle={-30}
+                    textAnchor="end"
+                    height={60}
                   />
                   <YAxis tick={{ fontSize: 12 }} />
                   <Tooltip 
@@ -1638,15 +1672,16 @@ export const DashboardOverview = () => {
                     labelFormatter={(label, payload) => {
                       const dataItem = payload[0]?.payload;
                       if (dataItem?.isCurrentHour) {
-                        return `Hour: ${label} (Current hour)`;
+                        return `Time: ${label} (Current hour)`;
                       }
-                      return `Hour: ${label}`;
+                      return `Time: ${label}`;
                     }}
                     contentStyle={{
                       backgroundColor: 'var(--background)',
                       borderColor: 'var(--border)',
                       borderRadius: '6px',
                       fontSize: '12px',
+                      padding: '8px 12px'
                     }}
                   />
                   <Legend wrapperStyle={{ fontSize: '12px' }} />

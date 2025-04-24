@@ -12,7 +12,6 @@ export async function getUserByEmail(email: string) {
     const user = await db.select().from(users).where(eq(users.email, email)).limit(1);
     return user.length > 0 ? user[0] : null;
   } catch (error) {
-    console.error("Error fetching user by email:", error);
     return null;
   }
 }
@@ -27,7 +26,6 @@ export async function getUserById(userId: number) {
     const user = await db.select().from(users).where(eq(users.id, userId)).limit(1);
     return user.length > 0 ? user[0] : null;
   } catch (error) {
-    console.error("Error fetching user by ID:", error);
     return null;
   }
 }
@@ -43,7 +41,6 @@ export async function hasEmailNotificationsEnabled(userId: number) {
     // This is a placeholder implementation
     return true;
   } catch (error) {
-    console.error("Error checking notification preferences:", error);
     return false;
   }
 } 

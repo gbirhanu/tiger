@@ -21,9 +21,10 @@ import {
   Home, Clock, Search, Bell, MapPin, User as UserIcon, HelpCircle, Menu, X, 
   NotebookIcon, Calendar as CalendarIcon, Users, BarChart as BarChartIcon,
   ListTodo as ListTodoIcon, CheckCircle as CheckCircleIcon, 
-  ListChecks as ListChecksIcon
+  ListChecks as ListChecksIcon,
+  Github
 } from "lucide-react";
-import React from "react";
+import React, { useState, useMemo, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { format, addDays, isBefore, isAfter, startOfDay, endOfDay } from "date-fns";
 import {
@@ -61,11 +62,21 @@ import { TaskReminderService } from "./TaskReminderService";
 
 import LongNotesBoard from "./LongNotesBoard";
 import UserManagement from "./UserManagement";
-import { useState, useMemo, useEffect } from "react";
 import type { Task, Subtask, TaskWithSubtasks, User as UserType } from "../../../shared/schema";
 import { DateRangePicker } from "@/components/ui/DateRangePicker";
 import { DashboardOverview } from "./DashboardOverview";
 import { useMarketingSettings } from "@/lib/hooks/useMarketingSettings";
+import { FirstTimeLoginDialog } from "./first-time-login";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+  DialogFooter,
+  DialogClose
+} from "@/components/ui/dialog";
 
 // Define extended user type that includes subscription
 interface ExtendedUser extends UserType {
@@ -91,6 +102,7 @@ export default function Dashboard() {
   const { theme, setTheme } = useTheme();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
   const [isMobileView, setIsMobileView] = React.useState(false);
+  const [showHelpDialog, setShowHelpDialog] = useState(false);
   
   // Get marketing settings to determine if subscription features should be shown
   const { showSubscriptionFeatures } = useMarketingSettings();
@@ -168,6 +180,26 @@ export default function Dashboard() {
     localStorage.setItem('selectedNav', selectedNav);
   }, [selectedNav]);
 
+  // Check URL hash on mount for deep linking
+  React.useEffect(() => {
+    const hash = window.location.hash;
+
+    if (hash === "#settings-notifications") {
+      // Set the main sidebar navigation to 'Settings'
+      setSelectedNav("Settings");
+      // Set the specific tab within Settings component via localStorage
+      localStorage.setItem("settings-active-tab", "notifications");
+
+      if (window.history.replaceState) {
+        // Modern browsers: remove hash without page reload
+        window.history.replaceState(null, '', window.location.pathname + window.location.search);
+      } else {
+        // Fallback for older browsers (might cause a jump)
+        window.location.hash = '';
+      }
+    }
+  }, []); // Run only once on component mount
+
   // Check if we're in mobile view
   React.useEffect(() => {
     const checkMobileView = () => {
@@ -189,9 +221,39 @@ export default function Dashboard() {
     return () => window.removeEventListener('resize', checkMobileView);
   }, []);
 
+  // Add an effect to log when Dashboard mounts
+ 
+
+  // Add an explicit state to track the dialog visibility
+  const [showFirstTimeDialog, setShowFirstTimeDialog] = useState(true);
+
+  // Redirect to auth page if user is not logged in
+  useEffect(() => {
+    // Check if user object exists and is not null
+    if (user === null) { 
+      // Using window.location for redirection as router context isn't available here
+      // Consider using useNavigate() from react-router-dom if available
+      window.location.href = '/auth';
+    }
+  }, [user]); // Re-run effect if user status changes
+
+  // Optionally, show a loading state while checking auth or redirecting
+  // This prevents rendering the dashboard briefly before redirect
+  if (user === null) { 
+    return (
+      <div className="h-screen flex items-center justify-center">
+        {/* You can replace this with a proper loading spinner component */}
+        <p>Loading...</p> 
+      </div>
+    ); 
+  }
+
   return (
     <NotificationsProvider>
       <TaskReminderService />
+      
+      {/* First Time Login Dialog - ensure it appears at the root level */}
+      <FirstTimeLoginDialog />
       
       {/* Mobile menu button - only visible on small screens */}
       {isMobileView && (
@@ -325,8 +387,8 @@ export default function Dashboard() {
               </div>
             </div>
             
-            {/* Add a theme toggle button */}
-            <div className="flex items-center">
+            {/* Add a theme toggle button and Help/Github button */}
+            <div className="flex items-center gap-1">
               {theme === "dark" ? (
                 <Button 
                   variant="ghost" 
@@ -346,6 +408,72 @@ export default function Dashboard() {
                   <Moon className="h-4 w-4 text-slate-700" />
                 </Button>
               )}
+              {/* GitHub Help Dialog */} 
+              <Dialog open={showHelpDialog} onOpenChange={setShowHelpDialog}>
+                <DialogTrigger asChild>
+                  <Button 
+                    variant="ghost" 
+                    size="icon"
+                    className="h-8 w-8 rounded-full hover:bg-gray-500/10 dark:hover:bg-gray-700/50 transition-colors duration-200"
+                  >
+                    <Github className="h-4 w-4 text-gray-500 dark:text-gray-400" />
+                  </Button>
+                </DialogTrigger>
+                <DialogContent className="sm:max-w-[525px]">
+                  <DialogHeader>
+                    <DialogTitle className="flex items-center gap-2">
+                      <Github className="h-5 w-5" />
+                      Contribute & Get Help
+                      </DialogTitle>
+                    <DialogDescription className="pt-2">
+                      Found an issue or have an idea? Want to contribute?
+                    </DialogDescription>
+                  </DialogHeader>
+                  <div className="grid gap-4 py-4 text-sm">
+                    <p>
+                      We appreciate your help in making Tiger App better! Here's how you can get involved:
+                    </p>
+                    <ul className="list-disc space-y-2 pl-5">
+                      <li>
+                        <strong>Report Issues:</strong> If you encounter a bug or unexpected behavior, please 
+                        <a 
+                          href="https://github.com/gbirhanu/tiger/issues" 
+                          target="_blank" 
+                          rel="noopener noreferrer" 
+                          className="text-primary underline hover:text-primary/80 font-medium px-1"
+                        >
+                          create an issue
+                        </a> 
+                        on our GitHub repository. Describe the problem clearly, including steps to reproduce it if possible.
+                      </li>
+                      <li>
+                        <strong>Suggest Features:</strong> Have an idea for a new feature? Feel free to open an issue with the label "enhancement".
+                      </li>
+                      <li>
+                        <strong>Contribute Code:</strong> If you'd like to contribute code, please fork the repository, make your changes on a separate branch, and submit a Pull Request. Follow the contribution guidelines in the repository (if available).
+                      </li>
+                    </ul>
+                    <p className="pt-2">
+                      Visit the main repository here:
+                      <a 
+                        href="https://github.com/gbirhanu/tiger.git" 
+                        target="_blank" 
+                        rel="noopener noreferrer" 
+                        className="text-primary underline hover:text-primary/80 font-medium pl-1"
+                      >
+                        Tiger Repository on GitHub
+                      </a>
+                    </p>
+                  </div>
+                  <DialogFooter>
+                     <DialogClose asChild>
+                      <Button type="button" variant="secondary">
+                        Close
+                      </Button>
+                    </DialogClose>
+                  </DialogFooter>
+                </DialogContent>
+              </Dialog>
             </div>
           </div>
         </div>

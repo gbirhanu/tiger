@@ -23,6 +23,7 @@ import { NoteCard } from "@/components/NoteCard";
 import { ColorPicker } from "@/components/ColorPicker";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 // Enhanced color palette with vibrant, pleasing colors
 const COLORS = [
@@ -192,7 +193,6 @@ export default function NotesBoard() {
         };
         
         // Log what we're updating for debugging
-        console.log(`Optimistically updating note ${id}:`, updatedData);
         
         // Update the cache with the new array
         queryClient.setQueryData<Note[]>([QUERY_KEYS.NOTES], updatedNotes);
@@ -377,17 +377,17 @@ export default function NotesBoard() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="flex flex-col items-center space-y-3">
-          <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-primary"></div>
-          <p className="text-sm text-muted-foreground font-medium animate-pulse">Loading your notes...</p>
-        </div>
+        <LoadingSpinner 
+          message="Loading your notes..." 
+          size="md"
+        />
       </div>
     );
   }
 
   return (
     <div className="space-y-8 p-6 max-w-7xl mx-auto">
-      <div className="flex justify-between items-center bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg shadow-sm border border-indigo-100">
+      <div className="flex flex-col md:flex-row justify-between items-center md:items-center bg-gradient-to-r from-purple-50 to-blue-50 p-4 rounded-lg shadow-sm border border-indigo-100" >
         <div className="flex items-center space-x-3">
           <StickyNote className="h-8 w-8 text-indigo-500" />
           <div>
@@ -399,7 +399,7 @@ export default function NotesBoard() {
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5">
+            <Button className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5 mt-4 md:mt-0">
               <Plus className="h-4 w-4 mr-2" />
               Add Note
             </Button>
@@ -504,7 +504,7 @@ export default function NotesBoard() {
                   <p className="text-gray-500 text-center mb-6">Click "Add Note" to create your first note and start organizing your thoughts.</p>
                   <Button 
                     onClick={() => setDialogOpen(true)}
-                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5 animate-pulse"
+                    className="bg-gradient-to-r from-indigo-500 to-purple-600 hover:from-indigo-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all duration-300 rounded-full px-5"
                   >
                     <Plus className="h-4 w-4 mr-2" />
                     Add Your First Note

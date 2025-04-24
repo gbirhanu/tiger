@@ -79,6 +79,7 @@ import htmlParser from 'html-react-parser';
 import { MarkdownPreview } from "@/components/ui/markdown-preview";
 import ProPlanUpgrade from './ProPlanUpgrade';
 import { UsageLimitDialog } from './UsageLimitDialog';
+import { LoadingSpinner } from "@/components/ui/loading-spinner";
 
 
 
@@ -463,15 +464,7 @@ export default function LongNotesBoard() {
       // Note: We don't close the dialog here, that's handled by the callback
     },
     onError: (error: any) => {
-      console.error("Error generating content:", error);
-      console.log("Error details:", {
-        type: typeof error,
-        hasLimitReached: !!error.limitReached,
-        response: error.response,
-        message: error.message,
-        stack: error.stack?.substring(0, 200),
-        code: error.code
-      });
+     
       setIsGenerating(false);
       
       // More robust check for usage limit error
@@ -493,14 +486,12 @@ export default function LongNotesBoard() {
           errorMessage = error.response.data.details;
         }
         
-        console.log("Showing usage limit dialog with message:", errorMessage);
         
         // Note: don't close dialog here, that's handled by the callback
         // Just set up the limit dialog data so it can be shown
         setLimitErrorMessage(errorMessage);
         setShowLimitDialog(true);
       } else {
-        console.log("Showing error toast instead of dialog");
         toast({
           title: "Error",
           description: "Failed to generate content. Please try again.",
@@ -621,7 +612,6 @@ Structure the content in a clear, organized way with proper markdown syntax.`;
           setGenerateDialogOpen(false);
         },
         onError: (error: any) => {
-          console.log("Direct error handling in generate callback:", error);
           
           // Check for usage limit error with the same checks as the mutation
           const isLimitError = 
@@ -641,7 +631,6 @@ Structure the content in a clear, organized way with proper markdown syntax.`;
               errorMessage = error.response.data.details;
             }
             
-            console.log("Showing usage limit dialog from direct callback with message:", errorMessage);
             
             // Close generate dialog and show limit dialog instead
             setGenerateDialogOpen(false);
@@ -759,7 +748,6 @@ Maintain the existing content but improve its structure and formatting.`;
           }
         },
         onError: (error: any) => {
-          console.log("Direct error handling in generate callback:", error);
           
           // Check for usage limit error with the same checks as the mutation
           const isLimitError = 
@@ -779,7 +767,6 @@ Maintain the existing content but improve its structure and formatting.`;
               errorMessage = error.response.data.details;
             }
             
-            console.log("Showing usage limit dialog from direct callback with message:", errorMessage);
             
             // Close generate dialog and show limit dialog instead
             setGenerateDialogOpen(false);
@@ -802,32 +789,24 @@ Maintain the existing content but improve its structure and formatting.`;
   // Add useEffect to log dialog state changes
   React.useEffect(() => {
     if (showLimitDialog) {
-      console.log("UsageLimitDialog should be visible now");
+      
     }
   }, [showLimitDialog]);
 
   // Enhance note feature - more detailed error logging
   const handleUsageLimitDialogOpenChange = (isOpen: boolean) => {
-    console.log("UsageLimitDialog open state changing to:", isOpen);
     setShowLimitDialog(isOpen);
   };
 
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-64">
-        <div className="flex flex-col items-center space-y-4">
-          <div className="relative w-16 h-16">
-            <div className="absolute inset-0 rounded-full border-t-2 border-indigo-500 animate-spin"></div>
-            <div className="absolute inset-1 rounded-full border-r-2 border-purple-500 animate-spin animation-delay-150"></div>
-            <div className="absolute inset-2 rounded-full border-b-2 border-indigo-300 animate-spin animation-delay-300"></div>
-            <div className="absolute inset-3 rounded-full border-l-2 border-purple-300 animate-spin animation-delay-500"></div>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <BookOpen className="h-6 w-6 text-indigo-600" />
-            </div>
-          </div>
-          <p className="text-sm text-indigo-700 dark:text-indigo-400 font-medium animate-pulse">Loading your notes...</p>
-          <p className="text-xs text-gray-500 dark:text-gray-400">Please wait while we prepare your workspace</p>
-        </div>
+        <LoadingSpinner
+          message="Loading your notes..."
+          submessage="Please wait while we prepare your workspace"
+          size="md"
+          iconClassName="text-indigo-600"
+        />
       </div>
     );
   }
@@ -1113,9 +1092,9 @@ Maintain the existing content but improve its structure and formatting.`;
 
       {/* Notes grid */}
       {filteredAndSortedNotes.length === 0 ? (
-        <div className="flex flex-col items-center justify-center h-72 border border-dashed rounded-xl border-indigo-200 p-8 bg-gradient-to-b from-white to-indigo-50 dark:from-gray-900 dark:to-indigo-950/30 dark:border-indigo-800 shadow-inner">
+        <div className="flex flex-col items-center justify-center h-82 border border-dashed rounded-xl border-indigo-200 p-8 bg-gradient-to-b from-white to-indigo-50 dark:from-gray-900 dark:to-indigo-950/30 dark:border-indigo-800 shadow-inner">
           <div className="bg-white dark:bg-gray-800 p-4 rounded-full shadow-md mb-6">
-            <BookOpen className="h-16 w-16 text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-700 dark:from-indigo-400 dark:to-purple-400" />
+            <BookOpen className="h-16 w-16 text-purple-500 bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-700 dark:from-indigo-400 dark:to-purple-400" />
           </div>
           <h3 className="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-indigo-600 to-purple-700 dark:from-indigo-400 dark:to-purple-400 mb-2">No notes found</h3>
           <p className="text-gray-600 dark:text-gray-400 text-center mb-6 max-w-md">

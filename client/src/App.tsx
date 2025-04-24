@@ -2,12 +2,14 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-d
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import { ThemeProvider } from './contexts/ThemeContext';
 import AuthPage from './pages/auth';
+import ResetPasswordPage from './pages/reset-password';
 import Dashboard from './components/Dashboard';
 import { Toaster } from './components/ui/toaster';
 import { useEffect, Suspense, lazy } from 'react';
 import { ErrorBoundary } from 'react-error-boundary';
 import TermsPage from './pages/terms';
 import PrivacyPage from './pages/privacy';
+import { LoadingSpinner } from '@/components/ui/loading-spinner';
 
 
 // Error Fallback Component
@@ -27,10 +29,10 @@ function ErrorFallback({ error, resetErrorBoundary }: { error: Error; resetError
 }
 
 // Loading component
-function LoadingSpinner() {
+function AppLoadingSpinner() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
-      <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-primary"></div>
+      <LoadingSpinner size="lg" message="Loading application..." showProgress={true} />
     </div>
   );
 }
@@ -39,7 +41,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
   const { isAuthenticated, loading } = useAuth();
 
   if (loading) {
-    return <LoadingSpinner />;
+    return <AppLoadingSpinner />;
   }
 
   if (!isAuthenticated) {
@@ -54,7 +56,7 @@ function PrivateRoute({ children }: { children: React.ReactNode }) {
         window.location.reload();
       }}
     >
-      <Suspense fallback={<LoadingSpinner />}>
+      <Suspense fallback={<AppLoadingSpinner />}>
         {children}
       </Suspense>
     </ErrorBoundary>
@@ -66,7 +68,7 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
   const { user, isAuthenticated, loading } = useAuth();
   
   if (loading) {
-    return <LoadingSpinner />;
+    return <AppLoadingSpinner />;
   }
   
   if (!isAuthenticated) {
@@ -83,7 +85,7 @@ function AdminRoute({ children }: { children: React.ReactNode }) {
       FallbackComponent={ErrorFallback}
       onReset={() => window.location.reload()}
     >
-      <Suspense fallback={<LoadingSpinner />}>
+      <Suspense fallback={<AppLoadingSpinner />}>
         {children}
       </Suspense>
     </ErrorBoundary>
@@ -101,7 +103,7 @@ function AppContent() {
   }, [error, clearErrors]);
 
   if (loading) {
-    return <LoadingSpinner />;
+    return <AppLoadingSpinner />;
   }
 
   return (
@@ -117,6 +119,9 @@ function AppContent() {
           path="/auth" 
           element={isAuthenticated ? <Navigate to="/" /> : <AuthPage />} 
         />
+        
+        {/* Public reset password page */}
+        <Route path="/reset-password" element={<ResetPasswordPage />} />
         
         {/* Public legal pages */}
         <Route path="/terms" element={<TermsPage />} />
@@ -144,7 +149,7 @@ function App() {
       <Router>
         <AuthProvider>
           <ThemeProvider>
-            <Suspense fallback={<LoadingSpinner />}>
+            <Suspense fallback={<AppLoadingSpinner />}>
               <AppContent />
               <Toaster />
             </Suspense>

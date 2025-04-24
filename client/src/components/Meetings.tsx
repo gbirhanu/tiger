@@ -242,6 +242,10 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
 
   // Add recurrence states
   const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false);
+  // Add state controls for date and time pickers
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [startTimePickerOpen, setStartTimePickerOpen] = useState(false);
+  const [endTimePickerOpen, setEndTimePickerOpen] = useState(false);
 
   // Form for creating meetings
   const form = useForm<MeetingFormValues>({
@@ -756,7 +760,6 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
         updated_at: Math.floor(Date.now() / 1000)
       };
 
-      console.log(`Toggling meeting ${meetingId} completion to ${data.completed}`);
       
       try {
         // Call the API directly to ensure we're only updating the completed status
@@ -768,13 +771,11 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
         
         if (!response.ok) {
           const errorData = await response.text();
-          console.error("API error response:", errorData);
           throw new Error(`API error: ${response.status} ${errorData}`);
         }
         
         return await response.json();
       } catch (error) {
-        console.error("Error toggling meeting completion:", error);
         throw error;
       }
     },
@@ -886,7 +887,7 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
         await createMeetingMutation.mutateAsync(data);
       }
     } catch (error) {
-      console.error("Error submitting form:", error);
+      
     } finally {
       setIsSubmitting(false);
     }
@@ -1021,7 +1022,7 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                   render={({ field }) => (
                     <FormItem className="flex flex-col">
                       <FormLabel>Date</FormLabel>
-                      <Popover>
+                      <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
                         <PopoverTrigger asChild>
                           <FormControl>
                             <Button
@@ -1040,7 +1041,7 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                             </Button>
                           </FormControl>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="w-auto p-0" align="start" side="bottom">
                           <Calendar
                             mode="single"
                             selected={field.value}
@@ -1067,6 +1068,9 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                                   newEndDate.setHours(endDate.getHours(), endDate.getMinutes());
                                   form.setValue("endDate", newEndDate);
                                 }
+                                
+                                // Auto-close the calendar after selection
+                                setDatePickerOpen(false);
                               } else {
                                 field.onChange(undefined);
                               }
@@ -1088,7 +1092,7 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                       render={({ field }) => (
                         <FormItem className="flex flex-col">
                           <FormLabel className="text-xs font-medium">Start Time</FormLabel>
-                          <Popover>
+                          <Popover open={startTimePickerOpen} onOpenChange={setStartTimePickerOpen}>
                             <PopoverTrigger asChild>
                               <FormControl>
                                 <Button
@@ -1115,6 +1119,9 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                                   } else {
                                     field.onChange(date);
                                   }
+                                  
+                                  // Auto-close the time selector after selection
+                                  setStartTimePickerOpen(false);
                                 }}
                                 compact={true}
                               />
@@ -1131,7 +1138,7 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                       render={({ field }) => (
                         <FormItem className="flex flex-col">
                           <FormLabel className="text-xs font-medium">End Time</FormLabel>
-                          <Popover>
+                          <Popover open={endTimePickerOpen} onOpenChange={setEndTimePickerOpen}>
                             <PopoverTrigger asChild>
                               <FormControl>
                                 <Button
@@ -1162,6 +1169,9 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
                                   } else {
                                     field.onChange(date);
                                   }
+                                  
+                                  // Auto-close the time selector after selection
+                                  setEndTimePickerOpen(false);
                                 }}
                                 compact={true}
                               />
@@ -1404,11 +1414,12 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
         </div>
       )}
       
-      <div className="flex space-x-2">
+      <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-2">
         <Button
           variant={filter === "all" ? "default" : "outline"}
           onClick={() => setFilter("all")}
           size="sm"
+          className="min-w-[80px]"
         >
           All
         </Button>
@@ -1416,35 +1427,35 @@ export default function Meetings({ isDialogOpen, setIsDialogOpen, initialDate }:
           variant={filter === "completed" ? "default" : "outline"}
           onClick={() => setFilter("completed")}
           size="sm"
-          className={filter === "completed" ? "bg-green-600 hover:bg-green-700" : ""}
+          className={`min-w-[80px] ${filter === "completed" ? "bg-green-600 hover:bg-green-700" : ""}`}
         >
           <CheckCircle className="h-4 w-4 mr-2 text-green-600" />
-          Completed
+          <span className="whitespace-nowrap">Completed</span>
         </Button>
         <Button
           variant={filter === "in-progress" ? "default" : "outline"}
           onClick={() => setFilter("in-progress")}
           size="sm"
-          className={filter === "in-progress" ? "bg-purple-600 hover:bg-purple-700" : ""}
+          className={`min-w-[80px] ${filter === "in-progress" ? "bg-purple-600 hover:bg-purple-700" : ""}`}
         >
           <div className="h-2 w-2 rounded-full bg-purple-500 mr-2 animate-pulse"></div>
-          In Progress
+          <span className="whitespace-nowrap">In Progress</span>
         </Button>
         <Button
           variant={filter === "upcoming" ? "default" : "outline"}
           onClick={() => setFilter("upcoming")}
           size="sm"
-          className={filter === "upcoming" ? "bg-blue-600 hover:bg-blue-700" : ""}
+          className={`min-w-[80px] ${filter === "upcoming" ? "bg-blue-600 hover:bg-blue-700" : ""}`}
         >
-          Upcoming
+          <span className="whitespace-nowrap">Upcoming</span>
         </Button>
         <Button
           variant={filter === "past" ? "default" : "outline"}
           onClick={() => setFilter("past")}
           size="sm"
-          className={filter === "past" ? "bg-gray-600 hover:bg-gray-700" : ""}
+          className={`min-w-[80px] ${filter === "past" ? "bg-gray-600 hover:bg-gray-700" : ""}`}
         >
-          Past
+          <span className="whitespace-nowrap">Past</span>
         </Button>
       </div>
 

@@ -29,7 +29,6 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
 
     return res.json({ users: sanitizedUsers });
   } catch (error) {
-    console.error('Error fetching users:', error);
     return res.status(500).json({ error: 'Failed to fetch users' });
   }
 });
@@ -62,7 +61,6 @@ router.get('/:id', requireAuth, async (req: Request, res: Response) => {
 
     return res.json({ user: sanitizedUser });
   } catch (error) {
-    console.error('Error fetching user:', error);
     return res.status(500).json({ error: 'Failed to fetch user' });
   }
 });
@@ -110,7 +108,6 @@ router.put('/:id/status', requireAuth, async (req: Request, res: Response) => {
       message: `User status updated to ${status}` 
     });
   } catch (error) {
-    console.error('Error updating user status:', error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
@@ -166,7 +163,6 @@ router.put('/:id/role', requireAuth, async (req: Request, res: Response) => {
       message: `User role updated to ${role}` 
     });
   } catch (error) {
-    console.error('Error updating user role:', error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
@@ -216,13 +212,16 @@ router.put('/:id/subscription', requireAuth, async (req: Request, res: Response)
     // Calculate expiry if provided or use default (30 days)
     const expiry = subscription_expiry || 
       (subscription_plan !== 'free' ? Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60) : null);
+    
+    // Convert subscription_plan to is_pro boolean
+    const is_pro = subscription_plan !== 'free';
 
     if (currentUserSettings) {
       // Update existing user settings
       await db.update(userSettings)
         .set({ 
-          subscription_plan,
-          subscription_expiry: expiry 
+          is_pro,
+          subscription_end_date: expiry 
         })
         .where(eq(userSettings.user_id, userId));
     } else {
@@ -230,8 +229,8 @@ router.put('/:id/subscription', requireAuth, async (req: Request, res: Response)
       await db.insert(userSettings)
         .values({
           user_id: userId,
-          subscription_plan,
-          subscription_expiry: expiry,
+          is_pro,
+          subscription_end_date: expiry,
           gemini_calls_count: 0,
           created_at: Math.floor(Date.now() / 1000),
           updated_at: Math.floor(Date.now() / 1000)
@@ -246,7 +245,6 @@ router.put('/:id/subscription', requireAuth, async (req: Request, res: Response)
       subscription_expiry: expiry
     });
   } catch (error) {
-    console.error('Error updating user subscription:', error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
@@ -300,7 +298,7 @@ router.post('/:id/reset-gemini-usage', requireAuth, async (req: Request, res: Re
       await db.insert(userSettings)
         .values({
           user_id: userId,
-          subscription_plan: 'free',
+          is_pro: false,
           gemini_calls_count: 0,
           created_at: Math.floor(Date.now() / 1000),
           updated_at: Math.floor(Date.now() / 1000)
@@ -313,7 +311,6 @@ router.post('/:id/reset-gemini-usage', requireAuth, async (req: Request, res: Re
       userId
     });
   } catch (error) {
-    console.error('Error resetting Gemini API usage:', error);
     return res.status(500).json({ 
       error: 'Failed to reset Gemini API usage',
       details: error instanceof Error ? error.message : 'Unknown error'

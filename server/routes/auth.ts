@@ -1,13 +1,14 @@
 import { Router, Request, Response } from 'express';
 import { db } from '../lib/db';
-import { users } from '../../shared/schema';
+import { users, resetTokens } from '../../shared/schema';
 import { eq } from 'drizzle-orm';
-import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth, validateSession } from '../lib/auth';
+import { hashPassword, verifyPassword, createSession, deleteSession, requireAuth, validateSession, generateResetToken, verifyResetToken } from '../lib/auth';
 import { OAuth2Client } from 'google-auth-library';
 import { z } from 'zod';
-import bcrypt from 'bcrypt';
-import { tasks, subtasks, notes, appointments, longNotes, userSettings, subscriptions, meetings } from '../../shared/schema';
 
+import { tasks, subtasks, notes, appointments, longNotes, userSettings, subscriptions, meetings } from '../../shared/schema';
+import { sendNotificationEmail, emailTemplates } from '../lib/email';
+import crypto from 'crypto';
 const router = Router();
 const googleClient = new OAuth2Client(
   process.env.GOOGLE_CLIENT_ID,
@@ -30,9 +31,20 @@ const googleLoginSchema = z.object({
   credential: z.string(),
 });
 
+const resetPasswordSchema = z.object({
+  email: z.string().email()
+});
+
+const verifyResetTokenSchema = z.object({
+  token: z.string(),
+  newPassword: z.string().min(6)
+});
+
 type RegisterRequest = z.infer<typeof registerSchema>;
 type LoginRequest = z.infer<typeof loginSchema>;
 type GoogleLoginRequest = z.infer<typeof googleLoginSchema>;
+type VerifyResetTokenRequest = z.infer<typeof verifyResetTokenSchema>;
+
 
 // Register
 router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Response) => {
@@ -40,7 +52,6 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     
     
     if (!req.body) {
-      console.error('No request body received');
       return res.status(400).json({ error: 'No request body provided' });
     }
 
@@ -108,10 +119,8 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
       }
     });
   } catch (error) {
-    console.error('Registration error details:', error);
     
     if (error instanceof z.ZodError) {
-      console.error('Validation errors:', error.errors);
       return res.status(400).json({ 
         error: 'Invalid registration data', 
         details: error.errors.map(err => ({
@@ -122,7 +131,6 @@ router.post('/register', async (req: Request<{}, {}, RegisterRequest>, res: Resp
     }
 
     if (error instanceof Error) {
-      console.error('Error message:', error.message);
       return res.status(400).json({ error: error.message });
     }
 
@@ -183,7 +191,7 @@ router.get('/validate-token', async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Token validation error:', error);
+    
     return res.status(500).json({ valid: false, error: 'Server error' });
   }
 });
@@ -266,7 +274,6 @@ router.post('/login', async (req: Request<{}, {}, LoginRequest>, res: Response) 
       }
     });
   } catch (error) {
-    console.error('Login error:', error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
@@ -337,7 +344,6 @@ router.get('/me', requireAuth, async (req: Request, res: Response) => {
       }
     });
   } catch (error) {
-    console.error('Error fetching current user:', error);
     res.status(500).json({ error: 'Failed to fetch user data' });
   }
 });
@@ -357,6 +363,12 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
     if (!payload || !payload.email) {
       return res.status(400).json({ error: 'Invalid Google token' });
     }
+    
+    // Get IP and user agent before checking user
+    const userAgent = req.headers['user-agent'] || '';
+    const ip = req.ip || req.socket.remoteAddress || '';
+    // Placeholder for location - in a real app, you might use a geo-IP service
+    const location: string | null = null; 
 
     // Check if user exists
     let user = await db.query.users.findFirst({
@@ -364,31 +376,37 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
     });
 
     if (!user) {
-      // Create new user with more Google profile data
+      // Create new user
       const [newUser] = await db.insert(users)
         .values({
-          email: payload.email,
-          name: payload.name || null,
-          profile_image: payload.picture || null,
-          last_login: Date.now(),
-          // Set a random password since we won't use it
-          password: await hashPassword(Math.random().toString(36).slice(-8)),
-          auth_provider: 'google',
-          is_online: true,
+          email: payload.email!,
+          password: await hashPassword(crypto.randomBytes(16).toString('hex')),
+          name: payload.name,
+          role: "user",
+          status: "active",
+          last_login: Math.floor(Date.now() / 1000),
+          login_count: 1,
+          last_login_ip: ip,
+          last_login_device: userAgent,
+          user_location: location,
+          created_at: Math.floor(Date.now() / 1000),
+          updated_at: Math.floor(Date.now() / 1000),
+          is_online: true
         })
         .returning();
-      user = newUser;
       
-      console.log('Created new user from Google login:', user.id);
+      user = newUser;
     } else {
-      // Update existing user with Google info if needed
+      // Update existing user for Google login
       await db.update(users)
         .set({
-          last_login: Date.now(),
+          last_login: Math.floor(Date.now() / 1000),
+          login_count: (user.login_count || 0) + 1,
+          last_login_ip: ip,
+          last_login_device: userAgent,
           is_online: true,
-          // Only update these if they were empty before
-          name: user.name || payload.name || null,
-          profile_image: user.profile_image || payload.picture || null,
+          // Only update name if it was empty or different
+          name: user.name && user.name !== payload.name ? user.name : (payload.name || null),
         })
         .where(eq(users.id, user.id));
     }
@@ -419,7 +437,6 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
         email: user.email,
         name: user.name,
         role: user.role,
-        profile_image: user.profile_image,
         session: {
           id: sessionId,
           active: true
@@ -427,7 +444,6 @@ router.post('/google', async (req: Request<{}, {}, GoogleLoginRequest>, res: Res
       }
     });
   } catch (error) {
-    console.error('Google login error:', error);
     
     if (error instanceof z.ZodError) {
       return res.status(400).json({ 
@@ -472,9 +488,7 @@ router.post('/logout', requireAuth, async (req: Request, res: Response) => {
     
     res.json({ success: true });
   } catch (error) {
-    console.error('Logout error:', error);
-    res.status(500).json({ error: 'Failed to logout' });
-  }
+  }    
 });
 
 // Delete account endpoint
@@ -542,7 +556,6 @@ router.post("/delete-account", requireAuth, async (req: Request, res: Response) 
     // Send success response
     res.json({ success: true, message: "Account successfully deleted" });
   } catch (error) {
-    console.error("Error deleting account:", error);
     res.status(500).json({ error: "Failed to delete account" });
   }
 });
@@ -598,8 +611,245 @@ router.post("/update-password", requireAuth, async (req: Request, res: Response)
       message: "Password updated successfully" 
     });
   } catch (error) {
-    console.error('Error updating password:', error);
     res.status(500).json({ error: "An unexpected error occurred" });
+  }
+});
+
+// Update profile endpoint
+router.patch("/update-profile", requireAuth, async (req: Request, res: Response) => {
+  try {
+    const { name } = req.body;
+    
+    // Validate inputs
+    if (!name || typeof name !== 'string' || name.trim() === '') {
+      return res.status(400).json({ error: "Valid name is required" });
+    }
+    
+    // Get the user from the database
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, req.userId!),
+    });
+    
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+    
+    // Update the user's name in the database
+    const updatedUser = await db.update(users)
+      .set({ 
+        name: name.trim(),
+        updated_at: Math.floor(Date.now() / 1000)
+      })
+      .where(eq(users.id, req.userId!))
+      .returning();
+    
+    if (!updatedUser || updatedUser.length === 0) {
+      return res.status(500).json({ error: "Failed to update profile" });
+    }
+    
+    // Return the updated user data (excluding password)
+    const { password, ...userData } = updatedUser[0];
+    
+    res.json({ 
+      success: true, 
+      message: "Profile updated successfully",
+      user: userData
+    });
+  } catch (error) {
+    res.status(500).json({ error: "An unexpected error occurred" });
+  }
+});
+
+// Request password reset
+router.post('/reset-password', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    
+    // Find the user with the provided email
+    const user = await db.query.users.findFirst({
+      where: eq(users.email, email.toLowerCase()),
+    });
+    
+    
+    // If no user found with that email, still return success for security
+    if (!user) {
+      return res.json({
+        message: 'If an account exists with this email, you will receive password reset instructions.'
+      });
+    }
+    
+    // Generate a token
+    const token = crypto.randomBytes(32).toString('hex');
+    if (!token) {
+      return res.status(500).json({ 
+        error: 'Failed to generate reset token. Please try again later.'
+      });
+    }
+    
+    
+    // Set the expiration date to 1 hour from now
+    const expiresAt = new Date();
+    expiresAt.setHours(expiresAt.getHours() + 1);
+    const expiresAtTimestamp = Math.floor(expiresAt.getTime() / 1000);
+    
+    
+    try {
+      // Store the token in the database
+      await db.insert(resetTokens)
+        .values({
+          token,
+          user_id: user.id,
+          expires_at: expiresAtTimestamp,
+        })
+        .returning();
+      
+    } catch (dbError) {
+      return res.status(500).json({ 
+        error: 'Failed to store reset token. Please try again later.'
+      });
+    }
+    
+    // Get the frontend URL from environment variables or use a default
+    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:3000';
+    const clientUrl = process.env.CLIENT_URL || frontendUrl;
+    
+    // Create the reset URL
+    const resetUrl = `${clientUrl}/reset-password?token=${token}`;
+    
+    try {
+      // Send the email
+      
+      const emailTemplate = emailTemplates.passwordReset(user.name || "there", token);
+      
+      
+      const emailResult = await sendNotificationEmail(
+        user.email,
+        emailTemplate.subject,
+        emailTemplate.text,
+        emailTemplate.html
+      );
+      
+      
+      // If it's an Ethereal test account, log the preview URL
+      
+      // Return success response
+      return res.json({
+        message: 'If an account exists with this email, password reset instructions have been sent. Please check your inbox and spam folder.'
+      });
+    } catch (emailError) {
+      
+      // Use safer type checking for the error object
+      let errorMessage = 'Unknown error';
+      let errorCode = null;
+      let smtpResponse = null;
+      
+      if (emailError && typeof emailError === 'object') {
+        const typedError = emailError as Record<string, unknown>;
+        
+        if ('message' in typedError && typeof typedError.message === 'string') {
+          errorMessage = typedError.message;
+        }
+        
+        if ('code' in typedError && typeof typedError.code === 'string') {
+          errorCode = typedError.code;
+        }
+        
+        if ('response' in typedError) {
+          smtpResponse = typedError.response;
+        }
+        
+        if ('stack' in typedError) {
+          
+        }
+      }
+      
+      // In development, return the actual error message
+      if (process.env.NODE_ENV === 'development') {
+        // More descriptive error based on error code
+        let detailedError = `Failed to send password reset email: ${errorMessage}`;
+        
+        if (errorCode === 'ECONNREFUSED') {
+          detailedError = `Could not connect to email server at ${process.env.EMAIL_HOST}:${process.env.EMAIL_PORT}. Please check your email server configuration.`;
+        } else if (errorCode === 'ETIMEDOUT') {
+          detailedError = `Connection to email server timed out. Please check your firewall settings or email server availability.`;
+        } else if (errorCode === 'EAUTH') {
+          detailedError = `Authentication failed. Please check your email username and password.`;
+        } else if (errorCode === 'ESOCKET') {
+          detailedError = `Socket error when connecting to mail server. This might be related to SSL/TLS settings.`;
+        } else if (smtpResponse) {
+          detailedError += ` SMTP Response: ${smtpResponse}`;
+        }
+        
+        return res.status(500).json({
+          error: detailedError,
+          errorCode: errorCode,
+          message: 'There was a problem sending the password reset email. Please check your server configuration.'
+        });
+      }
+      
+      // In production, return a generic error message
+      return res.status(500).json({
+        message: 'There was a problem sending the password reset email. Please try again later or contact support.'
+      });
+    }
+  } catch (error) {
+    
+    return res.status(500).json({
+      error: 'An unexpected error occurred. Please try again later.'
+    });
+  }
+});
+
+// Reset password with token
+router.post('/reset-password/verify', async (req: Request<{}, {}, VerifyResetTokenRequest>, res: Response) => {
+  try {
+    const { token, newPassword } = verifyResetTokenSchema.parse(req.body);
+
+    // Verify token
+    const userId = await verifyResetToken(token);
+    if (!userId) {
+      return res.status(400).json({ error: "Invalid or expired reset token" });
+    }
+
+    // Find user
+    const user = await db.query.users.findFirst({
+      where: eq(users.id, userId),
+    });
+
+    if (!user) {
+      return res.status(400).json({ error: "User not found" });
+    }
+
+    // Hash new password
+    const hashedPassword = await hashPassword(newPassword);
+
+    // Update user's password
+    await db.update(users)
+      .set({ 
+        password: hashedPassword,
+        updated_at: Math.floor(Date.now() / 1000)
+      })
+      .where(eq(users.id, userId));
+
+    // Delete the used token
+    await db.delete(resetTokens)
+      .where(eq(resetTokens.user_id, userId));
+
+    return res.json({ success: true, message: "Password has been reset successfully" });
+  } catch (error) {
+      
+    if (error instanceof z.ZodError) {
+      return res.status(400).json({ 
+        error: 'Invalid reset data', 
+        details: error.errors.map(err => ({
+          field: err.path.join('.'),
+          message: err.message
+        }))
+      });
+    }
+
+    return res.status(500).json({ error: 'An unexpected error occurred' });
   }
 });
 

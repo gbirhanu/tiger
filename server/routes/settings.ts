@@ -45,7 +45,6 @@ router.get("/pomodoro", async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error("Error fetching pomodoro settings:", error);
     return res.status(500).json({ 
       error: "Failed to fetch pomodoro settings",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -96,7 +95,6 @@ router.post("/pomodoro", async (req: Request, res: Response) => {
 
     return res.status(201).json(newSettings);
   } catch (error) {
-    console.error("Error creating pomodoro settings:", error);
     return res.status(500).json({ 
       error: "Failed to create pomodoro settings",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -159,7 +157,6 @@ router.put("/pomodoro", async (req: Request, res: Response) => {
       return res.status(201).json(newSettings);
     }
   } catch (error) {
-    console.error("Error updating pomodoro settings:", error);
     return res.status(500).json({ 
       error: "Failed to update pomodoro settings",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -223,7 +220,6 @@ router.patch("/pomodoro", async (req: Request, res: Response) => {
       return res.status(201).json(newSettings);
     }
   } catch (error) {
-    console.error("Error updating pomodoro settings:", error);
     return res.status(500).json({ 
       error: "Failed to update pomodoro settings",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -259,7 +255,6 @@ router.delete("/pomodoro", async (req: Request, res: Response) => {
       message: "Pomodoro settings deleted successfully" 
     });
   } catch (error) {
-    console.error("Error deleting pomodoro settings:", error);
     return res.status(500).json({ 
       error: "Failed to delete pomodoro settings",
       details: error instanceof Error ? error.message : "Unknown error"

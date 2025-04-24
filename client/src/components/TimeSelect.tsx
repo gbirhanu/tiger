@@ -36,7 +36,7 @@ export const TimeSelect = ({ value, onChange, onComplete, compact = false, disab
 
   // Super compact layout for all cases to prevent overflow
   return (
-    <div className="p-2 border-t border-border max-h-[200px]">
+    <div className="p-2 border-t border-border max-h-[200px] overflow-auto">
       <div className="flex items-center justify-between mb-1">
         <h3 className="text-xs font-medium text-foreground">Select Time</h3>
         <div className="flex items-center space-x-1">

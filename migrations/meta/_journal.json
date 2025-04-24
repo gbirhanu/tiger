@@ -55,6 +55,13 @@
       "when": "1710237608000",
       "tag": "0108_create_user_settings",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1744183847908,
+      "tag": "0009_steep_molly_hayes",
+      "breakpoints": true
     }
   ]
-} 
+}

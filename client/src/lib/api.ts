@@ -90,24 +90,18 @@ export const createSubtasks = (taskId: number, subtasks: Array<Subtask | { title
     })
   }).then((res: AxiosResponse<Subtask[]>) => res.data)
   .catch(error => {
-    console.error("Error creating subtasks:", error);
-    // Log the actual request details to help with debugging
-    console.error("Request details:", {
-      taskId,
-      subtasksCount: subtasks.length,
-      subtaskSample: subtasks.slice(0, 2)
-    });
+    
     throw error;
   });
 export const updateSubtask = (taskId: number, subtaskId: number, data: Partial<Subtask>) => {
   // Validate inputs to catch problems early
   if (!taskId || isNaN(taskId) || taskId <= 0) {
-    console.error("Invalid taskId:", taskId);
+    
     return Promise.reject(new Error("Invalid taskId"));
   }
   
   if (!subtaskId || isNaN(subtaskId) || subtaskId <= 0) {
-    console.error("Invalid subtaskId:", subtaskId);
+    
     return Promise.reject(new Error("Invalid subtaskId"));
   }
   
@@ -131,11 +125,8 @@ export const updateSubtask = (taskId: number, subtaskId: number, data: Partial<S
       return res.data;
     })
     .catch((error) => {
-      console.error(`API: Error updating subtask ${subtaskId} of task ${taskId}:`, error);
-      if (error.response) {
-        console.error("Response status:", error.response.status);
-        console.error("Response data:", error.response.data);
-      }
+      
+      
       throw error;
     });
 };
@@ -245,15 +236,27 @@ export const updatePomodoroSettings = (settings: Partial<PomodoroSettings>) => {
     .then((res: AxiosResponse<PomodoroSettings>) => res.data);
 }
 
-export const getUserSettings = () => 
-  api.get<UserSettings>("/user-settings")
-    .then((res: AxiosResponse<UserSettings>) => res.data);
+export const getUserSettings = () => {
+  // Check if we're on an auth page and return early to prevent the API call
+  const currentPath = window.location.pathname;
+  if (currentPath === '/auth' || currentPath === '/reset-password' || currentPath.startsWith('/auth/')) {
+    return Promise.reject(new Error('Settings API calls are not allowed on authentication pages'));
+  }
+
+  return api.get<UserSettings>("/user-settings")
+    .then((res: AxiosResponse<UserSettings>) => {
+      return res.data;
+    })
+    .catch(error => {
+      
+      throw error;
+    });
+}
 
 export const updateUserSettings = async (settings: Partial<UserSettings>) => {
   try {
     // Create a copy of the settings to avoid mutating the original
     const formattedSettings: Record<string, any> = { ...settings };
-    
     // Ensure boolean values are correctly handled
     if ('show_notifications' in formattedSettings) {
       formattedSettings.show_notifications = Boolean(formattedSettings.show_notifications);
@@ -263,9 +266,15 @@ export const updateUserSettings = async (settings: Partial<UserSettings>) => {
       formattedSettings.notifications_enabled = Boolean(formattedSettings.notifications_enabled);
     }
     
+    if ('email_notifications_enabled' in formattedSettings) {
+      formattedSettings.email_notifications_enabled = Boolean(formattedSettings.email_notifications_enabled);
+    }
+    
+    
     const response = await api.patch<UserSettings>('/user-settings', formattedSettings);
     return response.data;
   } catch (error) {
+    console.error("Error updating user settings:", error);
     throw error;
   }
 };
@@ -487,38 +496,23 @@ export const updateAdminSettings = async (data: Partial<AdminSettings>) => {
 // Add the missing generateContent function
 export const generateContent = async (prompt: string): Promise<string> => {
   try {
-    console.log("Sending generateContent request with prompt:", prompt.substring(0, 50) + (prompt.length > 50 ? "..." : ""));
     
     // Updated to use the correct endpoint path that matches server/index.ts configuration
     const response = await api.post('generate-content', { prompt });
     
-    console.log("Received generateContent response:", {
-      status: response.status,
-      hasText: !!response.data.text,
-      textLength: response.data.text ? response.data.text.length : 0
-    });
     
     if (!response.data || !response.data.text) {
-      console.error("Invalid response from generate-content API:", response.data);
       return ""; // Return empty string instead of throwing to prevent UI errors
     }
     
     return response.data.text;
   } catch (error) {
-    console.error("Error in generateContent API call:", error);
-    console.log("Error object details:", {
-      type: typeof error, 
-      isAxiosError: axios.isAxiosError(error),
-      status: axios.isAxiosError(error) && error.response ? error.response.status : 'N/A',
-      responseData: axios.isAxiosError(error) && error.response ? error.response.data : 'N/A'
-    });
-    
+  
     // For API key configuration error, try direct access with client-side key if available
     if (axios.isAxiosError(error) && error.response && 
         error.response.data?.error === "Gemini API key is not configured" && 
         CLIENT_GEMINI_API_KEY) {
       
-      console.log("Attempting direct Gemini API access with client-side key");
       try {
         // Import the Gemini API directly
         const { GoogleGenerativeAI } = await import("@google/generative-ai");
@@ -539,10 +533,8 @@ export const generateContent = async (prompt: string): Promise<string> => {
           .replace(/,\s*/g, '\n') // Replace commas with newlines
           .replace(/\\n/g, '\n'); // Replace escaped newlines
           
-        console.log("Successfully generated content with client-side key");
         return text;
       } catch (directError) {
-        console.error("Error with direct Gemini API access:", directError);
         throw new Error("Failed to generate content: Could not access Gemini API");
       }
     }
@@ -555,7 +547,6 @@ export const generateContent = async (prompt: string): Promise<string> => {
           error.response.data?.error?.includes('usage limit') ||
           error.response.data?.details?.includes('usage limit'))) {
         
-        console.log("Usage limit error detected in generateContent");
         
         // Create a properly formatted limit error that the component can detect
         const limitError = new Error(
@@ -571,11 +562,6 @@ export const generateContent = async (prompt: string): Promise<string> => {
         limitError.maxFreeCalls = error.response.data.maxFreeCalls;
         limitError.code = 'USAGE_LIMIT_REACHED';
         
-        console.log("Throwing limitError:", {
-          message: limitError.message,
-          limitReached: limitError.limitReached,
-          code: limitError.code
-        });
         
         throw limitError;
       }
@@ -612,46 +598,26 @@ export const generateSubtasks = async (data: { task: { title: string; descriptio
       count: data.count || 5
     };
     
-    console.log("Sending generateSubtasks request with payload:", {
-      ...payload,
-      task: {
-        ...payload.task,
-        // Redact potentially sensitive information in description
-        description: payload.task.description ? "[CONTENT]" : ""
-      }
-    });
+  
 
     // Get the token and verify it's available
     const token = getToken();
     if (!token) {
-      console.error("No authentication token available for generateSubtasks call");
       throw new Error("Authentication required. Please log in again.");
     }
     
     // Make the API call with the correct path - baseURL is already "/api"
     const response = await api.post(`generate`, payload);
     
-    console.log("Received generateSubtasks response:", {
-      status: response.status,
-      statusText: response.statusText,
-      hasData: !!response.data,
-      hasSubtasks: response.data && !!response.data.subtasks,
-      subtasksType: response.data && response.data.subtasks ? 
-        (Array.isArray(response.data.subtasks) ? 
-          `array[${response.data.subtasks.length}]` : 
-          typeof response.data.subtasks) : 
-        'none'
-    });
+  
     
     // Ensure we have a valid response
     if (!response.data || !response.data.subtasks) {
-      console.error("Invalid response from generate API:", response.data);
       return { subtasks: [] }; // Return empty array instead of throwing to prevent UI errors
     }
     
     return response.data;
   } catch (error) {
-    console.error("Error in generateSubtasks API call:", error);
     
     // For API key configuration error, try direct access with client-side key if available
     if (axios.isAxiosError(error) && error.response && 
@@ -659,7 +625,6 @@ export const generateSubtasks = async (data: { task: { title: string; descriptio
          error.response.data?.details?.includes("Gemini API key is not configured")) && 
         CLIENT_GEMINI_API_KEY) {
       
-      console.log("Attempting direct Gemini API access with client-side key for subtask generation");
       try {
         // Extract the count and task details
         const { task, count = 5 } = data;
@@ -695,7 +660,6 @@ export const generateSubtasks = async (data: { task: { title: string; descriptio
         const response = await result.response;
         let text = response.text();
         
-        console.log("Raw response from Gemini API:", text);
         
         // Try to parse the response as JSON array
         try {
@@ -707,7 +671,6 @@ export const generateSubtasks = async (data: { task: { title: string; descriptio
           if (!text.startsWith('[')) text = '[' + text;
           if (!text.endsWith(']')) text = text + ']';
           
-          console.log("Preprocessed text before parsing:", text.substring(0, 100) + (text.length > 100 ? "..." : ""));
           
           // Parse as JSON
           const subtasks = JSON.parse(text);
@@ -716,17 +679,14 @@ export const generateSubtasks = async (data: { task: { title: string; descriptio
             throw new Error("Response is not an array");
           }
           
-          console.log("Successfully generated subtasks with client-side key:", subtasks);
           return { subtasks };
         } catch (parseError) {
-          console.error("Error parsing JSON response from direct API call:", parseError);
           // If parsing fails, return the raw text as a fallback
           const fallbackSubtasks = text.replace(/^\[|\]$/g, '').split('\n').map(s => s.trim()).filter(Boolean);
           const finalSubtasks = fallbackSubtasks.length > 0 ? fallbackSubtasks : ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"];
           return { subtasks: finalSubtasks };
         }
       } catch (directError) {
-        console.error("Error with direct Gemini API access for subtask generation:", directError);
         // Return fallback subtasks instead of throwing an error
         return { 
           subtasks: ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"],
@@ -737,11 +697,7 @@ export const generateSubtasks = async (data: { task: { title: string; descriptio
     
     // Handle specific error types
     if (axios.isAxiosError(error) && error.response) {
-      console.error("API error details:", {
-        status: error.response.status,
-        statusText: error.response.statusText,
-        data: error.response.data
-      });
+      
       
       // Check for usage limit error
       if (error.response.status === 403 && error.response.data?.code === "USAGE_LIMIT_REACHED") {
@@ -814,9 +770,10 @@ export async function updateStudySession(
   }
 ) {
   try {
-    const response = await api.put(`/study-sessions/${id}`, data);
+    const response = await api.patch(`/study-sessions/${id}`, data);
     return response.data;
   } catch (error) {
+    console.error('Study session update error:', error);
     throw error;
   }
 }
@@ -824,7 +781,7 @@ export async function updateStudySession(
 export async function deleteStudySession(id: string | number) {
   try {
     const response = await api.delete(`/study-sessions/${id}`);
-    return response.status === 200;
+    return response.data.success === true;
   } catch (error) {
     throw error;
   }
@@ -899,32 +856,21 @@ export const deleteLongNote = async (id: number): Promise<void> => {
 
 export const enhanceLongNote = async (noteId: number, prompt: string): Promise<{ content: string }> => {
   try {
-    console.log(`Enhancing note ${noteId} with prompt:`, prompt.substring(0, 50) + (prompt.length > 50 ? "..." : ""));
     
     // Ensure we send the prompt in the expected format
     const response = await api.post<{ content: string }>(`/long-notes/${noteId}/enhance`, { prompt });
     
-    console.log(`Received enhanced content for note ${noteId}:`, {
-      hasContent: !!response.data.content,
-      contentLength: response.data.content ? response.data.content.length : 0
-    });
+    
     
     return response.data;
   } catch (error) {
-    console.error(`Error enhancing note ${noteId}:`, error);
-    console.log("Error object details:", {
-      type: typeof error, 
-      isAxiosError: axios.isAxiosError(error),
-      status: axios.isAxiosError(error) && error.response ? error.response.status : 'N/A',
-      responseData: axios.isAxiosError(error) && error.response ? error.response.data : 'N/A'
-    });
+    
     
     // For API key configuration error, try direct access with client-side key if available
     if (axios.isAxiosError(error) && error.response && 
         error.response.data?.error === "Gemini API key is not configured" && 
         CLIENT_GEMINI_API_KEY) {
       
-      console.log("Attempting direct Gemini API access with client-side key for note enhancement");
       try {
         // Import the Gemini API directly
         const { GoogleGenerativeAI } = await import("@google/generative-ai");
@@ -945,10 +891,8 @@ export const enhanceLongNote = async (noteId: number, prompt: string): Promise<{
           .replace(/,\s*/g, '\n') // Replace commas with newlines
           .replace(/\\n/g, '\n'); // Replace escaped newlines
           
-        console.log("Successfully enhanced note content with client-side key");
         return { content: text };
       } catch (directError) {
-        console.error("Error with direct Gemini API access for note enhancement:", directError);
         throw new Error("Failed to enhance note: Could not access Gemini API");
       }
     }
@@ -961,7 +905,6 @@ export const enhanceLongNote = async (noteId: number, prompt: string): Promise<{
           error.response.data?.error?.includes('usage limit') ||
           error.response.data?.details?.includes('usage limit'))) {
         
-        console.log("Usage limit error detected in enhanceLongNote");
         
         // Create a properly formatted limit error that the component can detect
         const limitError = new Error(
@@ -977,11 +920,7 @@ export const enhanceLongNote = async (noteId: number, prompt: string): Promise<{
         limitError.maxFreeCalls = error.response.data.maxFreeCalls;
         limitError.code = 'USAGE_LIMIT_REACHED';
         
-        console.log("Throwing limitError:", {
-          message: limitError.message,
-          limitReached: limitError.limitReached,
-          code: limitError.code
-        });
+        
         
         throw limitError;
       }
@@ -1108,6 +1047,122 @@ export const syncUserSubscription = async (userId: number): Promise<any> => {
     if (axios.isAxiosError(error) && error.response) {
       throw new Error(error.response.data?.message || 'Failed to sync subscription');
     }
+    throw error;
+  }
+};
+
+/**
+ * Updates environment variables in the system
+ */
+export async function updateEnvVariables(variables: {
+  GOOGLE_CLIENT_ID?: string;
+  GOOGLE_CLIENT_SECRET?: string;
+  GEMINI_API_KEY?: string;
+  TURSO_URL?: string;
+  TURSO_AUTH_TOKEN?: string;
+}) {
+  try {
+    // Use the configured api client which handles authentication headers
+    const response = await api.post('/admin/env-variables', variables);
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+/**
+ * Gets current environment variables
+ */
+export async function getEnvironmentVariables() {
+  try {
+    // Use the configured api client which handles authentication headers
+    const response = await api.get('/admin/get-env-variables');
+    return response.data;
+  } catch (error) {
+    throw error;
+  }
+}
+
+// Add debug helper function
+export const verifyToken = async (token: string) => {
+  try {
+    const response = await api.post('/debug/verify-token', { token });
+    return response.data;
+  } catch (error) {
+    return { 
+      valid: false, 
+      error: error instanceof Error ? error.message : 'Unknown error',
+      clientSideError: true
+    };
+  }
+};
+
+// You can manually test this in your browser console with:
+// 1. Import the function: import { verifyToken } from './lib/api'
+// 2. Call it with localStorage token: verifyToken(localStorage.getItem('sessionToken'))
+
+// Email notification API endpoints
+export const scheduleTaskReminder = async (data: {
+  email: string;
+  taskTitle: string;
+  taskId: string | number;
+  dueDate: number;
+  userId: string | number;
+}) => {
+  try {
+    // Use apiRequest which handles auth and ensures the correct API prefix
+    const response = await apiRequest('POST', '/email/schedule-task-reminder', data);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || 'Failed to schedule task reminder');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Schedule task reminder error:', error);
+    throw error;
+  }
+};
+
+export const scheduleMeetingReminder = async (data: {
+  email: string;
+  meetingTitle: string;
+  meetingId: string | number;
+  startTime: number;
+  meetingLink?: string | null;
+  userId: string | number;
+}) => {
+  try {
+    // Use apiRequest which handles auth and ensures the correct API prefix
+    const response = await apiRequest('POST', '/email/schedule-meeting-reminder', data);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || 'Failed to schedule meeting reminder');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Schedule meeting reminder error:', error);
+    throw error;
+  }
+};
+
+export const scheduleAppointmentReminder = async (data: {
+  email: string;
+  appointmentTitle: string;
+  appointmentId: string | number;
+  dueDate: number;
+  location?: string | null;
+  userId: string | number;
+}) => {
+  try {
+    // Use apiRequest which handles auth and ensures the correct API prefix
+    const response = await apiRequest('POST', '/email/schedule-appointment-reminder', data);
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ error: 'Unknown error' }));
+      throw new Error(errorData.error || 'Failed to schedule appointment reminder');
+    }
+    return await response.json();
+  } catch (error) {
+    console.error('Schedule appointment reminder error:', error);
     throw error;
   }
 };

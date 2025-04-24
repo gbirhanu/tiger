@@ -275,6 +275,10 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
 
   // Add recurrence states
   const [recurrenceEndDatePickerOpen, setRecurrenceEndDatePickerOpen] = useState(false);
+  // Add state controls for date and time pickers
+  const [datePickerOpen, setDatePickerOpen] = useState(false);
+  const [startTimePickerOpen, setStartTimePickerOpen] = useState(false);
+  const [endTimePickerOpen, setEndTimePickerOpen] = useState(false);
 
   // Handle external dialog control
   React.useEffect(() => {
@@ -446,7 +450,6 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
       form.reset();
     },
     onError: (error) => {
-      console.error("Error creating appointment:", error);
       toast({
         variant: "destructive",
         title: "Error",
@@ -497,7 +500,6 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
         // Add updated timestamp
         formattedData.updated_at = Math.floor(Date.now() / 1000);
         
-        console.log("Updating appointment:", appointmentId, formattedData);
         
         // Use API request
         const response = await apiRequest(
@@ -508,13 +510,11 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
         
         if (!response.ok) {
           const errorData = await response.text();
-          console.error("API error response:", errorData);
           throw new Error(`API error: ${response.status} ${errorData}`);
         }
         
         return await response.json();
       } catch (error) {
-        console.error("Error in updateAppointmentMutation:", error);
         throw error;
       }
     },
@@ -529,7 +529,6 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
       });
     },
     onError: (error) => {
-      console.error("Error updating appointment:", error);
       toast({
         variant: "destructive",
         title: "Error",
@@ -542,7 +541,6 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
   const toggleCompletionMutation = useMutation({
     mutationFn: async ({ appointmentId, completed }: { appointmentId: number, completed: boolean }) => {
       try {
-        console.log(`Toggling appointment ${appointmentId} completion to ${completed}`);
         
         // Simple update data with just the completed flag
         const updateData = {
@@ -558,13 +556,11 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
         
         if (!response.ok) {
           const errorData = await response.text();
-          console.error("API error response:", errorData);
           throw new Error(`API error: ${response.status} ${errorData}`);
         }
         
         return await response.json();
       } catch (error) {
-        console.error("Error toggling appointment completion:", error);
         throw error;
       }
     },
@@ -579,7 +575,6 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
       });
     },
     onError: (error) => {
-      console.error("Error updating appointment:", error);
       toast({
         variant: "destructive",
         title: "Error",
@@ -685,7 +680,7 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
         await createAppointmentMutation.mutateAsync(data);
       }
     } catch (error) {
-      console.error("Error submitting form:", error);
+      
     } finally {
       setIsSubmitting(false);
     }
@@ -932,7 +927,7 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                   render={({ field }) => (
                     <FormItem className="flex flex-col">
                       <FormLabel>Date</FormLabel>
-                      <Popover>
+                      <Popover open={datePickerOpen} onOpenChange={setDatePickerOpen}>
                         <PopoverTrigger asChild>
                           <FormControl>
                             <Button
@@ -951,11 +946,17 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                             </Button>
                           </FormControl>
                         </PopoverTrigger>
-                        <PopoverContent className="w-auto p-0" align="start">
+                        <PopoverContent className="w-auto p-0" align="start" side="bottom">
                           <Calendar
                             mode="single"
                             selected={field.value}
-                            onSelect={field.onChange}
+                            onSelect={(date) => {
+                              field.onChange(date);
+                              // Auto-close calendar after selection
+                              if (date) {
+                                setDatePickerOpen(false);
+                              }
+                            }}
                             initialFocus
                           />
                         </PopoverContent>
@@ -991,7 +992,7 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                       render={({ field }) => (
                         <FormItem className="flex flex-col">
                           <FormLabel className="text-xs font-medium">Start Time</FormLabel>
-                          <Popover>
+                          <Popover open={startTimePickerOpen} onOpenChange={setStartTimePickerOpen}>
                             <PopoverTrigger asChild>
                               <FormControl>
                                 <Button
@@ -1002,7 +1003,10 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                                   )}
                                 >
                                   <Clock className="mr-2 h-4 w-4 text-purple-500" />
-                                  {form.watch("startHour").toString().padStart(2, '0')}:{form.watch("startMinute").toString().padStart(2, '0')}
+                                  {format(
+                                    new Date().setHours(form.watch("startHour"), form.watch("startMinute")),
+                                    "h:mm a"
+                                  )}
                                 </Button>
                               </FormControl>
                             </PopoverTrigger>
@@ -1016,6 +1020,8 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                                 onChange={(date) => {
                                   field.onChange(date.getHours());
                                   form.setValue("startMinute", date.getMinutes());
+                                  // Auto-close time selector after selection
+                                  setStartTimePickerOpen(false);
                                 }}
                                 compact={true}
                               />
@@ -1032,7 +1038,7 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                       render={({ field }) => (
                         <FormItem className="flex flex-col">
                           <FormLabel className="text-xs font-medium">End Time</FormLabel>
-                          <Popover>
+                          <Popover open={endTimePickerOpen} onOpenChange={setEndTimePickerOpen}>
                             <PopoverTrigger asChild>
                               <FormControl>
                                 <Button
@@ -1043,7 +1049,10 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                                   )}
                                 >
                                   <Clock className="mr-2 h-4 w-4 text-purple-500" />
-                                  {form.watch("endHour").toString().padStart(2, '0')}:{form.watch("endMinute").toString().padStart(2, '0')}
+                                  {format(
+                                    new Date().setHours(form.watch("endHour"), form.watch("endMinute")),
+                                    "h:mm a"
+                                  )}
                                 </Button>
                               </FormControl>
                             </PopoverTrigger>
@@ -1057,6 +1066,8 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
                                 onChange={(date) => {
                                   field.onChange(date.getHours());
                                   form.setValue("endMinute", date.getMinutes());
+                                  // Auto-close time selector after selection
+                                  setEndTimePickerOpen(false);
                                 }}
                                 compact={true}
                               />
@@ -1223,7 +1234,7 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
       </div>
       
       {appointments && appointments.length > 0 && (
-        <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
           <Card className="bg-gradient-to-br from-green-50 to-green-100/50 dark:from-green-950/20 dark:to-green-900/10 border-green-200 dark:border-green-900/50">
             <CardContent className="pt-6">
               <div className="flex justify-between items-start">
@@ -1298,11 +1309,12 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
         </div>
       )}
       
-      <div className="flex space-x-2">
+      <div className="flex flex-wrap gap-2 mb-4 overflow-x-auto pb-2">
         <Button
           variant={filter === "all" ? "default" : "outline"}
           onClick={() => setFilter("all")}
           size="sm"
+          className="min-w-[80px]"
         >
           All
         </Button>
@@ -1310,35 +1322,35 @@ export default function Appointments({ isDialogOpen, setIsDialogOpen, initialDat
           variant={filter === "completed" ? "default" : "outline"}
           onClick={() => setFilter("completed")}
           size="sm"
-          className={filter === "completed" ? "bg-green-600 hover:bg-green-700" : ""}
+          className={`min-w-[80px] ${filter === "completed" ? "bg-green-600 hover:bg-green-700" : ""}`}
         >
           <CheckCircle className="h-4 w-4 text-green-600 mr-2" />
-          Completed
+          <span className="whitespace-nowrap">Completed</span>
         </Button>
         <Button
           variant={filter === "in-progress" ? "default" : "outline"}
           onClick={() => setFilter("in-progress")}
           size="sm"
-          className={filter === "in-progress" ? "bg-purple-600 hover:bg-purple-700" : ""}
+          className={`min-w-[80px] ${filter === "in-progress" ? "bg-purple-600 hover:bg-purple-700" : ""}`}
         >
           <div className="h-2 w-2 rounded-full bg-purple-500 mr-2 animate-pulse"></div>
-          In Progress
+          <span className="whitespace-nowrap">In Progress</span>
         </Button>
         <Button
           variant={filter === "upcoming" ? "default" : "outline"}
           onClick={() => setFilter("upcoming")}
           size="sm"
-          className={filter === "upcoming" ? "bg-blue-600 hover:bg-blue-700" : ""}
+          className={`min-w-[80px] ${filter === "upcoming" ? "bg-blue-600 hover:bg-blue-700" : ""}`}
         >
-          Upcoming
+          <span className="whitespace-nowrap">Upcoming</span>
         </Button>
         <Button
           variant={filter === "past" ? "default" : "outline"}
           onClick={() => setFilter("past")}
           size="sm"
-          className={filter === "past" ? "bg-gray-600 hover:bg-gray-700" : ""}
+          className={`min-w-[80px] ${filter === "past" ? "bg-gray-600 hover:bg-gray-700" : ""}`}
         >
-          Past
+          <span className="whitespace-nowrap">Past</span>
         </Button>
       </div>
       

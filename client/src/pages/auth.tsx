@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { LoginForm } from '../components/auth/LoginForm';
 import { RegisterForm } from '../components/auth/RegisterForm';
+import { ForgotPasswordForm } from '../components/auth/ForgotPasswordForm';
 import { Button } from '../components/ui/button';
 import { Flame, CheckCircle2, Zap, Clock, Calendar, Sparkles, BookOpen } from 'lucide-react';
 import { cn } from '../lib/utils';
@@ -9,8 +10,11 @@ import { useTheme } from '@/contexts/ThemeContext';
 // Define Theme type to match the one in ThemeContext
 type Theme = 'light' | 'dark' | 'system';
 
+// Auth mode enum
+type AuthMode = 'login' | 'register' | 'forgot-password';
+
 export default function AuthPage() {
-  const [isLogin, setIsLogin] = useState(true);
+  const [authMode, setAuthMode] = useState<AuthMode>('login');
   const { resolvedTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
   
@@ -164,57 +168,81 @@ export default function AuthPage() {
         {/* Right Column - Auth Forms */}
         <div className="md:w-1/2 p-6 md:p-12 bg-white dark:bg-gray-900 flex flex-col">
           <div className="w-full max-w-md mx-auto">
-            {/* Auth Tabs - Updated for better theme responsiveness */}
+            {/* Auth Tabs - Now with 3 options */}
             <div className="flex space-x-2 mb-8 bg-gray-100 dark:bg-gray-800 p-1 rounded-lg shadow-inner">
               <Button
-                variant={isLogin ? "default" : "ghost"}
+                variant={authMode === 'login' ? "default" : "ghost"}
                 className={cn(
                   "flex-1 font-medium transition-all duration-200",
-                  isLogin 
+                  authMode === 'login' 
                     ? "bg-gray-900 dark:bg-white text-white dark:text-gray-900 shadow-sm" 
                     : "text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
                 )}
-                onClick={() => setIsLogin(true)}
+                onClick={() => setAuthMode('login')}
               >
                 Login
               </Button>
               <Button
-                variant={!isLogin ? "default" : "ghost"}
+                variant={authMode === 'register' ? "default" : "ghost"}
                 className={cn(
                   "flex-1 font-medium transition-all duration-200",
-                  !isLogin 
+                  authMode === 'register' 
                     ? "bg-gray-900 dark:bg-white text-white dark:text-gray-900 shadow-sm" 
                     : "text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
                 )}
-                onClick={() => setIsLogin(false)}
+                onClick={() => setAuthMode('register')}
               >
                 Register
+              </Button>
+              <Button
+                variant={authMode === 'forgot-password' ? "default" : "ghost"}
+                className={cn(
+                  "flex-1 font-medium transition-all duration-200",
+                  authMode === 'forgot-password' 
+                    ? "bg-gray-900 dark:bg-white text-white dark:text-gray-900 shadow-sm" 
+                    : "text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white"
+                )}
+                onClick={() => setAuthMode('forgot-password')}
+              >
+                Reset
               </Button>
             </div>
 
             {/* Forms Container - Align to top */}
             <div className="w-full mt-4">
               {/* Form */}
-              {isLogin ? <LoginForm /> : <RegisterForm />}
+              {authMode === 'login' && <LoginForm onForgotPassword={() => setAuthMode('forgot-password')} />}
+              {authMode === 'register' && <RegisterForm />}
+              {authMode === 'forgot-password' && <ForgotPasswordForm onBack={() => setAuthMode('login')} />}
                
               {/* Account Switch Link */}
               <div className="text-center mt-8 border-t border-gray-100 dark:border-gray-800 pt-6">
                 <p className="text-sm text-gray-600 dark:text-gray-400">
-                  {isLogin ? (
+                  {authMode === 'login' ? (
                     <>
                       Don't have an account?{" "}
                       <button 
-                        onClick={() => setIsLogin(false)} 
+                        onClick={() => setAuthMode('register')} 
                         className="text-gray-900 dark:text-white hover:underline font-medium transition-colors"
                       >
                         Create account
                       </button>
                     </>
-                  ) : (
+                  ) : authMode === 'register' ? (
                     <>
                       Already have an account?{" "}
                       <button 
-                        onClick={() => setIsLogin(true)}
+                        onClick={() => setAuthMode('login')}
+                        className="text-gray-900 dark:text-white hover:underline font-medium transition-colors"
+                      >
+                        Sign in
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      Remember your password?{" "}
+                      <button 
+                        onClick={() => setAuthMode('login')}
                         className="text-gray-900 dark:text-white hover:underline font-medium transition-colors"
                       >
                         Sign in

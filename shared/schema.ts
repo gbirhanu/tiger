@@ -29,6 +29,17 @@ export const sessions = sqliteTable("sessions", {
   expires_at: integer("expires_at").notNull()
 });
 
+// Password reset tokens
+export const resetTokens = sqliteTable("reset_tokens", {
+  id: integer("id").primaryKey({ autoIncrement: true }),
+  user_id: integer("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  token: text("token").notNull().unique(),
+  expires_at: integer("expires_at").notNull(),
+  created_at: integer("created_at").notNull().default(sql`CURRENT_TIMESTAMP`)
+});
+
 // Task Tables
 export const tasks = sqliteTable("tasks", {
   id: integer("id").primaryKey({ autoIncrement: true }),
@@ -148,6 +159,7 @@ export const userSettings = sqliteTable("user_settings", {
   default_calendar_view: text("default_calendar_view").notNull().default("month"),
   show_notifications: integer("show_notifications", { mode: "boolean" }).notNull().default(true),
   notifications_enabled: integer("notifications_enabled", { mode: "boolean" }).notNull().default(true),
+  email_notifications_enabled: integer("email_notifications_enabled", { mode: "boolean" }).notNull().default(false),
   gemini_key: text("gemini_key"),
   gemini_calls_count: integer("gemini_calls_count").default(0),
   is_pro: integer("is_pro", { mode: "boolean" }).default(false),
@@ -353,6 +365,7 @@ export const insertUserSettingsSchema = z.object({
   default_calendar_view: z.enum(["day", "week", "month"]).default("month"),
   show_notifications: z.boolean().default(true),
   notifications_enabled: z.boolean().default(true),
+  email_notifications_enabled: z.boolean().default(false),
   gemini_key: z.string().optional(),
   gemini_calls_count: z.number().default(0),
   is_pro: z.boolean().default(false),
@@ -426,6 +439,9 @@ export type NewUser = typeof users.$inferInsert;
 
 export type Session = typeof sessions.$inferSelect;
 export type NewSession = typeof sessions.$inferInsert;
+
+export type ResetToken = typeof resetTokens.$inferSelect;
+export type NewResetToken = typeof resetTokens.$inferInsert;
 
 export type Task = typeof tasks.$inferSelect;
 export type NewTask = typeof tasks.$inferInsert;

@@ -11,21 +11,13 @@ const router = Router();
 router.use(requireAuth);
 
 // Fallback API key (will be used only if user doesn't have their own key)
-const FALLBACK_GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "AIzaSyAPNehyjmuB15YYzvq2yhbDiI8769TLChE";
+const FALLBACK_GEMINI_API_KEY = process.env.GEMINI_API_KEY 
 
 // Generate subtasks endpoint
 router.post("/", async (req: Request, res: Response) => {
   try {
-    console.log("Received generate subtasks request:", {
-      body: req.body,
-      userId: req.userId,
-      hasUserId: !!req.userId,
-      authHeader: req.headers.authorization ? "Present" : "Missing"
-    });
-    
     // Check for user ID first - this should be set by the requireAuth middleware
     if (!req.userId) {
-      console.error("Missing user ID in request - auth middleware may have failed");
       return res.status(401).json({
         error: "Authentication required - no user ID",
         subtasks: []
@@ -36,7 +28,6 @@ router.post("/", async (req: Request, res: Response) => {
     const { task, count = 5 } = req.body;
     
     if (!task || !task.title) {
-      console.error("Invalid task data in request:", req.body);
       return res.status(400).json({ 
         error: "Task details are required", 
         subtasks: [] // Include empty subtasks array to prevent client-side errors
@@ -122,7 +113,6 @@ router.post("/", async (req: Request, res: Response) => {
     
     // Verify API key is available
     if (!GEMINI_API_KEY) {
-      console.error("No Gemini API key available");
       return res.status(500).json({ 
         error: "Gemini API key is not configured", 
         details: "Please set your Gemini API key in Settings",
@@ -157,7 +147,6 @@ router.post("/", async (req: Request, res: Response) => {
       DO NOT include any numbering, additional formatting, or explanation.
     `;
     
-    console.log("Sending prompt to Gemini API:", { taskTitle, taskDescription, count });
     
     // Generate content
     try {
@@ -165,7 +154,6 @@ router.post("/", async (req: Request, res: Response) => {
       const response = await result.response;
       let text = response.text();
       
-      console.log("Raw response from Gemini API:", text);
       
       // Try to parse the response as JSON array
       try {
@@ -177,15 +165,13 @@ router.post("/", async (req: Request, res: Response) => {
         if (!text.startsWith('[')) text = '[' + text;
         if (!text.endsWith(']')) text = text + ']';
         
-        console.log("Preprocessed text before parsing:", text.substring(0, 100) + (text.length > 100 ? "..." : ""));
         
         // Parse as JSON
         const subtasks = JSON.parse(text);
         
-        console.log("Parsed subtasks array:", subtasks);
+        
         
         if (!Array.isArray(subtasks)) {
-          console.error("Parsed result is not an array:", typeof subtasks);
           throw new Error("Response is not an array");
         }
         
@@ -218,19 +204,12 @@ router.post("/", async (req: Request, res: Response) => {
             }
           }
         } catch (countError) {
-          console.error("Error incrementing counter:", countError);
           // Continue processing request despite counter error
         }
         
-        console.log("Sending successful response with subtasks:", {
-          count: subtasks.length,
-          sampleItems: subtasks.slice(0, 3),
-          isArray: Array.isArray(subtasks)
-        });
         
         res.json({ subtasks });
       } catch (parseError) {
-        console.error("Error parsing JSON response:", parseError);
         // If parsing fails, return the raw text
         const fallbackSubtasks = text.replace(/^\[|\]$/g, '').split('\n').map(s => s.trim()).filter(Boolean);
         
@@ -252,25 +231,14 @@ router.post("/", async (req: Request, res: Response) => {
         
         const finalSubtasks = fallbackSubtasks.length > 0 ? fallbackSubtasks : ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"];
         
-        console.log("Sending fallback response after parse error:", {
-          originalText: text.substring(0, 100) + (text.length > 100 ? "..." : ""),
-          parsedSubtasks: finalSubtasks,
-          count: finalSubtasks.length,
-          isArray: Array.isArray(finalSubtasks)
-        });
+       
         
         res.json({ subtasks: finalSubtasks });
       }
     } catch (generationError) {
-      console.error("Error generating content with Gemini API:", generationError);
       // Provide fallback subtasks
       const fallbackSubtasks = ["Review task details", "Organize resources", "Create outline", "Implement solution", "Test results"];
       
-      console.log("Sending error response with fallback subtasks due to generation error:", {
-        error: generationError instanceof Error ? generationError.message : "Unknown error",
-        fallbackSubtasks,
-        count: fallbackSubtasks.length
-      });
       
       res.json({ 
         subtasks: fallbackSubtasks,
@@ -278,7 +246,6 @@ router.post("/", async (req: Request, res: Response) => {
       });
     }
   } catch (error) {
-    console.error("Unexpected error in generate-subtasks route:", error);
     res.status(500).json({ 
       error: "Failed to generate subtasks",
       details: error instanceof Error ? error.message : "Unknown error",

@@ -68,7 +68,6 @@ export function RegisterForm() {
         });
       }
     } catch (error: any) {
-      console.error('Google sign-up error:', error);
       setLocalError(error.message || 'An error occurred during registration');
       toast({
         title: "Registration Error",
@@ -83,10 +82,15 @@ export function RegisterForm() {
   // Load Google Sign-In script with theme support
   useEffect(() => {
     // Only initialize Google once
+    let clientId = import.meta.env.VITE_GOOGLE_CLIENT_ID;
+    if (!clientId) {
+      console.error('Google client ID is not defined');
+      return;
+    }
     if (!googleInitializedRef.current && window.google?.accounts) {
       googleInitializedRef.current = true;
       window.google.accounts.id.initialize({
-        client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+        client_id: clientId,
         callback: handleGoogleResponse,
         cancel_on_tap_outside: true,
         ux_mode: 'popup',
@@ -112,7 +116,6 @@ export function RegisterForm() {
             }
           );
         } catch (err) {
-          console.error('Error rendering Google button:', err);
         }
       }
     };
@@ -123,44 +126,30 @@ export function RegisterForm() {
       return;
     }
     
-    // If script is already loading, don't load it again
-    if (window.googleScriptLoading) {
-      return;
-    }
-    
-    // Mark as loading
-    window.googleScriptLoading = true;
-    
-    // Create and add the script
-    const script = document.createElement('script');
-    script.src = 'https://accounts.google.com/gsi/client';
-    script.async = true;
-    script.defer = true;
-    script.id = 'google-signin-script';
-    
-    script.onload = () => {
-      // Initialize and render when loaded
-      if (!googleInitializedRef.current && window.google?.accounts) {
-        googleInitializedRef.current = true;
-        window.google.accounts.id.initialize({
-          client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
-          callback: handleGoogleResponse,
-          cancel_on_tap_outside: true,
-          ux_mode: 'popup',
-        });
+    // Check periodically if Google API is loaded, then render
+    const checkGoogleInterval = setInterval(() => {
+      if (window.google?.accounts) {
+        clearInterval(checkGoogleInterval);
+        // Initialize if not already done (though LoginForm usually handles this)
+        if (!googleInitializedRef.current) {
+          googleInitializedRef.current = true;
+          try {
+            window.google.accounts.id.initialize({
+              client_id: import.meta.env.VITE_GOOGLE_CLIENT_ID,
+              callback: handleGoogleResponse,
+              cancel_on_tap_outside: true,
+              ux_mode: 'popup',
+            });
+          } catch (err) {
+          }
+        }
+        renderGoogleButton();
       }
-      
-      renderGoogleButton();
-    };
-    
-    script.onerror = (e) => {
-      console.error('Failed to load Google Sign-In script:', e);
-      setLocalError('Failed to load Google Sign-In. Please check your internet connection.');
-      window.googleScriptLoading = false;
-    };
-    
-    document.body.appendChild(script);
-    
+    }, 100); // Check every 100ms
+
+    // Cleanup interval on component unmount
+    return () => clearInterval(checkGoogleInterval);
+
     // No cleanup needed on theme changes
   }, [resolvedTheme, handleGoogleResponse]);
 

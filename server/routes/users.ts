@@ -59,9 +59,7 @@ router.post('/:userId/subscription', requireAuth, async (req: Request, res: Resp
           deposited_date: now,
           payment_method: "admin_grant",
           status: "approved",
-          subscription_plan: "pro",
-          duration_months: 1, // 30 days as specified
-          notes: "Subscription granted by admin",
+          notes: "Subscription granted by admin - " + subscription_plan,
           created_at: now,
           updated_at: now
         });
@@ -77,13 +75,21 @@ router.post('/:userId/subscription', requireAuth, async (req: Request, res: Resp
     // Get current timestamp
     const now = Math.floor(Date.now() / 1000);
     
+    // Convert subscription_plan to is_pro boolean
+    const is_pro = subscription_plan !== 'free';
+    
+    // Set subscription dates
+    const subscription_start_date = now;
+    const subscription_end_date = subscription_expiry === null ? null : parseInt(String(subscription_expiry));
+    
     if (userSetting) {
       // Update existing record
       await db
         .update(userSettings)
         .set({
-          subscription_plan,
-          subscription_expiry: subscription_expiry === null ? null : parseInt(String(subscription_expiry)),
+          is_pro,
+          subscription_start_date,
+          subscription_end_date,
           updated_at: now
         })
         .where(eq(userSettings.user_id, userId));
@@ -93,8 +99,9 @@ router.post('/:userId/subscription', requireAuth, async (req: Request, res: Resp
         .insert(userSettings)
         .values({
           user_id: userId,
-          subscription_plan,
-          subscription_expiry: subscription_expiry === null ? null : parseInt(String(subscription_expiry)),
+          is_pro,
+          subscription_start_date,
+          subscription_end_date,
           created_at: now,
           updated_at: now
         });
@@ -105,11 +112,11 @@ router.post('/:userId/subscription', requireAuth, async (req: Request, res: Resp
       success: true,
       user_id: userId,
       subscription_plan,
-      subscription_expiry
+      is_pro,
+      subscription_end_date
     });
     
   } catch (error) {
-    console.error("Error updating subscription:", error);
     res.status(500).json({ 
       error: "Failed to update subscription",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -174,7 +181,6 @@ router.post('/:userId/reset-gemini-usage', requireAuth, async (req: Request, res
     });
     
   } catch (error) {
-    console.error("Error resetting Gemini API usage:", error);
     res.status(500).json({ 
       error: "Failed to reset Gemini API usage",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -210,8 +216,9 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         created_at: users.created_at,
         last_login: users.last_login,
         is_online: users.is_online,
-        subscription_plan: userSettings.subscription_plan,
-        subscription_expiry: userSettings.subscription_expiry,
+        is_pro: userSettings.is_pro,
+        subscription_start_date: userSettings.subscription_start_date,
+        subscription_end_date: userSettings.subscription_end_date,
         gemini_api_key: userSettings.gemini_key,
         gemini_calls_count: userSettings.gemini_calls_count
       })
@@ -241,9 +248,13 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     const allUsers = basicUsers.map(user => {
       const payment = userPaymentsMap.get(user.id);
       
-      // If there's a payment and either no subscription_plan or it doesn't match
+      // Calculate subscription plan based on is_pro flag
+      const subscription_plan = user.is_pro ? 'pro' : 'free';
+      
+      // If there's a payment
       if (payment) {
-        const duration = payment.duration_months || 1;
+        // Simplified approach: Use a default duration
+        const duration = 1; // 1 month default
         const paymentTime = payment.updated_at || payment.created_at;
         const expiryDate = paymentTime + (duration * 30 * 24 * 60 * 60);
         const isExpired = expiryDate < now;
@@ -252,21 +263,21 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
         if (!isExpired) {
           return {
             ...user,
+            subscription_plan,
             has_payment: true,
             payment_id: payment.id,
-            payment_plan: payment.subscription_plan,
             payment_expiry: expiryDate,
             payment_expired: false,
-            needs_sync: user.subscription_plan !== payment.subscription_plan || 
-                       (user.subscription_expiry || 0) < expiryDate
+            needs_sync: user.is_pro === false || 
+                       (user.subscription_end_date || 0) < expiryDate
           };
         } else {
           // Payment exists but is expired
           return {
             ...user,
+            subscription_plan,
             has_payment: true,
             payment_id: payment.id,
-            payment_plan: payment.subscription_plan,
             payment_expiry: expiryDate,
             payment_expired: true,
             needs_sync: false
@@ -277,6 +288,7 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
       // No payment
       return {
         ...user,
+        subscription_plan,
         has_payment: false,
         needs_sync: false
       };
@@ -286,7 +298,6 @@ router.get('/', requireAuth, async (req: Request, res: Response) => {
     res.json({ users: allUsers });
     
   } catch (error) {
-    console.error("Error fetching users:", error);
     res.status(500).json({ 
       error: "Failed to fetch users",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -324,7 +335,6 @@ router.post('/:userId/sync-subscription', requireAuth, async (req: Request, res:
     // Import the subscriptionPayments table
     const { subscriptionPayments } = await import('../../shared/schema');
     
-    console.log(`Syncing subscription for user ID: ${userId}`);
     
     // Find the latest approved payment for this user
     const latestPayment = await db
@@ -339,37 +349,34 @@ router.post('/:userId/sync-subscription', requireAuth, async (req: Request, res:
       .get();
     
     if (!latestPayment) {
-      console.log(`No approved payment found for user ID: ${userId}`);
       return res.status(404).json({ 
         error: "No approved payment found for this user",
         details: "User has no approved subscription payments"
       });
     }
     
-    console.log(`Found payment record: ${JSON.stringify(latestPayment)}`);
     
-    // Calculate the expiry date based on payment date and duration
+    // Calculate the expiry date based on payment date
     const now = Math.floor(Date.now() / 1000);
-    const duration = latestPayment.duration_months || 1;
     
     // Calculate when payment was processed (created_at or updated_at)
     const paymentTime = latestPayment.updated_at || latestPayment.created_at;
     
-    // Calculate expiry = payment time + duration in seconds (approximately month in seconds)
-    const expiryDate = paymentTime + (duration * 30 * 24 * 60 * 60); 
+    // Calculate expiry = payment time + 1 month (approximately month in seconds)
+    const expiryDate = paymentTime + (30 * 24 * 60 * 60); 
     
-    console.log(`Calculated expiry date: ${new Date(expiryDate * 1000).toISOString()}`);
-    console.log(`Current time: ${new Date(now * 1000).toISOString()}`);
     
     // Check if payment is still valid (not expired)
     const isExpired = expiryDate < now;
     if (isExpired) {
-      console.log(`Payment is expired for user ID: ${userId}`);
       return res.status(400).json({ 
         error: "Payment found but subscription has expired",
         details: `Subscription expired on ${new Date(expiryDate * 1000).toISOString()}`
       });
     }
+    
+    // Set is_pro to true since we have a valid payment
+    const is_pro = true;
     
     // Update user settings with the payment information
     const userSetting = await db
@@ -380,24 +387,24 @@ router.post('/:userId/sync-subscription', requireAuth, async (req: Request, res:
     
     if (userSetting) {
       // Update existing record
-      console.log(`Updating existing user settings for user ID: ${userId}`);
       await db
         .update(userSettings)
         .set({
-          subscription_plan: latestPayment.subscription_plan,
-          subscription_expiry: expiryDate,
+          is_pro,
+          subscription_start_date: paymentTime,
+          subscription_end_date: expiryDate,
           updated_at: now
         })
         .where(eq(userSettings.user_id, userId));
     } else {
       // Create new record
-      console.log(`Creating new user settings for user ID: ${userId}`);
       await db
         .insert(userSettings)
         .values({
           user_id: userId,
-          subscription_plan: latestPayment.subscription_plan,
-          subscription_expiry: expiryDate,
+          is_pro,
+          subscription_start_date: paymentTime,
+          subscription_end_date: expiryDate,
           created_at: now,
           updated_at: now
         });
@@ -405,15 +412,15 @@ router.post('/:userId/sync-subscription', requireAuth, async (req: Request, res:
     
     res.json({
       success: true,
-      message: `User subscription synced successfully to ${latestPayment.subscription_plan}`,
+      message: `User subscription synced successfully to pro`,
       user_id: userId,
-      subscription_plan: latestPayment.subscription_plan,
-      subscription_expiry: expiryDate,
+      is_pro,
+      subscription_start_date: paymentTime,
+      subscription_end_date: expiryDate,
       payment_id: latestPayment.id
     });
     
   } catch (error) {
-    console.error("Error syncing user subscription:", error);
     res.status(500).json({ 
       error: "Failed to sync user subscription",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -460,7 +467,6 @@ router.post("/:id/reset-gemini-usage", requireAdmin, async (req: Request, res: R
       message: "Gemini API usage count reset to zero"
     });
   } catch (error) {
-    console.error("Error resetting Gemini API usage:", error);
     return res.status(500).json({ 
       error: "Failed to reset Gemini API usage",
       details: error instanceof Error ? error.message : "Unknown error"
