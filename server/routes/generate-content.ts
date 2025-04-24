@@ -11,7 +11,7 @@ const router = Router();
 router.use(requireAuth);
 
 // Fallback API key (will be used only if user doesn't have their own key)
-const FALLBACK_GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || "AIzaSyAPNehyjmuB15YYzvq2yhbDiI8769TLChE";
+const FALLBACK_GEMINI_API_KEY = process.env.GEMINI_API_KEY 
 
 // Generate content endpoint
 router.post("/", async (req: Request, res: Response) => {

@@ -24,7 +24,6 @@ export const safeDOM = {
       }
       return false;
     } catch (e) {
-      console.warn('Safe DOM: Failed to remove child', e);
       return false;
     }
   },
@@ -44,7 +43,6 @@ export const safeDOM = {
       }
       return true;
     } catch (e) {
-      console.warn('Safe DOM: Failed to clear children', e);
       // Fallback to innerHTML if the above fails
       try {
         if (element) {
@@ -52,7 +50,6 @@ export const safeDOM = {
           return true;
         }
       } catch (innerError) {
-        console.warn('Safe DOM: Also failed to use innerHTML', innerError);
       }
       return false;
     }
@@ -70,7 +67,6 @@ export const safeDOM = {
       parent.appendChild(child);
       return true;
     } catch (e) {
-      console.warn('Safe DOM: Failed to append child', e);
       return false;
     }
   }

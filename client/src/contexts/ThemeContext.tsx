@@ -3,6 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getUserSettings, updateUserSettings } from '@/lib/api';
 import { type UserSettings } from '@shared/schema';
 import { QUERY_KEYS } from '@/lib/queryClient';
+import { useLocation } from 'react-router-dom';
 
 type Theme = 'light' | 'dark' | 'system';
 
@@ -16,6 +17,7 @@ interface ThemeContextType {
 const ThemeContext = createContext<ThemeContextType | undefined>(undefined);
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
+  const location = useLocation();
   const [theme, setThemeState] = useState<Theme>(() => {
     // Initialize from localStorage if available
     const savedTheme = localStorage.getItem('theme') as Theme | null;
@@ -31,10 +33,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Use a ref to track the current theme to avoid unnecessary updates
   const themeRef = useRef(theme);
 
-  // Fetch user settings from the server
+  // Check if we're on an auth page where we should skip API calls
+  const isAuthPage = location.pathname === '/auth' || 
+                    location.pathname === '/reset-password' ||
+                    location.pathname.startsWith('/auth/');
+
+  // Fetch user settings from the server - but ONLY if not on auth pages
   const { data: settings, isLoading } = useQuery<UserSettings>({
     queryKey: [QUERY_KEYS.USER_SETTINGS],
     queryFn: getUserSettings,
+    enabled: !isAuthPage, // Skip this query on auth pages
   });
 
   // Apply theme from settings when they load
@@ -88,8 +96,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     setThemeState(newTheme);
     localStorage.setItem('theme', newTheme);
     
-    // Only update settings if we're authenticated and have settings
-    if (settings) {
+    // Only update settings if we're authenticated, have settings, and not on auth pages
+    if (settings && !isAuthPage) {
       updateThemeMutation.mutate(newTheme);
     }
   };

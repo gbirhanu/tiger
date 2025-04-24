@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import { Bell, Check, CheckCheck, Info, Calendar, Clock, X, AlertCircle } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { formatDistanceToNow } from 'date-fns';
@@ -15,6 +15,15 @@ import { Badge } from '@/components/ui/badge';
 import { ScrollArea } from '@/components/ui/scroll-area';
 import { useNotifications } from '@/hooks/use-notifications';
 import { Notification } from '@/contexts/NotificationsContext';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+
+// Maximum number of notifications to show at once for performance
+const MAX_VISIBLE_NOTIFICATIONS = 50;
 
 export function NotificationsDropdown() {
   const { 
@@ -26,8 +35,26 @@ export function NotificationsDropdown() {
   } = useNotifications();
   const navigate = useNavigate();
 
+  // Optimized notifications list - only show the most recent ones
+  const visibleNotifications = useMemo(() => {
+    // Always show unread notifications
+    const unread = notifications.filter(notification => !notification.read);
+    
+    // If we have fewer unread than our limit, add some read ones
+    if (unread.length < MAX_VISIBLE_NOTIFICATIONS) {
+      const read = notifications
+        .filter(notification => notification.read)
+        .slice(0, MAX_VISIBLE_NOTIFICATIONS - unread.length);
+      
+      return [...unread, ...read];
+    }
+    
+    // If we have more unread than our limit, just show the most recent ones
+    return unread.slice(0, MAX_VISIBLE_NOTIFICATIONS);
+  }, [notifications]);
+
   // Helper function to get the appropriate icon based on notification type
-  const getNotificationIcon = (type: Notification['type']) => {
+  const getNotificationIcon = useCallback((type: Notification['type']) => {
     switch (type) {
       case 'task':
         return <Check className="h-4 w-4 text-green-500" />;
@@ -40,10 +67,10 @@ export function NotificationsDropdown() {
       default:
         return <AlertCircle className="h-4 w-4 text-gray-500" />;
     }
-  };
+  }, []);
 
   // Handle notification click
-  const handleNotificationClick = (notification: Notification) => {
+  const handleNotificationClick = useCallback((notification: Notification) => {
     markAsRead(notification.id);
     if (notification.link) {
       // Check if the link is for the TaskManager component
@@ -56,7 +83,7 @@ export function NotificationsDropdown() {
         navigate(notification.link);
       }
     }
-  };
+  }, [markAsRead, navigate]);
 
   return (
     <DropdownMenu>
@@ -73,9 +100,16 @@ export function NotificationsDropdown() {
           )}
         </Button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="w-80">
-        <div className="flex items-center justify-between px-4 py-2">
-          <h3 className="font-medium">Notifications</h3>
+      <DropdownMenuContent align="end" className="w-96 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2 border-b sticky top-0 z-10 bg-background">
+          <div className="flex items-center gap-2">
+            <h3 className="font-medium">Notifications</h3>
+            {notifications.length > MAX_VISIBLE_NOTIFICATIONS && (
+              <span className="text-xs text-muted-foreground">
+                (Showing {visibleNotifications.length} of {notifications.length})
+              </span>
+            )}
+          </div>
           {unreadCount > 0 && (
             <Button 
               variant="ghost" 
@@ -88,7 +122,6 @@ export function NotificationsDropdown() {
             </Button>
           )}
         </div>
-        <DropdownMenuSeparator />
         
         {notifications.length === 0 ? (
           <div className="py-6 text-center text-muted-foreground">
@@ -99,37 +132,53 @@ export function NotificationsDropdown() {
           </div>
         ) : (
           <>
-            <ScrollArea className="h-[300px]">
-              {notifications.map((notification) => (
-                <DropdownMenuItem 
-                  key={notification.id}
-                  className={`px-4 py-3 cursor-pointer ${!notification.read ? 'bg-muted/50' : ''}`}
-                  onClick={() => handleNotificationClick(notification)}
-                >
-                  <div className="flex gap-3 w-full">
-                    <div className="flex-shrink-0 h-8 w-8 rounded-full bg-muted flex items-center justify-center">
-                      {getNotificationIcon(notification.type)}
+            <ScrollArea className="max-h-[60vh] overflow-y-auto" type="always">
+              <div className="py-1">
+                {visibleNotifications.map((notification, index) => (
+                  <DropdownMenuItem 
+                    key={notification.id}
+                    className={`px-4 py-3 cursor-pointer ${!notification.read ? 'bg-muted/50' : ''} ${index !== visibleNotifications.length - 1 ? 'border-b border-muted' : ''}`}
+                    onClick={() => handleNotificationClick(notification)}
+                  >
+                    <div className="flex gap-3 w-full">
+                      <div className="flex-shrink-0 h-8 w-8 rounded-full bg-muted flex items-center justify-center">
+                        {getNotificationIcon(notification.type)}
+                      </div>
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <p className={`text-sm font-medium ${!notification.read ? 'text-foreground' : 'text-muted-foreground'}`}>
+                          {notification.title}
+                        </p>
+                        <TooltipProvider delayDuration={300}>
+                          <Tooltip>
+                            <TooltipTrigger asChild>
+                              <p className="text-xs text-muted-foreground whitespace-normal break-words max-h-20 overflow-y-auto">
+                                {notification.message}
+                              </p>
+                            </TooltipTrigger>
+                            <TooltipContent side="left" align="start" className="max-w-sm">
+                              <p className="whitespace-pre-line">{notification.message}</p>
+                            </TooltipContent>
+                          </Tooltip>
+                        </TooltipProvider>
+                        <p className="text-xs text-muted-foreground/70">
+                          {formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true })}
+                        </p>
+                      </div>
+                      {!notification.read && (
+                        <div className="flex-shrink-0 h-2 w-2 rounded-full bg-primary" />
+                      )}
                     </div>
-                    <div className="flex-1 min-w-0">
-                      <p className={`text-sm font-medium ${!notification.read ? 'text-foreground' : 'text-muted-foreground'}`}>
-                        {notification.title}
-                      </p>
-                      <p className="text-xs text-muted-foreground truncate">
-                        {notification.message}
-                      </p>
-                      <p className="text-xs text-muted-foreground/70 mt-1">
-                        {formatDistanceToNow(new Date(notification.createdAt), { addSuffix: true })}
-                      </p>
-                    </div>
-                    {!notification.read && (
-                      <div className="flex-shrink-0 h-2 w-2 rounded-full bg-primary" />
-                    )}
+                  </DropdownMenuItem>
+                ))}
+                
+                {notifications.length > MAX_VISIBLE_NOTIFICATIONS && (
+                  <div className="px-4 py-2 text-center text-xs text-muted-foreground border-t">
+                    Showing {visibleNotifications.length} of {notifications.length} notifications
                   </div>
-                </DropdownMenuItem>
-              ))}
+                )}
+              </div>
             </ScrollArea>
-            <DropdownMenuSeparator />
-            <div className="p-2">
+            <div className="p-2 border-t sticky bottom-0 z-10 bg-background">
               <Button 
                 variant="outline" 
                 size="sm" 

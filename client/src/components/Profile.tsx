@@ -11,6 +11,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { toast } from '@/hooks/use-toast';
 import { getUserTimezone } from '@/lib/timezone';
 import { formatDistanceToNow, format } from 'date-fns';
+import { formatInTimeZone } from 'date-fns-tz';
 import { useQuery } from '@tanstack/react-query';
 import { getUserSettings, getAuthToken } from '@/lib/api';
 import { QUERY_KEYS, apiRequest } from '@/lib/queryClient';
@@ -24,8 +25,33 @@ import {
 } from "@/components/ui/dialog";
 import { useNavigate } from 'react-router-dom';
 
+// Interface to represent full user data
+interface FullUserData {
+  id: number;
+  email: string;
+  name: string;
+  created_at: number;
+  updated_at: number;
+  last_login: number;
+  login_count: number;
+  last_login_device?: string;
+  last_login_ip?: string;
+  role: string;
+  status: string;
+  is_online: boolean;
+}
+
+// Helper function to convert any timestamp to milliseconds
+const normalizeTimestamp = (timestamp: number): number => {
+  // If timestamp is in seconds (10 digits or less), convert to milliseconds
+  if (timestamp < 10000000000) {
+    return timestamp * 1000;
+  }
+  // Already in milliseconds
+  return timestamp;
+};
+
 export default function Profile() {
-  console.log('Profile component mounted - checking avatar persistence');
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [isEditing, setIsEditing] = useState(false);
@@ -34,6 +60,7 @@ export default function Profile() {
   const [userInitials, setUserInitials] = useState('');
   const [avatarUrl, setAvatarUrl] = useState('');
   const [joinDate, setJoinDate] = useState<number | string>('');
+  const [fullUserData, setFullUserData] = useState<FullUserData | null>(null);
   
   // Delete account states
   const [isDeleteDialogOpen, setIsDeleteDialogOpen] = useState(false);
@@ -60,6 +87,45 @@ export default function Profile() {
   // Get the user's timezone - either from settings or auto-detected
   const userTimezone = userSettings?.timezone || Intl.DateTimeFormat().resolvedOptions().timeZone;
   
+  // Fetch full user data on component mount
+  useEffect(() => {
+    const fetchFullUserData = async () => {
+      if (!user?.id) return;
+      
+      try {
+        const response = await apiRequest(
+          'GET',
+          `/api/users/${user.id}`,
+          null
+        );
+        
+        if (!response.ok) {
+          console.error('Failed to fetch complete user data');
+          return;
+        }
+        
+        const data = await response.json();
+        setFullUserData(data.user);
+        
+        // Update joinDate with real created_at
+        if (data.user.created_at) {
+          // Make sure created_at is a valid timestamp (not 0)
+          if (data.user.created_at > 1000000) { // Some reasonable minimum timestamp (after 1970)
+            setJoinDate(data.user.created_at);
+          } else {
+            // If timestamp is invalid, set it to a reasonable default
+            console.warn('Invalid created_at timestamp:', data.user.created_at);
+            setJoinDate(Date.now() - 86400000); // Yesterday as a fallback
+          }
+        }
+      } catch (error) {
+        console.error('Error fetching user details:', error);
+      }
+    };
+    
+    fetchFullUserData();
+  }, [user?.id]);
+  
   // Load the active tab from localStorage on component mount
   useEffect(() => {
     const savedTab = localStorage.getItem('profileActiveTab');
@@ -79,7 +145,6 @@ export default function Profile() {
     // Check for dedicated avatar storage first
     const storedAvatar = localStorage.getItem('userAvatar');
     if (storedAvatar) {
-      console.log('Found avatar in dedicated storage:', storedAvatar);
       setAvatarUrl(storedAvatar);
     }
     
@@ -118,7 +183,6 @@ export default function Profile() {
             // Update the user object in context with the avatar from localStorage
             const updatedUserData = { ...userObj, avatar: userData.avatar };
             localStorage.setItem('user', JSON.stringify(updatedUserData));
-            console.log('Updated user with avatar from localStorage:', updatedUserData);
           }
         }
         
@@ -127,7 +191,9 @@ export default function Profile() {
       }
       
       // Set join date (use created_at timestamp if available)
-      setJoinDate(userData.created_at || userData.joinDate || Date.now());
+      if (!fullUserData?.created_at) {
+        setJoinDate(userData.created_at || userData.joinDate || Date.now());
+      }
     } else {
       // Default values if no user data is available
       setUserName('User');
@@ -135,7 +201,7 @@ export default function Profile() {
       setUserInitials('U');
       setJoinDate(Date.now());
     }
-  }, [user]);
+  }, [user, fullUserData?.created_at]);
   
   // Format the join date in a human-readable format
   const formattedJoinDate = React.useMemo(() => {
@@ -145,47 +211,92 @@ export default function Profile() {
       // Convert to number if it's a timestamp as string
       const timestamp = typeof joinDate === 'string' ? parseInt(joinDate, 10) : joinDate;
       
-      // If it's a Unix timestamp in seconds (typically less than year 2100), convert to milliseconds
-      const dateObj = timestamp < 20000000000 ? new Date(timestamp * 1000) : new Date(timestamp);
+      // Validate timestamp - if invalid, use a fallback
+      if (timestamp <= 1000000) { // Invalid or very early Unix timestamp
+        console.warn('Invalid joinDate timestamp:', timestamp);
+        const fallbackDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000); // 30 days ago
+        return `About a month ago (${formatInTimeZone(fallbackDate, userTimezone, 'MMMM d, yyyy')})`;
+      }
+      
+      // Normalize timestamp to milliseconds
+      const timestampMs = normalizeTimestamp(timestamp);
+      
+      // Create date object from milliseconds
+      const dateObj = new Date(timestampMs);
+      
+      // Check if date is valid before formatting
+      if (isNaN(dateObj.getTime())) {
+        console.warn('Invalid date object from timestamp:', timestamp);
+        return 'Unknown date';
+      }
       
       // Format as "X time ago (actual date)"
-      return `${formatDistanceToNow(dateObj, { addSuffix: true })} (${format(dateObj, 'MMMM d, yyyy')})`;
+      return `${formatDistanceToNow(dateObj, { addSuffix: true })} (${formatInTimeZone(dateObj, userTimezone, 'MMMM d, yyyy')})`;
     } catch (error) {
       console.error('Error formatting join date:', error);
       return 'Unknown date';
     }
-  }, [joinDate]);
+  }, [joinDate, userTimezone]);
   
   // Save profile changes
-  const saveProfile = () => {
-    // Create updated user object
-    const updatedUser = {
-      name: userName,
-      email: userEmail,
-      avatar: avatarUrl,
-      joinDate: joinDate
-    };
-    
-    // Save to localStorage - both user object and dedicated avatar storage
-    localStorage.setItem('user', JSON.stringify(updatedUser));
-    localStorage.setItem('userName', userName);
-    
-    // Save avatar to dedicated storage for better persistence
-    if (avatarUrl) {
-      localStorage.setItem('userAvatar', avatarUrl);
+  const saveProfile = async () => {
+    try {
+      // First, update in the database via API
+      const response = await apiRequest(
+        'PATCH',
+        '/auth/update-profile',
+        {
+          name: userName
+        }
+      );
+      
+      if (!response.ok) {
+        const data = await response.json();
+        toast({
+          title: "Error Updating Profile",
+          description: data.error || "Failed to update profile in database",
+          variant: "destructive"
+        });
+        return;
+      }
+      
+      // Get the updated user data from the response
+      const userData = await response.json();
+      
+      // Create updated user object for local storage
+      const updatedUser = {
+        ...user,
+        name: userName,
+        avatar: avatarUrl
+      };
+      
+      // Save to localStorage - both user object and dedicated avatar storage
+      localStorage.setItem('user', JSON.stringify(updatedUser));
+      localStorage.setItem('userName', userName);
+      
+      // Save avatar to dedicated storage for better persistence
+      if (avatarUrl) {
+        localStorage.setItem('userAvatar', avatarUrl);
+      }
+      
+      
+      // Show success toast
+      toast({
+        title: "Profile Updated",
+        description: "Your profile has been successfully updated.",
+        variant: "default"
+      });
+      
+      // Exit edit mode
+      setIsEditing(false);
+    } catch (error) {
+      console.error('Error updating profile:', error);
+      toast({
+        title: "Error Updating Profile",
+        description: "An unexpected error occurred while updating your profile.",
+        variant: "destructive"
+      });
     }
-    
-    console.log('Profile saved with avatar:', avatarUrl);
-    
-    // Show success toast
-    toast({
-      title: "Profile Updated",
-      description: "Your profile has been successfully updated.",
-      variant: "default"
-    });
-    
-    // Exit edit mode
-    setIsEditing(false);
   };
   
   // Cancel editing
@@ -236,7 +347,6 @@ export default function Profile() {
     localStorage.setItem('user', JSON.stringify(updatedUser));
     localStorage.setItem('userAvatar', randomAvatar);
     
-    console.log('Avatar updated and saved to localStorage:', randomAvatar);
     
     toast({
       title: "Avatar Updated",
@@ -451,20 +561,13 @@ export default function Profile() {
                     
                     <div className="space-y-2">
                       <Label htmlFor="email">Email Address</Label>
-                      {isEditing ? (
-                        <Input 
-                          id="email" 
-                          type="email" 
-                          value={userEmail} 
-                          onChange={(e) => setUserEmail(e.target.value)} 
-                          placeholder="Your email"
-                        />
-                      ) : (
-                        <div className="flex items-center h-10 px-3 rounded-md border border-input bg-background">
-                          <Mail className="h-4 w-4 text-muted-foreground mr-2" />
-                          <span>{userEmail}</span>
-                        </div>
-                      )}
+                      <div className="flex items-center h-10 px-3 rounded-md border border-input bg-background">
+                        <Mail className="h-4 w-4 text-muted-foreground mr-2" />
+                        <span>{userEmail}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Email cannot be changed as it is used for login.
+                      </p>
                     </div>
                   </div>
                   
@@ -506,7 +609,11 @@ export default function Profile() {
                       Logged in from new device
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {new Date(Date.now() - 3600000).toLocaleString()}
+                      {fullUserData?.last_login ? (
+                        formatInTimeZone(new Date(normalizeTimestamp(fullUserData.last_login)), userTimezone, 'MMM dd, yyyy h:mm a')
+                      ) : (
+                        formatInTimeZone(new Date(Date.now() - 3600000), userTimezone, 'MMM dd, yyyy h:mm a')
+                      )}
                     </p>
                   </div>
                 </div>
@@ -517,7 +624,11 @@ export default function Profile() {
                       Profile updated
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {new Date(Date.now() - 86400000).toLocaleString()}
+                      {fullUserData?.updated_at ? (
+                        formatInTimeZone(new Date(normalizeTimestamp(fullUserData.updated_at)), userTimezone, 'MMM dd, yyyy h:mm a')
+                      ) : (
+                        formatInTimeZone(new Date(Date.now() - 86400000), userTimezone, 'MMM dd, yyyy h:mm a')
+                      )}
                     </p>
                   </div>
                 </div>
@@ -525,10 +636,10 @@ export default function Profile() {
                   <span className="flex h-2 w-2 translate-y-1 rounded-full bg-yellow-500" />
                   <div className="space-y-1">
                     <p className="text-sm font-medium leading-none">
-                      Password changed
+                      Total logins
                     </p>
                     <p className="text-sm text-muted-foreground">
-                      {new Date(Date.now() - 604800000).toLocaleString()}
+                      {fullUserData?.login_count ? `${fullUserData.login_count} times` : 'First login'}
                     </p>
                   </div>
                 </div>

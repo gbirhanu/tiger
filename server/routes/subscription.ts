@@ -55,7 +55,6 @@ router.get("/status", async (req: AuthRequest, res: Response) => {
       used_calls: userSetting?.gemini_calls_count || 0
     });
   } catch (error) {
-    console.error("Error checking subscription status:", error);
     res.status(500).json({ 
       error: "Failed to check subscription status",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -66,7 +65,6 @@ router.get("/status", async (req: AuthRequest, res: Response) => {
 // Create a subscription (first step in the upgrade process)
 router.post("/", async (req: AuthRequest, res: Response) => {
   try {
-    console.log("Creating subscription with data:", req.body);
     const { plan = "pro", auto_renew = false } = req.body;
     const userId = req.userId!;
     
@@ -87,7 +85,6 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       updated_at: now
     }).returning();
     
-    console.log("Subscription created:", result);
     
     if (result && result.length > 0) {
       return res.status(201).json(result[0]);
@@ -95,7 +92,6 @@ router.post("/", async (req: AuthRequest, res: Response) => {
       throw new Error("Failed to create subscription");
     }
   } catch (error) {
-    console.error("Error creating subscription:", error);
     return res.status(500).json({ 
       error: "Failed to create subscription",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -128,7 +124,6 @@ router.get("/user", async (req: AuthRequest, res: Response) => {
       return res.json({ status: "no_subscription" });
     }
   } catch (error) {
-    console.error("Error getting user subscription:", error);
     return res.status(500).json({ 
       error: "Failed to get subscription",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -139,7 +134,6 @@ router.get("/user", async (req: AuthRequest, res: Response) => {
 // Create a payment for subscription
 router.post("/payment", async (req: AuthRequest, res: Response) => {
   try {
-    console.log("Creating payment with data:", req.body);
     const {
       amount,
       currency,
@@ -168,7 +162,6 @@ router.post("/payment", async (req: AuthRequest, res: Response) => {
       updated_at: now
     }).returning();
     
-    console.log("Payment created:", result);
     
     if (result && result.length > 0) {
       return res.status(201).json(result[0]);
@@ -176,7 +169,6 @@ router.post("/payment", async (req: AuthRequest, res: Response) => {
       throw new Error("Failed to create payment");
     }
   } catch (error) {
-    console.error("Error creating payment:", error);
     return res.status(500).json({ 
       error: "Failed to create payment",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -238,9 +230,6 @@ router.post("/payments/:id/approve", requireAdmin, async (req: AuthRequest, res:
       if (userSetting && userSetting.is_pro && userSetting.subscription_end_date && userSetting.subscription_end_date > now) {
         // If user already has an active subscription, extend it
         newEndDate = userSetting.subscription_end_date + monthInSeconds;
-        console.log(`Extending existing subscription until ${new Date(newEndDate * 1000)}`);
-      } else {
-        console.log(`New subscription until ${new Date(newEndDate * 1000)}`);
       }
       
       // Update user settings
@@ -270,7 +259,6 @@ router.post("/payments/:id/approve", requireAdmin, async (req: AuthRequest, res:
           });
       }
       
-      console.log(`User ${payment.payment.user_id} (${payment.user?.email}) is now PRO until ${new Date(newEndDate * 1000)}`);
     });
     
     return res.json({ 
@@ -278,7 +266,6 @@ router.post("/payments/:id/approve", requireAdmin, async (req: AuthRequest, res:
       message: "Payment approved and PRO status activated"
     });
   } catch (error) {
-    console.error("Error approving payment:", error);
     return res.status(500).json({ 
       error: "Failed to approve payment",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -307,7 +294,6 @@ router.post("/payments/:id/reject", requireAdmin, async (req: AuthRequest, res: 
       message: "Payment rejected"
     });
   } catch (error) {
-    console.error("Error rejecting payment:", error);
     return res.status(500).json({ 
       error: "Failed to reject payment",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -334,7 +320,6 @@ router.get("/payments", requireAdmin, async (req: AuthRequest, res: Response) =>
     
     return res.json(payments);
   } catch (error) {
-    console.error("Error getting payments:", error);
     return res.status(500).json({ 
       error: "Failed to get payments",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -363,7 +348,6 @@ router.get("/plans", requireAuth, async (req: AuthRequest, res: Response) => {
     
     res.json(defaultPlans);
   } catch (error) {
-    console.error("Error fetching subscription plans:", error);
     res.status(500).json({ 
       error: "Failed to fetch subscription plans",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -393,10 +377,8 @@ router.post("/plans", requireAdmin, async (req: AuthRequest, res: Response) => {
       updated_at: now
     };
     
-    console.log(`New subscription plan created: ${planData.name} (simulated)`);
     res.status(201).json(planData);
   } catch (error) {
-    console.error("Error creating subscription plan:", error);
     res.status(500).json({ 
       error: "Failed to create subscription plan",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -438,10 +420,8 @@ router.patch("/plans/:id", requireAdmin, async (req: AuthRequest, res: Response)
       updated_at: Math.floor(Date.now() / 1000)
     };
     
-    console.log(`Subscription plan ${planId} updated (simulated)`);
     res.json(updatedPlan);
   } catch (error) {
-    console.error("Error updating subscription plan:", error);
     res.status(500).json({ 
       error: "Failed to update subscription plan",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -495,7 +475,6 @@ router.post("/grant-pro/:userId", requireAdmin, async (req: AuthRequest, res: Re
       message: `Pro status granted until ${new Date(endDate * 1000).toISOString()}`
     });
   } catch (error) {
-    console.error("Error granting pro status:", error);
     return res.status(500).json({ 
       error: "Failed to grant pro status",
       details: error instanceof Error ? error.message : "Unknown error"
@@ -523,7 +502,6 @@ router.post("/revoke-pro/:userId", requireAdmin, async (req: AuthRequest, res: R
       message: "Pro status revoked"
     });
   } catch (error) {
-    console.error("Error revoking pro status:", error);
     return res.status(500).json({ 
       error: "Failed to revoke pro status",
       details: error instanceof Error ? error.message : "Unknown error"

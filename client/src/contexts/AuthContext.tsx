@@ -46,6 +46,7 @@ interface AuthContextType {
   validateToken: () => Promise<boolean>;
   clearErrors: () => void;
   settings: UserSettings | null;
+  sendPasswordResetEmail: (email: string) => Promise<{error?: string, message?: string}>;
 }
 
 // Create the auth context
@@ -84,7 +85,6 @@ class AuthErrorBoundary extends Component<{ children: ReactNode; onError: (error
   }
 
   componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    console.error('AuthContext Error:', error, errorInfo);
     this.props.onError(error, errorInfo);
   }
 
@@ -114,12 +114,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Unified token management function to avoid code duplication
   const updateToken = (token: string | null) => {
-    console.debug(`[Auth] Updating token: ${token ? `${token.substring(0, 5)}...` : 'null'}`);
     
     // Validate token if present
     if (token) {
       if (typeof token !== 'string' || token.trim() === '') {
-        console.error('[Auth] Invalid token format - not setting token');
         return;
       }
       
@@ -133,18 +131,15 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setAuthToken(cleanToken);
         setApiAuthToken(cleanToken);
         
-        console.debug(`[Auth] Token stored successfully: ${cleanToken.substring(0, 5)}...`);
-        
         // Verify the token was actually set in localStorage (can fail in incognito mode)
         const storedToken = localStorage.getItem('sessionToken');
         if (!storedToken) {
-          console.warn('[Auth] Failed to store token in localStorage - possibly in private browsing mode');
+          
         }
       } catch (err) {
-        console.error('[Auth] Error while setting auth token:', err);
+        
       }
     } else {
-      console.debug('[Auth] Clearing authentication token');
       try {
         // Clear token from all locations
         setSessionToken(null);
@@ -155,17 +150,16 @@ export function AuthProvider({ children }: AuthProviderProps) {
         // Verify token was cleared from localStorage
         const storedToken = localStorage.getItem('sessionToken');
         if (storedToken) {
-          console.warn('[Auth] Failed to remove token from localStorage');
+          
         }
       } catch (err) {
-        console.error('[Auth] Error while clearing auth token:', err);
+        
       }
     }
   };
 
   // Unified error handling function
   const handleError = (err: unknown, defaultMessage: string) => {
-    console.error(`${defaultMessage}:`, err);
     setError(err instanceof Error ? err.message : defaultMessage);
     
     // Check if it's an authentication error
@@ -173,119 +167,162 @@ export function AuthProvider({ children }: AuthProviderProps) {
     if (errorMessage.includes('401') || 
         errorMessage.toLowerCase().includes('unauthorized') || 
         errorMessage.toLowerCase().includes('session')) {
-      console.debug('[Auth] Authentication error detected, clearing token');
       updateToken(null); // Clear token on auth error
     }
   };
 
   // Check if user is already logged in and fetch their settings
   useEffect(() => {
-    // Initialize auth token from stored session on component mount
-    const storedToken = localStorage.getItem('sessionToken');
-    if (storedToken) {
-      
-      // Verify if token format looks valid before using it
-      if (typeof storedToken === 'string' && storedToken.trim() !== '') {
-        updateToken(storedToken);
-        
-        // Validate the token asynchronously
-        (async () => {
-          try {
-            const isValid = await validateToken();
-            
-            // If token is invalid, clear it
-            if (!isValid) {
-              updateToken(null);
-            }
-          } catch (err) {
-            // Handle error silently
-          }
-        })();
-      } else {
-        localStorage.removeItem('sessionToken');
-      }
-    }
-    
-    const fetchUserAndSettings = async () => {
-      try {
-        const token = getAuthToken();
-        const userRes = await fetch('/api/auth/me', {
-          credentials: 'include',
-          headers: token ? { 
-            Authorization: `Bearer ${token}` 
-          } : undefined
-        });
-        
-        if (!userRes.ok) {
-          throw new Error('Authentication check failed');
-        }
-        
-        const userData = await userRes.json();
+    let isMounted = true; // Flag to prevent state updates on unmounted component
 
-        if (userData.user) {
-          setUser(userData.user);
-          
-          // Save user's name in localStorage
-          if (userData.user.name) {
-            localStorage.setItem('userName', userData.user.name);
-          }
-          
-          // Set the auth token from the active session
-          if (userData.user.session && userData.user.session.active) {
-            console.debug('[Auth] User has active session - updating token');
-            updateToken(userData.user.session.id);
-          } else {
-            console.warn('[Auth] User has no active session');
-            updateToken(null);
-          }
-          // Fetch user settings
+    const initializeAuth = async () => {
+      setLoading(true); // Start loading
+      let initialToken: string | null = null;
+      let tokenIsValid = false;
+
+      try {
+        // 1. Check localStorage for a token
+        const storedToken = localStorage.getItem('sessionToken');
+        if (storedToken && typeof storedToken === 'string' && storedToken.trim() !== '') {
+          initialToken = storedToken.trim();
+
+          // 2. Validate the token with the backend
           try {
-            const settingsRes = await fetch('/api/settings/user', {
-              credentials: 'include',
-              headers: { 
-                Authorization: `Bearer ${userData.user.session?.id || token}` 
-              }
+            const response = await fetch('/api/auth/validate-token', {
+              headers: { Authorization: `Bearer ${initialToken}` },
+              credentials: 'include'
             });
-            
-            if (!settingsRes.ok) {
-              console.warn('Failed to fetch user settings:', settingsRes.statusText);
-            } else {
-              const settingsData = await settingsRes.json();
-              // Store all user settings
-              setSettings(settingsData);
-              
-              // Update theme or other user settings if they exist
-              if (settingsData.theme) {
-                setTheme(settingsData.theme);
-                document.documentElement.className = settingsData.theme;
+            if (response.ok) {
+              const data = await response.json();
+              if (data.valid === true) {
+                tokenIsValid = true;
+                // If validation returns user data, we can use it directly
+                if (data.user && isMounted) {
+                  setUser(data.user);
+                  if (data.user.name) localStorage.setItem('userName', data.user.name);
+                  if (data.user.session?.id) initialToken = data.user.session.id; // Use session ID from validation if available
+                }
+              } else {
               }
+            } else {
             }
-          } catch (settingsError) {
-            console.warn('Error fetching user settings:', settingsError);
+          } catch (validationError) {
+            // Treat validation error as invalid token for safety
+            tokenIsValid = false;
           }
         } else {
-          
-          setUser(null);
-          updateToken(null);
+          if (storedToken) localStorage.removeItem('sessionToken'); // Clean up invalid entry
         }
-      } catch (error) {
-        console.error('Error checking authentication status:', error);
-        setUser(null);
-        updateToken(null);
+
+        // 3. If token is valid, set it and fetch user settings
+        if (tokenIsValid && initialToken) {
+          if (isMounted) {
+            updateToken(initialToken); // Set the validated token
+            // If user wasn't set during validation, fetch fresh data
+            if (!user) { 
+              try {
+                const userRes = await fetch('/api/auth/me', {
+                  credentials: 'include',
+                  headers: { Authorization: `Bearer ${initialToken}` }
+                });
+                if (userRes.ok) {
+                  const userData = await userRes.json();
+                  if (userData.user && isMounted) {
+                    setUser(userData.user);
+                    if (userData.user.name) localStorage.setItem('userName', userData.user.name);
+                     // Ensure token is synced with session from /me endpoint
+                     if (userData.user.session?.id && userData.user.session.id !== initialToken) {
+                         updateToken(userData.user.session.id);
+                         initialToken = userData.user.session.id;
+                     }
+                  } else if (isMounted) {
+                     setUser(null);
+                     updateToken(null);
+                     tokenIsValid = false; // Mark as invalid if /me fails
+                  }
+                } else {
+                   if (isMounted) {
+                       setUser(null);
+                       updateToken(null);
+                       tokenIsValid = false; // Mark as invalid if /me fails
+                   }
+                }
+              } catch (fetchMeError) {
+                 if (isMounted) {
+                     setUser(null);
+                     updateToken(null);
+                     tokenIsValid = false; // Mark as invalid if /me fails
+                 }
+              }
+            }
+
+            // Now fetch settings only if token is valid and user might be set
+             if (tokenIsValid && isMounted) {
+                 try {
+                     
+                     // Don't fetch user settings on the auth page
+                     const currentPath = window.location.pathname;
+                     if (currentPath === '/auth' || currentPath === '/reset-password') {
+                         if (isMounted) {
+                             setLoading(false);
+                         }
+                         return;
+                     }
+                     
+                     const settingsRes = await fetch('/api/user-settings', {
+                         credentials: 'include',
+                         headers: { Authorization: `Bearer ${initialToken}` }
+                     });
+                     if (settingsRes.ok) {
+                         const settingsData = await settingsRes.json();
+                         if (isMounted) {
+                            setSettings(settingsData);
+                            if (settingsData.theme) {
+                                setTheme(settingsData.theme);
+                                document.documentElement.className = settingsData.theme;
+                            }
+                         }
+                     } else {
+                     }
+                 } catch (settingsError) {
+                     
+                 }
+             }
+          }
+        } else {
+          // 4. If no valid token, ensure everything is cleared
+          if (isMounted) {
+            setUser(null);
+            setSettings(null);
+            updateToken(null);
+          }
+        }
+      } catch (initError) {
+        if (isMounted) {
+           setUser(null);
+           setSettings(null);
+           updateToken(null);
+        }
       } finally {
-        setLoading(false);
+        if (isMounted) {
+          setLoading(false); // Stop loading only after all steps
+        }
       }
     };
 
-    fetchUserAndSettings();
-  }, []);
+    initializeAuth();
+
+    // Cleanup function
+    return () => {
+      isMounted = false;
+    };
+  }, []); // Dependency array is empty, runs once on mount
 
   // Login function
   const login = async (email: string, password: string) => {
     setLoading(true);
     setError(null);
     
-    console.debug('[Auth] Attempting login for email:', email);
     
     try {
       const response = await fetch('/api/auth/login', {
@@ -299,54 +336,44 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // Save the raw response for debugging if needed
       const responseText = await response.text();
-      console.debug('[Auth] Login response status:', response.status);
       
       let data;
       try {
         // Parse the response text
         data = JSON.parse(responseText);
       } catch (parseError) {
-        console.error('[Auth] Failed to parse login response:', responseText);
         throw new Error('Invalid response from server');
       }
 
       if (!response.ok) {
         const errorMessage = data.error || 'Login failed';
-        console.error('[Auth] Login failed with status:', response.status, errorMessage);
         throw new Error(errorMessage);
       }
 
-      console.debug('[Auth] Login response data:', JSON.stringify(data));
       
       // Validate response structure
       if (!data.user) {
-        console.error('[Auth] Missing user in login response:', data);
         throw new Error('Invalid response: Missing user data');
       }
       
       // Check session existence
       if (!data.user.session) {
-        console.error('[Auth] Missing session in login response:', data.user);
         throw new Error('No active session found');
       }
       
       // Validate session ID - critical for auth
       if (!data.user.session.id) {
-        console.error('[Auth] Missing session ID in login response:', data.user.session);
         throw new Error('Invalid session: Missing session ID');
       }
       
       if (typeof data.user.session.id !== 'string') {
-        console.error('[Auth] Session ID is not a string:', typeof data.user.session.id);
         throw new Error('Invalid session ID format');
       }
       
       if (data.user.session.id.trim() === '') {
-        console.error('[Auth] Empty session ID received');
         throw new Error('Empty session ID received');
       }
 
-      console.debug('[Auth] Login successful, setting user and session token');
       
       // Store user information
       setUser(data.user);
@@ -358,12 +385,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
       
       // Save and propagate the session token
       const sessionToken = data.user.session.id;
-      console.debug(`[Auth] Setting session token: ${sessionToken.substring(0, 5)}...`);
       updateToken(sessionToken);
       
       return data.user;
     } catch (err) {
-      console.error('[Auth] Login process failed:', err);
       handleError(err, 'Login error');
       throw err;
     } finally {
@@ -401,7 +426,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw new Error('Invalid session ID received from server');
       }
 
-      console.debug('[Auth] Registration successful, setting user and token');
       setUser(data.user);
       
       // Save user's name in localStorage
@@ -450,7 +474,6 @@ export function AuthProvider({ children }: AuthProviderProps) {
         throw new Error('Invalid session ID received from server');
       }
 
-      console.debug('[Auth] Google login successful, setting user and token');
       setUser(data.user);
       
       // Save user's name in localStorage
@@ -482,7 +505,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           // Remove the script properly
           googleScript.parentNode.removeChild(googleScript);
         } catch (e) {
-          console.warn('Error removing Google script:', e);
+          
         }
       }
       
@@ -496,7 +519,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           try {
             container.parentNode.removeChild(container);
           } catch (e) {
-            console.warn('Error removing Google container:', e);
+            
           }
         }
       });
@@ -512,11 +535,10 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
       // Even if the server returns an error, we should still clear the local session
       if (!response.ok) {
-        console.warn('Server logout failed, clearing session locally');
+        
       }
       
       // Clear local state
-      console.debug('[Auth] Logging out user, clearing user data and token');
       setUser(null);
       setSettings(null);
       updateToken(null);
@@ -545,7 +567,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           document.documentElement.classList.add(resolvedTheme);
         }
       } catch (e) {
-        console.warn('Error accessing theme preference:', e);
+        
         // Fallback in case of error
         document.documentElement.classList.remove('light', 'dark');
         document.documentElement.classList.add('light');
@@ -565,10 +587,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
         setLoading(false);
       }, 100);
     } catch (err) {
-      console.error('Logout error:', err);
-      
       // Even if there's an error, we should still clear the local session
-      console.debug('[Auth] Logout encountered an error, still clearing user data and token');
       setUser(null);
       setSettings(null);
       updateToken(null);
@@ -596,7 +615,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           document.documentElement.classList.add(resolvedTheme);
         }
       } catch (e) {
-        console.warn('Error accessing theme preference:', e);
+        
         // Fallback in case of error
         document.documentElement.classList.remove('light', 'dark');
         document.documentElement.classList.add('light');
@@ -624,13 +643,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
       
       const token = getAuthToken(); // Use the shared token getter function for consistency
       if (!token) {
-        console.debug('[Auth] No token to validate');
         setUser(null);
         setLoading(false);
         return false;
       }
       
-      console.debug(`[Auth] Validating token: ${token.substring(0, 5)}...`);
       
       const response = await fetch('/api/auth/validate-token', {
         headers: {
@@ -639,15 +656,11 @@ export function AuthProvider({ children }: AuthProviderProps) {
         credentials: 'include'
       });
       
-      // Log response status for debugging
-      console.debug('[Auth] Token validation response status:', response.status);
       
       if (!response.ok) {
-        console.warn('[Auth] Token validation failed with status:', response.status);
         
         // If the token is invalid, clear it
         if (response.status === 401) {
-          console.debug('[Auth] Clearing invalid token');
           updateToken(null);
         }
         
@@ -657,23 +670,19 @@ export function AuthProvider({ children }: AuthProviderProps) {
       const data = await response.json();
       
       if (data.valid === true) {
-        console.debug('[Auth] Token validated successfully');
         
         // If the response includes updated user/session info, update it
         if (data.user && data.user.session) {
-          console.debug('[Auth] Updating user data from validation response');
           setUser(data.user);
         }
         
         return true;
       } else {
-        console.warn('[Auth] Server returned valid:false for token');
         // Token is explicitly invalid, clear it
         updateToken(null);
         return false;
       }
     } catch (err) {
-      console.error('[Auth] Token validation error:', err);
       // Don't clear token on network errors as it might be temporary
       return false;
     } finally {
@@ -693,9 +702,41 @@ export function AuthProvider({ children }: AuthProviderProps) {
 
   // Handle authentication errors
   const handleAuthError = (error: Error, errorInfo: ErrorInfo) => {
-    console.error('Auth Error Boundary caught an error:', error, errorInfo);
     setError(error.message);
     setLoading(false);
+  };
+
+  // Password reset email function
+  const sendPasswordResetEmail = async (email: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch('/api/auth/reset-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ email }),
+      });
+
+      const data = await response.json();
+      
+      // Check if the request was not successful
+      if (!response.ok) {
+        handleError(new Error(data.error || 'Failed to send password reset email'), 'Password reset error');
+        return data; // Return the error data
+      }
+
+      return data;
+    } catch (err) {
+      handleError(err, 'Password reset error');
+      // Don't rethrow the error, just return a generic success message
+      return { 
+        message: 'If an account exists with this email, password reset instructions have been sent.' 
+      };
+    } finally {
+      setLoading(false);
+    }
   };
 
   return (
@@ -715,6 +756,7 @@ export function AuthProvider({ children }: AuthProviderProps) {
           validateToken,
           clearErrors,
           settings,
+          sendPasswordResetEmail,
         }}
       >
         {children}

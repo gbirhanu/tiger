@@ -34,7 +34,6 @@ export async function requireAuth(req: Request, res: Response, next: NextFunctio
     req.userId = session.user_id;
     next();
   } catch (error) {
-    console.error('Auth middleware error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 } 

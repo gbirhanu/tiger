@@ -4,5 +4,5 @@ import { resolve } from "path";
 export default defineConfig({
   schema: "./shared/schema.ts",
   out: "./migrations",
-  dialect: "sqlite"
+  dialect: "turso"
 });

@@ -37,7 +37,6 @@ export async function getStudySessions(req: ExpressRequest) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Error fetching study sessions:", error);
     return new Response(
       JSON.stringify({ error: "Failed to fetch study sessions" }),
       {
@@ -78,7 +77,6 @@ export async function getStudySession(req: ExpressRequest, id: string) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Error fetching study session:", error);
     return new Response(
       JSON.stringify({ error: "Failed to fetch study session" }),
       {
@@ -127,7 +125,6 @@ export async function createStudySession(req: ExpressRequest) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Error creating study session:", error);
     if (error instanceof z.ZodError) {
       
       return new Response(JSON.stringify({ error: error.errors }), {
@@ -158,20 +155,41 @@ export async function updateStudySession(req: ExpressRequest, id: string) {
   }
 
   try {
-    const body = req.body; // Express already parses JSON body
+    const body = req.body; 
     const validatedData = insertStudySessionSchema.partial().parse(body);
+    
+    // Prepare the data to be set, explicitly handling 'completed'
+    const updatePayload: { [key: string]: any } = {
+      // Spread other validated fields first
+      ...validatedData,
+      // Always set updated_at
+      updated_at: Math.floor(Date.now() / 1000),
+    };
+    
+    // Force 'completed' to the correct integer value (1 for true, 0 for false)
+    // if it was present in the validated data.
+    if (validatedData.completed !== undefined) {
+      updatePayload.completed = validatedData.completed ? 1 : 0; 
+    }
+
+    // Log the payload right before the database call
+    // console.log(`[updateStudySession] Updating session ID ${id} for user ${user.id} with payload:`, JSON.stringify(updatePayload)); // Removed log
 
     const updatedStudySession = await db
       .update(studySessions)
-      .set({
-        ...validatedData,
-        updated_at: Math.floor(Date.now() / 1000),
-      })
+      .set(updatePayload) 
       .where(and(
         eq(studySessions.id, parseInt(id)),
         eq(studySessions.user_id, user.id)
       ))
       .returning();
+      
+    // Log the result after the database call
+    if (updatedStudySession.length > 0) {
+      // console.log(`[updateStudySession] Successfully updated session ID ${id}. Returned:`, JSON.stringify(updatedStudySession[0])); // Removed log
+    } else {
+      // console.log(`[updateStudySession] Update attempt for session ID ${id} returned no results (session not found or user mismatch).`); // Removed log
+    }
 
     if (!updatedStudySession.length) {
       return new Response(JSON.stringify({ error: "Study session not found" }), {
@@ -185,13 +203,14 @@ export async function updateStudySession(req: ExpressRequest, id: string) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Error updating study session:", error);
     if (error instanceof z.ZodError) {
+      // console.error("[updateStudySession] Validation Error:", error.errors); // Removed log
       return new Response(JSON.stringify({ error: error.errors }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
+    // console.error(`[updateStudySession] Error updating study session ID ${id}:`, error); // Removed log
     return new Response(
       JSON.stringify({ error: "Failed to update study session" }),
       {
@@ -232,7 +251,6 @@ export async function deleteStudySession(req: ExpressRequest, id: string) {
       headers: { "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("Error deleting study session:", error);
     return new Response(
       JSON.stringify({ error: "Failed to delete study session" }),
       {

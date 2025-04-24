@@ -64,6 +64,7 @@ export interface NotificationsContextType {
   checkTaskReminders: (tasks: Task[]) => void;
   checkMeetingReminders: (meetings: Meeting[]) => void;
   checkAppointmentReminders: (appointments: Appointment[]) => void;
+  requestNotificationPermissions: () => Promise<boolean>;
 }
 
 // Create the context
@@ -102,14 +103,23 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
   // Calculate unread count
   const unreadCount = notifications.filter(notification => !notification.read).length;
   
-  // Request notification permission on mount
+  // Request notification permission - don't auto-request on mount
   useEffect(() => {
-    const checkPermission = async () => {
-      const hasPermission = await requestNotificationPermission();
-      setDesktopNotificationsEnabled(hasPermission);
+    // Only check if permission is already granted, don't request automatically
+    const checkExistingPermission = () => {
+      if (areDesktopNotificationsSupported() && Notification.permission === 'granted') {
+        setDesktopNotificationsEnabled(true);
+      }
     };
     
-    checkPermission();
+    checkExistingPermission();
+  }, []);
+  
+  // Function to request permissions (will be called on user interaction)
+  const requestPermissions = useCallback(async () => {
+    const hasPermission = await requestNotificationPermission();
+    setDesktopNotificationsEnabled(hasPermission);
+    return hasPermission;
   }, []);
   
   // Load notifications from localStorage on mount
@@ -123,37 +133,6 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
         // If parsing fails, start with empty notifications
         setNotifications([]);
       }
-    } else {
-      // For demo purposes, create some sample notifications
-      const sampleNotifications: Notification[] = [
-        {
-          id: '1',
-          title: 'Task Due Soon',
-          message: 'Your "Project Proposal" task is due in 2 hours',
-          type: 'task',
-          read: false,
-          createdAt: new Date(Date.now() - 3600000).toISOString(),
-          link: '/tasks'
-        },
-        {
-          id: '2',
-          title: 'Meeting Reminder',
-          message: 'Team standup meeting in 15 minutes',
-          type: 'meeting',
-          read: true,
-          createdAt: new Date(Date.now() - 7200000).toISOString(),
-          link: '/meetings'
-        },
-        {
-          id: '3',
-          title: 'System Update',
-          message: 'Tiger has been updated to version 2.0',
-          type: 'system',
-          read: false,
-          createdAt: new Date(Date.now() - 86400000).toISOString()
-        }
-      ];
-      setNotifications(sampleNotifications);
     }
     
     // Load notified item IDs from localStorage
@@ -211,11 +190,20 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
     
     setNotifications(prev => [newNotification, ...prev]);
     
-    // Show a toast notification
+    // Format the description to handle multiline text - replace newlines with <br> for HTML
+    const formattedDescription = notification.message.replace(/\n/g, '<br>');
+    
+    // Show a toast notification with HTML support for line breaks
     toast({
       title: notification.title,
-      description: notification.message,
-      variant: "default"
+      description: (
+        <div 
+          className="max-w-sm" 
+          dangerouslySetInnerHTML={{ __html: formattedDescription }}
+        />
+      ),
+      variant: "default",
+      duration: 7000 // Show longer to ensure user can read the full text
     });
     
     // Dispatch custom event for notification sound
@@ -243,316 +231,171 @@ export const NotificationsProvider: React.FC<{ children: ReactNode }> = ({ child
     }
   }, [desktopNotificationsEnabled]);
   
-  // Check for tasks that need reminders
+  // Create notification key helper
+  const createNotificationKey = (id: string, type: string) => `${type}-${id}`;
+  
+  // Check task reminders
   const checkTaskReminders = useCallback((tasks: Task[]) => {
-    if (!tasks || !Array.isArray(tasks)) return;
+    if (!tasks || !Array.isArray(tasks) || tasks.length === 0) return;
     
-    const now = Date.now() / 1000; // Current time in seconds
-    const oneDayInSeconds = 24 * 60 * 60;
-    const oneHourInSeconds = 60 * 60;
+    const now = Date.now();
+    const nowInSeconds = Math.floor(now / 1000);
     
-    // Get notification preferences from localStorage
-    const storedPreferences = localStorage.getItem('notificationPreferences');
-    let taskRemindersEnabled = true;
-    
-    if (storedPreferences) {
-      try {
-        const preferences = JSON.parse(storedPreferences);
-        taskRemindersEnabled = preferences.tasks ?? true;
-      } catch (error) {
-        console.error('Failed to parse notification preferences', error);
-      }
-    }
-    
-    // Skip if task reminders are disabled
-    if (!taskRemindersEnabled) return;
-    
-    // Check each task
-    tasks.forEach(task => {
-      // Skip completed tasks or tasks without due dates
-      if (task.completed || !task.due_date) return;
+    // Filter tasks that are upcoming and due
+    tasks.filter(task => {
+      if (!task.due_date || task.completed) return false;
       
       const dueDate = task.due_date;
-      const timeUntilDue = dueDate - now;
+      const timeUntilDue = dueDate - nowInSeconds;
       
-      // Create notification key based on task ID and notification type
-      const createNotificationKey = (taskId: string, type: string) => `task-${taskId}-${type}`;
+      // Only remind for tasks due within the next 24 hours
+      return timeUntilDue > 0 && timeUntilDue < 24 * 60 * 60;
+    }).forEach(task => {
+      const notificationKey = createNotificationKey(task.id, 'task');
       
-      // Task is overdue
-      if (timeUntilDue < 0 && timeUntilDue > -oneDayInSeconds) {
-        const notificationKey = createNotificationKey(task.id, 'overdue');
+      // Only notify once per task for a given due date
+      if (!notifiedItemIds.has(notificationKey)) {
+        const dueDate = new Date(task.due_date! * 1000);
+        const dueTimeFormatted = dueDate.toLocaleTimeString([], { 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
+        const dueDateFormatted = dueDate.toLocaleDateString([], { 
+          month: 'short', 
+          day: 'numeric' 
+        });
         
-        // Only notify if we haven't already notified for this task being overdue
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Task Overdue',
-            message: `"${task.title}" is now overdue`,
-            type: 'task',
-            link: '/tasks'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
-      }
-      
-      // Task is due within the next hour
-      if (timeUntilDue > 0 && timeUntilDue < oneHourInSeconds) {
-        const notificationKey = createNotificationKey(task.id, 'hour');
+        addNotification({
+          title: `Task Due Soon: ${task.title}`,
+          message: `Due on ${dueDateFormatted} at ${dueTimeFormatted}`,
+          type: 'task',
+          link: '/tasks'
+        });
         
-        // Only notify if we haven't already notified for this task being due within an hour
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Task Due Soon',
-            message: `"${task.title}" is due in less than an hour`,
-            type: 'task',
-            link: '/tasks'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
-      }
-      
-      // Task is due within the next day
-      if (timeUntilDue > 0 && timeUntilDue < oneDayInSeconds) {
-        const notificationKey = createNotificationKey(task.id, 'day');
-        
-        // Only notify if we haven't already notified for this task being due within a day
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Task Due Tomorrow',
-            message: `"${task.title}" is due within 24 hours`,
-            type: 'task',
-            link: '/tasks'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
+        // Mark as notified
+        setNotifiedItemIds(prev => {
+          const newSet = new Set(Array.from(prev));
+          newSet.add(notificationKey);
+          return newSet;
+        });
       }
     });
   }, [addNotification, notifiedItemIds]);
   
-  // Check for meetings that need reminders
+  // Check meeting reminders
   const checkMeetingReminders = useCallback((meetings: Meeting[]) => {
-    if (!meetings || !Array.isArray(meetings)) return;
+    if (!meetings || !Array.isArray(meetings) || meetings.length === 0) return;
     
-    const now = Date.now() / 1000; // Current time in seconds
-    const oneHourInSeconds = 60 * 60;
-    const fifteenMinutesInSeconds = 15 * 60;
+    const now = Date.now();
+    const nowInSeconds = Math.floor(now / 1000);
     
-    // Get notification preferences from localStorage
-    const storedPreferences = localStorage.getItem('notificationPreferences');
-    let meetingRemindersEnabled = true;
-    
-    if (storedPreferences) {
-      try {
-        const preferences = JSON.parse(storedPreferences);
-        meetingRemindersEnabled = preferences.meetings ?? true;
-      } catch (error) {
-        console.error('Failed to parse notification preferences', error);
-      }
-    }
-    
-    // Skip if meeting reminders are disabled
-    if (!meetingRemindersEnabled) return;
-    
-    // Check each meeting
-    meetings.forEach(meeting => {
-      // Skip meetings without start time
-      if (!meeting.start_time) return;
+    // Filter meetings that start soon
+    meetings.filter(meeting => {
+      if (!meeting.start_time) return false;
       
-      const startTime = meeting.start_time;
-      const timeUntilStart = startTime - now;
+      const timeUntilStart = meeting.start_time - nowInSeconds;
       
-      // Create notification key based on meeting ID and notification type
-      const createNotificationKey = (meetingId: string, type: string) => `meeting-${meetingId}-${type}`;
+      // Only remind for meetings starting within the next hour
+      return timeUntilStart > 0 && timeUntilStart < 60 * 60;
+    }).forEach(meeting => {
+      const notificationKey = createNotificationKey(meeting.id, 'meeting');
       
-      // Meeting is starting in 15 minutes
-      if (timeUntilStart > 0 && timeUntilStart < fifteenMinutesInSeconds) {
-        const notificationKey = createNotificationKey(meeting.id, '15min');
+      // Only notify once per meeting
+      if (!notifiedItemIds.has(notificationKey)) {
+        const startTime = new Date(meeting.start_time * 1000);
+        const startTimeFormatted = startTime.toLocaleTimeString([], { 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
         
-        // Only notify if we haven't already notified for this meeting starting soon
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Meeting Starting Soon',
-            message: `"${meeting.title}" is starting in ${Math.floor(timeUntilStart / 60)} minutes`,
-            type: 'meeting',
-            link: '/meetings'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
-      }
-      
-      // Meeting is starting in 1 hour
-      if (timeUntilStart > fifteenMinutesInSeconds && timeUntilStart < oneHourInSeconds) {
-        const notificationKey = createNotificationKey(meeting.id, 'hour');
+        addNotification({
+          title: `Meeting Starting Soon: ${meeting.title}`,
+          message: `Starting at ${startTimeFormatted}${meeting.meeting_link ? `\nLink: ${meeting.meeting_link}` : ''}`,
+          type: 'meeting',
+          link: '/meetings'
+        });
         
-        // Only notify if we haven't already notified for this meeting starting in an hour
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Upcoming Meeting',
-            message: `"${meeting.title}" is starting in about an hour`,
-            type: 'meeting',
-            link: '/meetings'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
+        // Mark as notified
+        setNotifiedItemIds(prev => {
+          const newSet = new Set(Array.from(prev));
+          newSet.add(notificationKey);
+          return newSet;
+        });
       }
     });
   }, [addNotification, notifiedItemIds]);
   
-  // Check for appointments that need reminders
+  // Check appointment reminders
   const checkAppointmentReminders = useCallback((appointments: Appointment[]) => {
-    if (!appointments || !Array.isArray(appointments)) return;
+    if (!appointments || !Array.isArray(appointments) || appointments.length === 0) return;
     
-    const now = Date.now() / 1000; // Current time in seconds
-    const oneDayInSeconds = 24 * 60 * 60;
-    const oneHourInSeconds = 60 * 60;
+    const now = Date.now();
+    const nowInSeconds = Math.floor(now / 1000);
     
-    // Get notification preferences from localStorage
-    const storedPreferences = localStorage.getItem('notificationPreferences');
-    let appointmentRemindersEnabled = true;
-    
-    if (storedPreferences) {
-      try {
-        const preferences = JSON.parse(storedPreferences);
-        appointmentRemindersEnabled = preferences.appointments ?? true;
-      } catch (error) {
-        console.error('Failed to parse notification preferences', error);
-      }
-    }
-    
-    // Skip if appointment reminders are disabled
-    if (!appointmentRemindersEnabled) return;
-    
-    // Check each appointment
-    appointments.forEach(appointment => {
-      // Skip appointments without due date
-      if (!appointment.due_date) return;
+    // Filter appointments coming up
+    appointments.filter(appointment => {
+      if (!appointment.due_date) return false;
       
-      const dueDate = appointment.due_date;
-      const timeUntilDue = dueDate - now;
+      const timeUntilDue = appointment.due_date - nowInSeconds;
       
-      // Create notification key based on appointment ID and notification type
-      const createNotificationKey = (appointmentId: string, type: string) => `appointment-${appointmentId}-${type}`;
+      // Only remind for appointments within the next day
+      return timeUntilDue > 0 && timeUntilDue < 24 * 60 * 60;
+    }).forEach(appointment => {
+      const notificationKey = createNotificationKey(appointment.id, 'appointment');
       
-      // Appointment is overdue
-      if (timeUntilDue < 0 && timeUntilDue > -oneHourInSeconds) {
-        const notificationKey = createNotificationKey(appointment.id, 'overdue');
+      // Only notify once per appointment
+      if (!notifiedItemIds.has(notificationKey)) {
+        const appointmentTime = new Date(appointment.due_date * 1000);
+        const timeFormatted = appointmentTime.toLocaleTimeString([], { 
+          hour: '2-digit', 
+          minute: '2-digit' 
+        });
+        const dateFormatted = appointmentTime.toLocaleDateString([], { 
+          month: 'short', 
+          day: 'numeric' 
+        });
         
-        // Only notify if we haven't already notified for this appointment being overdue
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Appointment Overdue',
-            message: `"${appointment.title}" has started`,
-            type: 'appointment',
-            link: '/appointments'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
+        let message = `On ${dateFormatted} at ${timeFormatted}`;
+        if (appointment.location) {
+          message += `\nLocation: ${appointment.location}`;
         }
-        return;
-      }
-      
-      // Appointment is due within the next hour
-      if (timeUntilDue > 0 && timeUntilDue < oneHourInSeconds) {
-        const notificationKey = createNotificationKey(appointment.id, 'hour');
+        if (appointment.contact) {
+          message += `\nWith: ${appointment.contact}`;
+        }
         
-        // Only notify if we haven't already notified for this appointment being due within an hour
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Appointment Soon',
-            message: `"${appointment.title}" is in less than an hour${appointment.location ? ` at ${appointment.location}` : ''}`,
-            type: 'appointment',
-            link: '/appointments'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
-      }
-      
-      // Appointment is due within the next day
-      if (timeUntilDue > 0 && timeUntilDue < oneDayInSeconds) {
-        const notificationKey = createNotificationKey(appointment.id, 'day');
+        addNotification({
+          title: `Upcoming Appointment: ${appointment.title}`,
+          message,
+          type: 'appointment',
+          link: '/appointments'
+        });
         
-        // Only notify if we haven't already notified for this appointment being due within a day
-        if (!notifiedItemIds.has(notificationKey)) {
-          addNotification({
-            title: 'Appointment Tomorrow',
-            message: `"${appointment.title}" is scheduled within 24 hours`,
-            type: 'appointment',
-            link: '/appointments'
-          });
-          
-          // Mark as notified
-          setNotifiedItemIds(prev => {
-            const newSet = new Set(prev);
-            newSet.add(notificationKey);
-            return newSet;
-          });
-        }
-        return;
+        // Mark as notified
+        setNotifiedItemIds(prev => {
+          const newSet = new Set(Array.from(prev));
+          newSet.add(notificationKey);
+          return newSet;
+        });
       }
     });
   }, [addNotification, notifiedItemIds]);
-  
+
   return (
     <NotificationsContext.Provider 
-      value={{ 
-        notifications, 
-        unreadCount, 
-        markAsRead, 
-        markAllAsRead, 
-        clearNotifications, 
+      value={{
+        notifications,
+        unreadCount,
         addNotification,
+        markAsRead,
+        markAllAsRead,
+        clearNotifications,
         checkTaskReminders,
         checkMeetingReminders,
-        checkAppointmentReminders
+        checkAppointmentReminders,
+        requestNotificationPermissions: requestPermissions
       }}
     >
       {children}
     </NotificationsContext.Provider>
   );
-}; 
+} 

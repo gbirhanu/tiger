@@ -89,7 +89,6 @@ export const  UserTable =  ({
   
   // Calculate pagination details
   const totalUsers = users.length;
-  console.log("totalUsers",totalUsers);
   const totalPages = Math.ceil(totalUsers / itemsPerPage);
   const startIndex = (currentPage - 1) * itemsPerPage;
   const endIndex = Math.min(startIndex + itemsPerPage, totalUsers);
@@ -125,7 +124,6 @@ export const  UserTable =  ({
       const { getUserPaymentHistory } = await import('@/lib/api');
       return await getUserPaymentHistory(userId);
     } catch (error) {
-      console.error("Error fetching payment history:", error);
       toast({
         title: "Error fetching payment history",
         description: error instanceof Error ? error.message : "An error occurred",

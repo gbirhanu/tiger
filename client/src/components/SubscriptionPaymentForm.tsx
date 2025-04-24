@@ -87,17 +87,7 @@ const SubscriptionPaymentForm = ({
   const [selectedCurrency, setSelectedCurrency] = useState<string>('ETB');
   const [copied, setCopied] = useState(false);
   
-  // Log mount and props
-  useEffect(() => {
-    console.log("SubscriptionPaymentForm mounted with props:", {
-      hasOnSuccess: !!onSuccess,
-      bankAccount: propBankAccount ? "[PROVIDED]" : "[NOT PROVIDED]",
-      userId,
-      subscriptionId,
-      planDetails,
-      compact
-    });
-  }, []);
+ 
   
   // Always fetch admin settings to get bank account information
   const { data: adminSettings } = useQuery({
@@ -146,17 +136,13 @@ const SubscriptionPaymentForm = ({
   const createPaymentMutation = useMutation({
     mutationFn: async (data: PaymentFormValues) => {
       try {
-        console.log("Starting payment mutation with form data:", {
-          ...data, 
-          deposited_date: data.deposited_date ? data.deposited_date.toISOString() : null
-        });
+       
         
         // If no userId is explicitly provided, try to get current user info
         let actualUserId = userId;
         if (!actualUserId) {
           try {
             const userSettings = await getUserSettings();
-            console.log("Got user settings:", userSettings);
             actualUserId = userSettings.user_id;
           } catch (error) {
             console.error("Error getting user settings:", error);
@@ -168,7 +154,6 @@ const SubscriptionPaymentForm = ({
         let actualSubscriptionId = subscriptionId;
         if (!actualSubscriptionId) {
           try {
-            console.log("No subscription ID provided, creating a new subscription");
             const newSubscription = await createSubscription({
               user_id: actualUserId,
               plan: 'pro',
@@ -177,10 +162,8 @@ const SubscriptionPaymentForm = ({
               end_date: Math.floor(Date.now() / 1000) + (30 * 24 * 60 * 60),
               auto_renew: false
             });
-            console.log("Created new subscription:", newSubscription);
             actualSubscriptionId = newSubscription.id;
           } catch (subscriptionError) {
-            console.error("Error creating subscription:", subscriptionError);
             // Continue without subscription ID, we'll create a standalone payment
           }
         }
@@ -204,9 +187,7 @@ const SubscriptionPaymentForm = ({
         };
         
         // Don't add subscription_id as the column doesn't exist in the database yet
-        console.log("Submitting payment with data:", paymentData);
         const payment = await createSubscriptionPayment(paymentData);
-        console.log("Payment created successfully:", payment);
         
         onSuccess?.(payment);
         setIsSuccess(true);
